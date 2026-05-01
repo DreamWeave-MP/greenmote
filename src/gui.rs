@@ -7,6 +7,7 @@ use crate::groundcover::{self, GroundcoverArgs};
 struct GreenmoteApp {
     screen: Screen,
     convert: ConvertUiState,
+    messages: MessageLog,
 }
 
 enum Screen {
@@ -20,6 +21,11 @@ struct ConvertUiState {
     result_receiver: Option<mpsc::Receiver<ConversionResult>>,
 }
 
+#[derive(Default)]
+struct MessageLog {
+    text: String,
+}
+
 type ConversionResult = Result<(), String>;
 
 impl Default for GreenmoteApp {
@@ -30,6 +36,7 @@ impl Default for GreenmoteApp {
                 status: "Ready.".to_owned(),
                 ..ConvertUiState::default()
             },
+            messages: MessageLog::default(),
         }
     }
 }
@@ -37,6 +44,13 @@ impl Default for GreenmoteApp {
 impl eframe::App for GreenmoteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receive_conversion_result();
+
+        egui::TopBottomPanel::bottom("greenmote_message_log")
+            .resizable(false)
+            .exact_height(self.messages.panel_height(ctx))
+            .show(ctx, |ui| {
+                self.messages.show(ui);
+            });
 
         egui::SidePanel::left("greenmote_convert_panel")
             .resizable(false)
@@ -79,8 +93,10 @@ impl GreenmoteApp {
         let repaint_context = ctx.clone();
 
         self.convert.running = true;
-        "Converting with default settings...".clone_into(&mut self.convert.status);
+        self.set_status("Converting with default settings...");
         self.convert.result_receiver = Some(receiver);
+        self.messages
+            .reset("Started conversion with default settings.");
 
         thread::spawn(move || {
             let result =
@@ -98,20 +114,55 @@ impl GreenmoteApp {
         match receiver.try_recv() {
             Ok(Ok(())) => {
                 self.convert.running = false;
-                "Conversion finished.".clone_into(&mut self.convert.status);
+                self.set_status("Conversion finished.");
             }
             Ok(Err(error)) => {
                 self.convert.running = false;
-                self.convert.status = format!("Conversion failed: {error}");
+                self.set_status(format!("Conversion failed: {error}"));
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.convert.result_receiver = Some(receiver);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.convert.running = false;
-                "Conversion worker disconnected.".clone_into(&mut self.convert.status);
+                self.set_status("Conversion worker disconnected.");
             }
         }
+    }
+
+    fn set_status(&mut self, status: impl Into<String>) {
+        self.convert.status = status.into();
+        self.messages.reset(self.convert.status.as_str());
+    }
+}
+
+impl MessageLog {
+    const LINE_HEIGHT: f32 = 18.0;
+    const VERTICAL_PADDING: f32 = 12.0;
+    const MIN_HEIGHT: f32 = 28.0;
+    const MAX_WINDOW_FRACTION: f32 = 0.1;
+
+    fn reset(&mut self, message: &str) {
+        self.text.clear();
+        self.text.push_str(message);
+    }
+
+    fn panel_height(&self, ctx: &egui::Context) -> f32 {
+        let line_count = u16::try_from(self.text.lines().count().max(1)).unwrap_or(u16::MAX);
+        let line_count = f32::from(line_count);
+        let content_height = line_count.mul_add(Self::LINE_HEIGHT, Self::VERTICAL_PADDING);
+        let max_height = ctx.viewport_rect().height() * Self::MAX_WINDOW_FRACTION;
+
+        content_height.min(max_height).max(Self::MIN_HEIGHT)
+    }
+
+    fn show(&self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                ui.label(self.text.as_str());
+            });
     }
 }
 
