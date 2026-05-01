@@ -3,6 +3,9 @@ use std::io;
 mod args;
 mod config;
 pub mod default;
+pub mod mesh;
+pub mod plan;
+pub mod records;
 
 pub use args::GroundcoverArgs;
 pub use config::GroundcoverConfig;
