@@ -63,8 +63,12 @@ pub fn write_summary(
         let output_static = static_plan.output_static()?;
         writeln!(
             writer,
-            "STAT {:?} from {:?}: mesh -> {:?}",
-            output_static.id, static_plan.source_plugin_name, output_static.mesh
+            "STAT {:?} from {:?}: generated {:?}; mesh {:?} -> {:?}",
+            static_plan.source_static.id,
+            static_plan.source_plugin_name,
+            output_static.id,
+            static_plan.source_static.mesh,
+            output_static.mesh
         )?;
     }
 

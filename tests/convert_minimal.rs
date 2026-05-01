@@ -100,6 +100,11 @@ fn convert_minimal_fixture_writes_plugins_and_copied_meshes() {
     assert_eq!(deleted_cell.references.len(), 1);
     assert_eq!(deleted_cell.references[&(1, 7)].id, "Flora_Grass_01");
     assert_eq!(deleted_cell.references[&(1, 7)].deleted, Some(true));
+
+    let log = std::fs::read_to_string(config_dir.path().join(LOG_NAME)).unwrap();
+    let static_line = log.lines().find(|line| line.starts_with("STAT ")).unwrap();
+    assert!(static_line.contains("STAT \"flora_grass_01\" from \"Source.esp\""));
+    assert!(static_line.contains(&format!("generated {:?}", generated_static.id)));
 }
 
 #[test]
