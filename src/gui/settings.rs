@@ -288,6 +288,10 @@ impl GreenmoteApp {
         }
 
         if self.settings.dirty {
+            if self.has_pending_navigation_request() {
+                return;
+            }
+
             self.settings.queue_tab_selection(tab);
         } else {
             self.settings.select_tab(tab);

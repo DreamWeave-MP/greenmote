@@ -83,19 +83,20 @@ impl GreenmoteApp {
     }
 
     fn queue_pending_screen_navigation(&mut self, screen: Screen) {
-        if self.has_pending_dirty_navigation() {
+        if self.has_pending_navigation_request() {
             return;
         }
 
         self.pending_screen_navigation = Some(screen);
     }
 
-    fn has_pending_dirty_navigation(&self) -> bool {
+    fn has_pending_navigation_request(&self) -> bool {
         self.pending_screen_navigation.is_some() || self.settings.has_pending_tab_selection()
     }
 
     fn perform_pending_dirty_navigation(&mut self) {
         if let Some(screen) = self.pending_screen_navigation.take() {
+            self.settings.clear_pending_tab_selection();
             self.show_screen(screen);
             return;
         }
@@ -104,7 +105,12 @@ impl GreenmoteApp {
     }
 
     fn show_pending_navigation_prompt(&mut self, ctx: &egui::Context) {
-        if !self.has_pending_dirty_navigation() {
+        if !self.has_pending_navigation_request() {
+            return;
+        }
+
+        if !self.settings.is_dirty() {
+            self.perform_pending_dirty_navigation();
             return;
         }
 
