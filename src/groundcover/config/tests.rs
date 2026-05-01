@@ -284,7 +284,7 @@ fn replacing_config_backs_up_existing_file() {
     let config = GroundcoverConfig::with_output_directory(dir.path.join("data-local"));
 
     config.save_for_edit_new(&temp_path).unwrap();
-    crate::groundcover::replace_config_with_backup(&config_path, &temp_path).unwrap();
+    super::edit::replace_config_with_backup(&config_path, &temp_path).unwrap();
 
     assert_eq!(
         read_to_string(config_path.with_extension("toml.bak")).unwrap(),
@@ -301,7 +301,7 @@ fn replacing_config_rejects_directory_as_backup_source_and_keeps_temp() {
     std::fs::create_dir(&config_path).unwrap();
     std::fs::write(&temp_path, "[convert]\n").unwrap();
 
-    let result = crate::groundcover::replace_config_with_backup(&config_path, &temp_path);
+    let result = super::edit::replace_config_with_backup(&config_path, &temp_path);
 
     assert!(result.is_err());
     assert!(config_path.is_dir());
@@ -317,7 +317,7 @@ fn replacing_config_backs_up_dangling_config_symlink() {
     std::os::unix::fs::symlink(dir.path.join("missing.toml"), &config_path).unwrap();
     std::fs::write(&temp_path, "[convert]\n").unwrap();
 
-    let result = crate::groundcover::replace_config_with_backup(&config_path, &temp_path);
+    let result = super::edit::replace_config_with_backup(&config_path, &temp_path);
 
     assert!(result.is_ok());
     assert!(read_to_string(&config_path).unwrap().contains("[convert]"));
@@ -339,7 +339,7 @@ fn backup_selection_skips_dangling_symlink() {
     std::fs::write(&config_path, "definitely not toml").unwrap();
     std::os::unix::fs::symlink(dir.path.join("missing-backup.toml"), &backup_path).unwrap();
 
-    crate::groundcover::back_up_existing_config(&config_path).unwrap();
+    super::edit::back_up_existing_config(&config_path).unwrap();
 
     assert!(
         std::fs::symlink_metadata(&backup_path)

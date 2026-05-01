@@ -85,40 +85,38 @@ impl GreenmoteApp {
         });
         ui.separator();
 
-        let footer_height = 44.0;
+        egui::TopBottomPanel::bottom("settings_footer")
+            .resizable(false)
+            .show_separator_line(true)
+            .show_inside(ui, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(self.settings.dirty, egui::Button::new("Save"))
+                        .clicked()
+                    {
+                        self.save_settings();
+                    }
+
+                    if let Some(error) = &self.settings.error {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    } else if !self.settings.status.is_empty() {
+                        ui.label(&self.settings.status);
+                    }
+                });
+            });
+
         let available = ui.available_size();
-        let body_height = (available.y - footer_height).max(0.0);
 
-        ui.allocate_ui_with_layout(
-            egui::vec2(available.x, body_height),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.set_min_width(560.0);
-                        match self.settings.selected_tab {
-                            SettingsTab::General => self.show_general_settings(ui),
-                            SettingsTab::Convert => self.show_convert_settings(ui),
-                        }
-                    });
-            },
-        );
-
-        ui.separator();
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add_enabled(self.settings.dirty, egui::Button::new("Save"))
-                .clicked()
-            {
-                self.save_settings();
-            }
-
-            if let Some(error) = &self.settings.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            } else if !self.settings.status.is_empty() {
-                ui.label(&self.settings.status);
-            }
+        ui.allocate_ui_with_layout(available, egui::Layout::top_down(egui::Align::Min), |ui| {
+            egui::ScrollArea::both()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.set_min_width(560.0);
+                    match self.settings.selected_tab {
+                        SettingsTab::General => self.show_general_settings(ui),
+                        SettingsTab::Convert => self.show_convert_settings(ui),
+                    }
+                });
         });
     }
 

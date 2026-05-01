@@ -1,8 +1,4 @@
-use std::{
-    io,
-    sync::{Arc, Mutex, mpsc},
-    thread,
-};
+use std::{io, sync::mpsc, thread};
 
 use eframe::egui;
 
@@ -30,7 +26,7 @@ enum GuiEvent {
 
 #[derive(Clone)]
 struct GuiEventSink {
-    sender: Arc<Mutex<mpsc::Sender<GuiEvent>>>,
+    sender: mpsc::Sender<GuiEvent>,
     context: egui::Context,
 }
 
@@ -298,17 +294,12 @@ impl PendingProgress {
 
 impl GuiEventSink {
     fn new(sender: mpsc::Sender<GuiEvent>, context: egui::Context) -> Self {
-        Self {
-            sender: Arc::new(Mutex::new(sender)),
-            context,
-        }
+        Self { sender, context }
     }
 
     fn send(&self, event: GuiEvent) {
-        if let Ok(sender) = self.sender.lock() {
-            let _send_result = sender.send(event);
-            self.context.request_repaint();
-        }
+        let _send_result = self.sender.send(event);
+        self.context.request_repaint();
     }
 }
 

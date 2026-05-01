@@ -1,3 +1,4 @@
+mod edit;
 mod file;
 
 #[cfg(test)]
@@ -232,6 +233,13 @@ impl GroundcoverConfig {
     pub fn is_ignored_plugin_name(&self, plugin_name: &str) -> bool {
         self.ignored_plugin_set.is_match(plugin_name)
     }
+}
+
+pub(crate) fn regenerate_for_edit(
+    config_path: &Path,
+    default_output_directory: PathBuf,
+) -> io::Result<GroundcoverConfig> {
+    edit::regenerate(config_path, default_output_directory)
 }
 
 pub(super) fn to_io_error<E: std::fmt::Display>(err: E) -> io::Error {
