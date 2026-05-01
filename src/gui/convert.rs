@@ -459,7 +459,13 @@ impl GreenmoteApp {
         self.convert.cancellation = None;
 
         if cancelled {
-            self.set_status("Conversion cancelled. Partial output may exist.");
+            append_notice(
+                &mut self.convert.output,
+                "Conversion cancelled. Generated files and OpenMW config may have been updated depending on the phase reached.",
+            );
+            self.set_status(
+                "Conversion cancelled. Generated files and OpenMW config may have been updated.",
+            );
         } else if let Some(error) = error {
             append_error(&mut self.convert.output, &error);
             self.set_status(format!("Conversion failed: {error}"));
@@ -591,6 +597,14 @@ fn append_error(output: &mut String, error: &str) {
     }
     output.push_str("error:\n");
     output.push_str(error);
+    output.push('\n');
+}
+
+fn append_notice(output: &mut String, notice: &str) {
+    if !output.is_empty() {
+        output.push('\n');
+    }
+    output.push_str(notice);
     output.push('\n');
 }
 

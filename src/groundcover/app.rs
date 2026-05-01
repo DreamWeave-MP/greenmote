@@ -152,6 +152,7 @@ fn run_loaded_config(
 
     if config.dry_run {
         output::write_summary(&mut *stdout, &summary, &plan, config)?;
+        check_cancelled(cancellation)?;
         return Ok(());
     }
 
@@ -205,7 +206,7 @@ fn write_conversion_outputs(
     progress::emit_phase(events, ConversionPhase::WritingPlugins);
     let built = output::build_plugins(plan)?;
     check_cancelled(cancellation)?;
-    output::save_plugins(built, config)?;
+    output::save_plugins(built, config, cancellation)?;
     progress::emit_phase(events, ConversionPhase::CopyingMeshes);
     output::copy_meshes(
         &mesh_jobs,
