@@ -111,6 +111,36 @@ fn convert_dry_run_writes_no_outputs() {
     assert!(!output_dir.path().join("Meshes").exists());
 }
 
+#[test]
+fn convert_outputs_are_deterministic_for_same_fixture() {
+    let first = run_minimal_fixture("deterministic-a");
+    let second = run_minimal_fixture("deterministic-b");
+
+    assert_eq!(first.groundcover, second.groundcover);
+    assert_eq!(first.deleted, second.deleted);
+}
+
+struct GeneratedBytes {
+    groundcover: Vec<u8>,
+    deleted: Vec<u8>,
+}
+
+fn run_minimal_fixture(name: &str) -> GeneratedBytes {
+    let config_dir = TempDir::new(&format!("{name}-config"));
+    let data_dir = TempDir::new(&format!("{name}-data"));
+    let output_dir = TempDir::new(&format!("{name}-output"));
+    write_openmw_cfg(config_dir.path(), data_dir.path(), output_dir.path());
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+
+    greenmote::groundcover::run(args_for(config_dir.path())).unwrap();
+
+    GeneratedBytes {
+        groundcover: std::fs::read(output_dir.path().join(GROUNDCOVER_PLUGIN_NAME)).unwrap(),
+        deleted: std::fs::read(output_dir.path().join(DELETED_PLUGIN_NAME)).unwrap(),
+    }
+}
+
 fn args_for(config_dir: &Path) -> GroundcoverArgs {
     GroundcoverArgs {
         openmw_cfg: Some(config_dir.join("openmw.cfg")),
