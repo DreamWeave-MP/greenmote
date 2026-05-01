@@ -10,7 +10,7 @@ use vfstool_lib::VFS;
 
 use crate::groundcover::{GroundcoverConfig, plan::LoadedPlugin};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SourcePlugin {
     pub load_index: usize,
     pub plugin_name: String,
@@ -58,9 +58,23 @@ pub fn resolve_source_plugins(
 }
 
 pub fn load_plugins(sources: Vec<SourcePlugin>) -> Vec<LoadedPlugin> {
+    load_plugins_matching(sources, PluginLoadMode::Cells)
+}
+
+pub fn load_plugins_for_static_planning(sources: Vec<SourcePlugin>) -> Vec<LoadedPlugin> {
+    load_plugins_matching(sources, PluginLoadMode::Statics)
+}
+
+#[derive(Clone, Copy)]
+enum PluginLoadMode {
+    Statics,
+    Cells,
+}
+
+fn load_plugins_matching(sources: Vec<SourcePlugin>, mode: PluginLoadMode) -> Vec<LoadedPlugin> {
     let mut loaded = sources
         .into_par_iter()
-        .filter_map(|source| match load_one_plugin(&source) {
+        .filter_map(|source| match load_one_plugin(&source, mode) {
             Ok(plugin) => Some(LoadedPlugin {
                 load_index: source.load_index,
                 plugin_name: source.plugin_name,
@@ -81,9 +95,16 @@ pub fn load_plugins(sources: Vec<SourcePlugin>) -> Vec<LoadedPlugin> {
     loaded
 }
 
-fn load_one_plugin(source: &SourcePlugin) -> io::Result<Plugin> {
+fn load_one_plugin(source: &SourcePlugin, mode: PluginLoadMode) -> io::Result<Plugin> {
     Plugin::from_path_filtered(&source.plugin_path, |tag| {
-        matches!(&tag, Header::TAG | Cell::TAG | Static::TAG)
+        if &tag == Header::TAG {
+            return true;
+        }
+
+        match mode {
+            PluginLoadMode::Statics => &tag == Static::TAG,
+            PluginLoadMode::Cells => &tag == Cell::TAG,
+        }
     })
 }
 

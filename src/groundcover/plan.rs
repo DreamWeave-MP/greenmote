@@ -111,23 +111,52 @@ pub struct ConversionPlan {
     pub mesh_paths: BTreeSet<String>,
 }
 
+#[derive(Debug)]
+pub struct StaticConversionPlan {
+    pub static_plans: Vec<StaticPlan>,
+    pub matched_static_ids: HashSet<String>,
+    pub mesh_paths: BTreeSet<String>,
+}
+
+impl StaticConversionPlan {
+    #[must_use]
+    pub fn with_cell_plans(self, mut cell_plans: Vec<PluginCellPlan>) -> ConversionPlan {
+        cell_plans.sort_by(|left, right| right.load_index.cmp(&left.load_index));
+
+        ConversionPlan {
+            static_plans: self.static_plans,
+            cell_plans,
+            matched_static_ids: self.matched_static_ids,
+            mesh_paths: self.mesh_paths,
+        }
+    }
+}
+
 #[must_use]
 pub fn build_conversion_plan(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,
 ) -> ConversionPlan {
-    let (static_plans, matched_static_ids, mesh_paths) =
-        collect_winning_statics(loaded_plugins, config);
-    let mut cell_plans = if matched_static_ids.is_empty() {
+    let static_plan = build_static_conversion_plan(loaded_plugins, config);
+    let cell_plans = if static_plan.matched_static_ids.is_empty() {
         Vec::new()
     } else {
-        scan_cells_parallel(loaded_plugins, &matched_static_ids)
+        scan_cells_parallel(loaded_plugins, &static_plan.matched_static_ids)
     };
-    cell_plans.sort_by(|left, right| right.load_index.cmp(&left.load_index));
 
-    ConversionPlan {
+    static_plan.with_cell_plans(cell_plans)
+}
+
+#[must_use]
+pub fn build_static_conversion_plan(
+    loaded_plugins: &[LoadedPlugin],
+    config: &GroundcoverConfig,
+) -> StaticConversionPlan {
+    let (static_plans, matched_static_ids, mesh_paths) =
+        collect_winning_statics(loaded_plugins, config);
+
+    StaticConversionPlan {
         static_plans,
-        cell_plans,
         matched_static_ids,
         mesh_paths,
     }
@@ -174,7 +203,8 @@ fn collect_winning_statics(
     (static_plans, matched_static_ids, mesh_paths)
 }
 
-fn scan_cells_parallel(
+#[must_use]
+pub fn scan_cells_parallel(
     loaded_plugins: &[LoadedPlugin],
     matched_static_ids: &HashSet<String>,
 ) -> Vec<PluginCellPlan> {

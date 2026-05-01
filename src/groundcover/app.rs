@@ -9,7 +9,7 @@ use vfstool_lib::VFS;
 
 use crate::groundcover::{
     GroundcoverArgs, GroundcoverConfig, LOG_NAME, handle_generated_output, load, output,
-    plan::build_conversion_plan,
+    plan::{build_static_conversion_plan, scan_cells_parallel},
 };
 
 pub fn run(args: GroundcoverArgs) -> io::Result<()> {
@@ -48,11 +48,19 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     let vfs = VFS::from_directories(directories, Some(fallback_archives));
 
     let sources = load::resolve_source_plugins(&content_files, &config, &vfs);
-    let plugins = load::load_plugins(sources);
-    let plan = build_conversion_plan(&plugins, &config);
+    let static_plugins = load::load_plugins_for_static_planning(sources.clone());
+    let static_plan = build_static_conversion_plan(&static_plugins, &config);
+    let (loaded_plugins, cell_plans) = if static_plan.matched_static_ids.is_empty() {
+        (static_plugins.len(), Vec::new())
+    } else {
+        let cell_plugins = load::load_plugins(sources);
+        let cell_plans = scan_cells_parallel(&cell_plugins, &static_plan.matched_static_ids);
+        (cell_plugins.len(), cell_plans)
+    };
+    let plan = static_plan.with_cell_plans(cell_plans);
     let summary = output::RunSummary {
         content_files: content_files.len(),
-        loaded_plugins: plugins.len(),
+        loaded_plugins,
         matched_statics: plan.static_plans.len(),
         changed_cells: plan
             .cell_plans
