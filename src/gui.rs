@@ -119,7 +119,7 @@ struct NavMetrics {
     button_height: f32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct NavStyleKey {
     pixels_per_point: u32,
     interact_width: u32,
@@ -127,6 +127,7 @@ struct NavStyleKey {
     button_padding_x: u32,
     button_padding_y: u32,
     item_spacing_x: u32,
+    button_font_family: egui::FontFamily,
     button_font_size: u32,
     button_frame: bool,
 }
@@ -844,7 +845,7 @@ impl NavUiState {
             .as_ref()
             .is_none_or(|metrics| metrics.style_key != style_key)
         {
-            self.metrics = Some(NavMetrics::new(ui, entries, style_key));
+            self.metrics = Some(NavMetrics::new(ui, entries, style_key.clone()));
         }
 
         self.metrics
@@ -889,6 +890,7 @@ impl NavStyleKey {
             button_padding_x: spacing.button_padding.x.to_bits(),
             button_padding_y: spacing.button_padding.y.to_bits(),
             item_spacing_x: spacing.item_spacing.x.to_bits(),
+            button_font_family: button_font.family,
             button_font_size: button_font.size.to_bits(),
             button_frame: ui.visuals().button_frame,
         }
