@@ -78,7 +78,7 @@ mod tests {
     }
 
     #[test]
-    fn no_subcommand_defaults_to_convert() {
+    fn parser_no_subcommand_defaults_to_convert() {
         let cli = Cli::parse_from(["greenmote"]);
 
         let Command::Convert(args) = cli.command_or_default();

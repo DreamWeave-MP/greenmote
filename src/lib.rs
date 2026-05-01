@@ -9,7 +9,11 @@ mod gui;
 
 pub use cli::{Cli, Command};
 
-/// Runs the `greenmote` command-line application.
+/// Runs the `greenmote` application.
+///
+/// With the `gui` feature enabled, launching without arguments opens the graphical interface.
+/// Otherwise, the command-line parser handles the invocation and defaults to `convert` when no
+/// subcommand is provided.
 ///
 /// # Errors
 ///
@@ -17,7 +21,7 @@ pub use cli::{Cli, Command};
 /// and generated output errors.
 pub fn run() -> io::Result<()> {
     #[cfg(feature = "gui")]
-    if std::env::args_os().len() == 1 {
+    if should_launch_gui(std::env::args_os()) {
         return gui::run();
     }
 
@@ -29,5 +33,28 @@ pub fn run() -> io::Result<()> {
 
     match cli.command_or_default() {
         Command::Convert(args) => groundcover::run(args),
+    }
+}
+
+#[cfg(feature = "gui")]
+fn should_launch_gui<I, T>(args: I) -> bool
+where
+    I: IntoIterator<Item = T>,
+{
+    args.into_iter().nth(1).is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "gui")]
+    use super::should_launch_gui;
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn gui_feature_launches_gui_only_for_empty_invocation() {
+        assert!(should_launch_gui(["greenmote"]));
+        assert!(!should_launch_gui(["greenmote", "convert"]));
+        assert!(!should_launch_gui(["greenmote", "--help"]));
+        assert!(!should_launch_gui(["greenmote", "--generate-manpage"]));
     }
 }
