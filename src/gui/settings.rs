@@ -4,7 +4,7 @@ use eframe::egui;
 
 use crate::groundcover::{self, GroundcoverArgs, GroundcoverConfig};
 
-use super::GreenmoteApp;
+use super::{GreenmoteApp, PendingNavigation};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsTab {
@@ -14,7 +14,6 @@ pub(super) enum SettingsTab {
 
 pub(super) struct SettingsUiState {
     selected_tab: SettingsTab,
-    pending_tab_selection: Option<SettingsTab>,
     draft: SettingsDraft,
     config_path: Option<PathBuf>,
     loaded: bool,
@@ -42,7 +41,6 @@ impl Default for SettingsUiState {
     fn default() -> Self {
         Self {
             selected_tab: SettingsTab::General,
-            pending_tab_selection: None,
             draft: SettingsDraft::from_config(&GroundcoverConfig::default()),
             config_path: None,
             loaded: false,
@@ -60,26 +58,6 @@ impl SettingsUiState {
 
     pub(super) fn select_tab(&mut self, tab: SettingsTab) {
         self.selected_tab = tab;
-    }
-
-    pub(super) fn queue_tab_selection(&mut self, tab: SettingsTab) {
-        if self.pending_tab_selection.is_none() {
-            self.pending_tab_selection = Some(tab);
-        }
-    }
-
-    pub(super) fn has_pending_tab_selection(&self) -> bool {
-        self.pending_tab_selection.is_some()
-    }
-
-    pub(super) fn perform_pending_tab_selection(&mut self) {
-        if let Some(tab) = self.pending_tab_selection.take() {
-            self.select_tab(tab);
-        }
-    }
-
-    pub(super) fn clear_pending_tab_selection(&mut self) {
-        self.pending_tab_selection = None;
     }
 }
 
@@ -292,7 +270,7 @@ impl GreenmoteApp {
                 return;
             }
 
-            self.settings.queue_tab_selection(tab);
+            self.queue_pending_navigation(PendingNavigation::SettingsTab(tab));
         } else {
             self.settings.select_tab(tab);
         }

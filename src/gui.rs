@@ -8,20 +8,26 @@ mod settings;
 
 use convert::ConvertUiState;
 use nav::{NavUiState, nav_bar_height};
-use settings::SettingsUiState;
+use settings::{SettingsTab, SettingsUiState};
 
 struct GreenmoteApp {
     screen: Screen,
     convert: ConvertUiState,
     settings: SettingsUiState,
     nav: NavUiState,
-    pending_screen_navigation: Option<Screen>,
+    pending_navigation: Option<PendingNavigation>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Convert,
     Settings,
+}
+
+#[derive(Clone, Copy)]
+enum PendingNavigation {
+    Screen(Screen),
+    SettingsTab(SettingsTab),
 }
 
 impl Default for GreenmoteApp {
@@ -31,7 +37,7 @@ impl Default for GreenmoteApp {
             convert: ConvertUiState::ready(),
             settings: SettingsUiState::default(),
             nav: NavUiState::default(),
-            pending_screen_navigation: None,
+            pending_navigation: None,
         }
     }
 }
@@ -69,7 +75,7 @@ impl GreenmoteApp {
         }
 
         if self.settings.is_dirty() {
-            self.queue_pending_screen_navigation(screen);
+            self.queue_pending_navigation(PendingNavigation::Screen(screen));
         } else {
             self.show_screen(screen);
         }
@@ -82,26 +88,27 @@ impl GreenmoteApp {
         }
     }
 
-    fn queue_pending_screen_navigation(&mut self, screen: Screen) {
+    fn queue_pending_navigation(&mut self, navigation: PendingNavigation) {
         if self.has_pending_navigation_request() {
             return;
         }
 
-        self.pending_screen_navigation = Some(screen);
+        self.pending_navigation = Some(navigation);
     }
 
     fn has_pending_navigation_request(&self) -> bool {
-        self.pending_screen_navigation.is_some() || self.settings.has_pending_tab_selection()
+        self.pending_navigation.is_some()
     }
 
     fn perform_pending_dirty_navigation(&mut self) {
-        if let Some(screen) = self.pending_screen_navigation.take() {
-            self.settings.clear_pending_tab_selection();
-            self.show_screen(screen);
+        let Some(navigation) = self.pending_navigation.take() else {
             return;
-        }
+        };
 
-        self.settings.perform_pending_tab_selection();
+        match navigation {
+            PendingNavigation::Screen(screen) => self.show_screen(screen),
+            PendingNavigation::SettingsTab(tab) => self.settings.select_tab(tab),
+        }
     }
 
     fn show_pending_navigation_prompt(&mut self, ctx: &egui::Context) {
@@ -142,8 +149,7 @@ impl GreenmoteApp {
                 self.perform_pending_dirty_navigation();
             }
         } else if cancel {
-            self.pending_screen_navigation = None;
-            self.settings.clear_pending_tab_selection();
+            self.pending_navigation = None;
         }
     }
 }
