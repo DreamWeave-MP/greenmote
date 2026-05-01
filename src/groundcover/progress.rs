@@ -42,7 +42,9 @@ pub enum ConversionEvent {
 ///
 /// Implementations must be safe to call from Rayon worker threads. Counted progress events from
 /// parallel phases are monotonic by work completed, but their delivery order is not guaranteed.
-/// Consumers that display the latest progress should clamp regressions for each phase.
+/// Consumers that display the latest progress should treat counted progress as completed-work
+/// samples and display the maximum observed `current` for each phase/total, not the most recently
+/// delivered sample.
 pub type EventSink<'a> = dyn Fn(ConversionEvent) + Sync + 'a;
 
 pub fn emit_phase(events: &EventSink<'_>, phase: ConversionPhase) {

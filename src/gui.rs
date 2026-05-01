@@ -68,7 +68,7 @@ impl Default for GreenmoteApp {
 
 impl eframe::App for GreenmoteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.receive_conversion_events();
+        self.receive_conversion_events(ctx);
 
         egui::SidePanel::left("greenmote_convert_panel")
             .resizable(false)
@@ -144,12 +144,12 @@ impl GreenmoteApp {
         });
     }
 
-    fn receive_conversion_events(&mut self) {
+    fn receive_conversion_events(&mut self, ctx: &egui::Context) {
         let Some(receiver) = self.convert.event_receiver.take() else {
             return;
         };
 
-        let mut pending_progress = None;
+        let mut pending_progress = PendingProgress::default();
         let mut processed = 0;
 
         loop {
@@ -157,13 +157,14 @@ impl GreenmoteApp {
                 if self.convert.running {
                     self.convert.event_receiver = Some(receiver);
                 }
-                self.apply_pending_progress(pending_progress);
+                self.apply_pending_progress(pending_progress.take());
+                ctx.request_repaint();
                 return;
             }
 
             match receiver.try_recv() {
                 Ok(GuiEvent::Progress(event)) => {
-                    pending_progress = Some(event);
+                    pending_progress.merge(event);
                     processed += 1;
                 }
                 Ok(event) => {
@@ -175,13 +176,13 @@ impl GreenmoteApp {
                     if self.convert.running {
                         self.convert.event_receiver = Some(receiver);
                     }
-                    self.apply_pending_progress(pending_progress);
+                    self.apply_pending_progress(pending_progress.take());
                     return;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.convert.running = false;
                     self.set_status("Conversion worker disconnected.");
-                    self.apply_pending_progress(pending_progress);
+                    self.apply_pending_progress(pending_progress.take());
                     return;
                 }
             }
@@ -266,6 +267,39 @@ impl GreenmoteApp {
 
     fn set_status(&mut self, status: impl Into<String>) {
         self.convert.status = status.into();
+    }
+}
+
+#[derive(Default)]
+struct PendingProgress {
+    event: Option<ConversionEvent>,
+}
+
+impl PendingProgress {
+    fn merge(&mut self, event: ConversionEvent) {
+        self.event = match (self.event, event) {
+            (
+                Some(ConversionEvent::Progress {
+                    phase: old_phase,
+                    current: old_current,
+                    total: old_total,
+                }),
+                ConversionEvent::Progress {
+                    phase,
+                    current,
+                    total,
+                },
+            ) if old_phase == phase && old_total == total => Some(ConversionEvent::Progress {
+                phase,
+                current: current.max(old_current),
+                total,
+            }),
+            (_, event) => Some(event),
+        };
+    }
+
+    fn take(&mut self) -> Option<ConversionEvent> {
+        self.event.take()
     }
 }
 
