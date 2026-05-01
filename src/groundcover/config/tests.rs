@@ -179,22 +179,13 @@ fn non_default_toml_output_directory_remains_user_override() {
 }
 
 #[test]
-fn configured_deleted_output_is_ignored_automatically() {
-    let dir = TempDir::new();
-    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
-    std::fs::write(
-        &config_path,
-        r#"
-[convert]
-deleted_output = "my_deleted_groundcover.omwaddon"
-"#,
-    )
-    .unwrap();
-    let args = GroundcoverArgs::parse_from(["convert"]);
+fn generated_outputs_are_not_name_ignored_by_default() {
+    let mut config = GroundcoverConfig::default();
 
-    let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
+    config.compile_regex_sets().unwrap();
 
-    assert!(config.is_ignored_plugin_name("my_deleted_groundcover.omwaddon"));
+    assert!(!config.is_ignored_plugin_name(crate::groundcover::GROUNDCOVER_PLUGIN_NAME));
+    assert!(!config.is_ignored_plugin_name(crate::groundcover::DELETED_PLUGIN_NAME));
 }
 
 #[test]

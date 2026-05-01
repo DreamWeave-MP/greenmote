@@ -115,7 +115,6 @@ impl GroundcoverConfig {
     /// writing the TOML file.
     pub(crate) fn save_for_edit(&self, path: &Path) -> io::Result<Self> {
         let mut normalized = self.clone();
-        normalized.ensure_generated_outputs_are_ignored();
         normalized.compile_regex_sets()?;
         normalized.save_to(path)?;
         Ok(normalized)
@@ -145,7 +144,6 @@ impl GroundcoverConfig {
         };
 
         config.apply_args(args);
-        config.ensure_generated_outputs_are_ignored();
         config.compile_regex_sets()?;
 
         if config_missing && !config.dry_run && !config.validate_config {
@@ -177,16 +175,6 @@ impl GroundcoverConfig {
 
         self.auto_enable |= args.auto_enable;
         self.debug |= args.debug;
-    }
-
-    fn ensure_generated_outputs_are_ignored(&mut self) {
-        if !self
-            .ignored_plugins
-            .iter()
-            .any(|plugin| plugin == &self.deleted_output)
-        {
-            self.ignored_plugins.push(self.deleted_output.clone());
-        }
     }
 
     fn save_to(&self, path: &Path) -> io::Result<()> {

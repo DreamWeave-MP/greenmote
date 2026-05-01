@@ -63,10 +63,5 @@ pub fn exclude() -> Vec<String> {
 
 #[must_use]
 pub fn ignored_plugins() -> Vec<String> {
-    vec![
-        DELETED_PLUGIN_NAME.into(),
-        // Historical config/comments disagree on underscore vs hyphen. Ignore both, because
-        // circular generated masters are not improved by winning a spelling argument.
-        "deleted-groundcover.omwaddon".into(),
-    ]
+    Vec::new()
 }
