@@ -2,7 +2,9 @@ use std::{ffi::OsString, io, path::Path, process::Command, sync::mpsc, thread};
 
 use eframe::egui;
 
-use crate::groundcover::{self, ConversionEvent, ConversionPhase, GroundcoverArgs};
+use crate::groundcover::{
+    self, CancellationToken, ConversionEvent, ConversionPhase, GroundcoverArgs,
+};
 
 use super::{ConvertRunOptions, GreenmoteApp};
 
@@ -14,8 +16,10 @@ pub(super) struct ConvertUiState {
     running: bool,
     status: String,
     output: String,
+    cancelling: bool,
     progress: Option<ProgressState>,
     event_receiver: Option<mpsc::Receiver<GuiEvent>>,
+    cancellation: Option<CancellationToken>,
     run_options: ConvertRunOptions,
     saved_run_options: ConvertRunOptions,
 }
@@ -23,7 +27,10 @@ pub(super) struct ConvertUiState {
 enum GuiEvent {
     Output(String),
     Progress(ConversionEvent),
-    Finished { error: Option<String> },
+    Finished {
+        error: Option<String>,
+        cancelled: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -223,9 +230,20 @@ impl GreenmoteApp {
     fn show_convert_output_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add_space(ui.spacing().item_spacing.y);
         ui.horizontal_wrapped(|ui| {
+            let actions_enabled = !self.convert.running;
             if ui
                 .add_enabled(
-                    !self.convert.output.is_empty(),
+                    self.convert.running && !self.convert.cancelling,
+                    egui::Button::new("Cancel"),
+                )
+                .clicked()
+            {
+                self.cancel_conversion();
+            }
+
+            if ui
+                .add_enabled(
+                    actions_enabled && !self.convert.output.is_empty(),
                     egui::Button::new("Clear output"),
                 )
                 .clicked()
@@ -236,7 +254,7 @@ impl GreenmoteApp {
 
             if ui
                 .add_enabled(
-                    !self.convert.output.is_empty(),
+                    actions_enabled && !self.convert.output.is_empty(),
                     egui::Button::new("Copy output"),
                 )
                 .clicked()
@@ -247,7 +265,7 @@ impl GreenmoteApp {
 
             if ui
                 .add_enabled(
-                    self.config_recovery_error.is_none(),
+                    actions_enabled && self.config_recovery_error.is_none(),
                     egui::Button::new("Open output dir"),
                 )
                 .clicked()
@@ -258,7 +276,7 @@ impl GreenmoteApp {
 
             if ui
                 .add_enabled(
-                    self.settings.log_directory().is_some(),
+                    actions_enabled && self.settings.log_directory().is_some(),
                     egui::Button::new("Open log dir"),
                 )
                 .clicked()
@@ -266,8 +284,6 @@ impl GreenmoteApp {
             {
                 self.open_directory(&log_directory, "log");
             }
-
-            ui.add_enabled(false, egui::Button::new("Cancel"));
         });
     }
 
@@ -275,11 +291,15 @@ impl GreenmoteApp {
         let (sender, receiver) = mpsc::channel();
         let sink = GuiEventSink::new(sender, ctx.clone());
         let options = self.convert.run_options;
+        let cancellation = CancellationToken::default();
+        let worker_cancellation = cancellation.clone();
 
         self.convert.running = true;
+        self.convert.cancelling = false;
         self.set_status("Converting with current run options...");
         self.convert.progress = None;
         self.convert.event_receiver = Some(receiver);
+        self.convert.cancellation = Some(cancellation);
         self.convert.output.clear();
 
         thread::spawn(move || {
@@ -291,22 +311,38 @@ impl GreenmoteApp {
                 Ok((_path, mut config)) => {
                     options.apply_to_config(&mut config);
                     config.compile_regex_sets().and_then(|()| {
-                        groundcover::run_with_config_and_events(
+                        groundcover::run_with_config_events_and_cancel(
                             args.openmw_cfg.as_deref(),
                             &config,
                             &mut stdout,
                             &mut stderr,
                             &move |event| progress_sink.send(GuiEvent::Progress(event)),
+                            &worker_cancellation,
                         )
                     })
                 }
                 Err(error) => Err(error),
             }
             .err()
-            .map(|error| error.to_string());
+            .map(|error| {
+                let cancelled = error.kind() == io::ErrorKind::Interrupted
+                    && worker_cancellation.is_cancelled();
+                (error.to_string(), cancelled)
+            });
+            let (error, cancelled) =
+                error.map_or((None, false), |(error, cancelled)| (Some(error), cancelled));
 
-            sink.send(GuiEvent::Finished { error });
+            sink.send(GuiEvent::Finished { error, cancelled });
         });
+    }
+
+    fn cancel_conversion(&mut self) {
+        if let Some(cancellation) = &self.convert.cancellation {
+            cancellation.cancel();
+            self.convert.cancelling = true;
+            self.convert.progress = None;
+            self.set_status("Cancelling conversion...");
+        }
     }
 
     pub(super) fn receive_conversion_events(&mut self, ctx: &egui::Context) {
@@ -345,9 +381,11 @@ impl GreenmoteApp {
                     return;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.convert.running = false;
-                    self.set_status("Conversion worker disconnected.");
                     self.apply_pending_progress(pending_progress.take());
+                    self.finish_conversion(
+                        Some("Conversion worker disconnected.".to_owned()),
+                        false,
+                    );
                     return;
                 }
             }
@@ -358,11 +396,15 @@ impl GreenmoteApp {
         match event {
             GuiEvent::Output(output) => self.convert.output.push_str(&output),
             GuiEvent::Progress(event) => self.handle_progress_event(event),
-            GuiEvent::Finished { error } => self.finish_conversion(error),
+            GuiEvent::Finished { error, cancelled } => self.finish_conversion(error, cancelled),
         }
     }
 
     fn handle_progress_event(&mut self, event: ConversionEvent) {
+        if self.convert.cancelling {
+            return;
+        }
+
         match event {
             ConversionEvent::PhaseStarted(phase) => {
                 self.convert.progress = Some(ProgressState {
@@ -410,11 +452,15 @@ impl GreenmoteApp {
         }
     }
 
-    fn finish_conversion(&mut self, error: Option<String>) {
+    fn finish_conversion(&mut self, error: Option<String>, cancelled: bool) {
         self.convert.running = false;
+        self.convert.cancelling = false;
         self.convert.progress = None;
+        self.convert.cancellation = None;
 
-        if let Some(error) = error {
+        if cancelled {
+            self.set_status("Conversion cancelled. Partial output may exist.");
+        } else if let Some(error) = error {
             append_error(&mut self.convert.output, &error);
             self.set_status(format!("Conversion failed: {error}"));
         } else {
@@ -583,13 +629,12 @@ fn open_directory_native(path: &Path) -> io::Result<()> {
     for candidate in directory_open_commands(path) {
         let mut command = Command::new(candidate.program);
         command.args(&candidate.args);
-        match command.status() {
-            Ok(status) if status.success() => return Ok(()),
-            Ok(status) => {
-                last_error = Some(io::Error::other(format!(
-                    "{} exited with {status}",
-                    candidate.program
-                )));
+        match command.spawn() {
+            Ok(mut child) => {
+                thread::spawn(move || {
+                    let _status = child.wait();
+                });
+                return Ok(());
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 last_error = Some(error);

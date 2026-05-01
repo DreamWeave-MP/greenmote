@@ -11,6 +11,7 @@ use vfstool_lib::VFS;
 
 use crate::groundcover::{
     GENERATED_PLUGIN_AUTHOR, GENERATED_PLUGIN_DESCRIPTION, GroundcoverConfig, plan::LoadedPlugin,
+    progress::CancellationToken,
 };
 
 #[derive(Clone, Debug)]
@@ -81,15 +82,17 @@ pub fn resolve_source_plugins(
 pub fn load_plugins_for_cell_scanning(
     sources: Vec<SourcePlugin>,
     progress: &(dyn Fn(usize, usize) + Sync),
-) -> PluginLoadResult {
-    load_plugins_matching(sources, PluginLoadMode::Cells, progress)
+    cancellation: &CancellationToken,
+) -> io::Result<PluginLoadResult> {
+    load_plugins_matching(sources, PluginLoadMode::Cells, progress, cancellation)
 }
 
 pub fn load_plugins_for_static_planning(
     sources: Vec<SourcePlugin>,
     progress: &(dyn Fn(usize, usize) + Sync),
-) -> PluginLoadResult {
-    load_plugins_matching(sources, PluginLoadMode::Statics, progress)
+    cancellation: &CancellationToken,
+) -> io::Result<PluginLoadResult> {
+    load_plugins_matching(sources, PluginLoadMode::Statics, progress, cancellation)
 }
 
 #[derive(Clone, Copy)]
@@ -102,14 +105,21 @@ fn load_plugins_matching(
     sources: Vec<SourcePlugin>,
     mode: PluginLoadMode,
     progress: &(dyn Fn(usize, usize) + Sync),
-) -> PluginLoadResult {
+    cancellation: &CancellationToken,
+) -> io::Result<PluginLoadResult> {
     let total = sources.len();
     let completed = AtomicUsize::new(0);
 
     let mut loaded = sources
         .into_par_iter()
         .map(|source| {
-            let result = match load_one_plugin(&source, mode) {
+            let result = if cancellation.is_cancelled() {
+                Err(cancelled_error())
+            } else {
+                load_one_plugin(&source, mode)
+            };
+
+            let result = match result {
                 Ok(RawPluginLoadOutcome::Loaded(plugin)) => {
                     Ok(PluginLoadOutcome::Loaded(LoadedPlugin {
                         load_index: source.load_index,
@@ -124,10 +134,16 @@ fn load_plugins_matching(
                         plugin_path: source.plugin_path,
                     }),
                 ),
-                Err(error) => Err(PluginLoadWarning {
+                Err(error)
+                    if error.kind() == io::ErrorKind::Interrupted
+                        && cancellation.is_cancelled() =>
+                {
+                    Err(PluginLoadError::Cancelled(error))
+                }
+                Err(error) => Err(PluginLoadError::Warning(PluginLoadWarning {
                     plugin_path: source.plugin_path,
                     error,
-                }),
+                })),
             };
 
             let load_index = source.load_index;
@@ -147,20 +163,30 @@ fn load_plugins_matching(
         match result {
             Ok(PluginLoadOutcome::Loaded(plugin)) => plugins.push(plugin),
             Ok(PluginLoadOutcome::SkippedGenerated(skipped)) => skipped_generated.push(skipped),
-            Err(warning) => warnings.push(warning),
+            Err(PluginLoadError::Warning(warning)) => warnings.push(warning),
+            Err(PluginLoadError::Cancelled(error)) => return Err(error),
         }
     }
 
-    PluginLoadResult {
+    Ok(PluginLoadResult {
         plugins,
         skipped_generated,
         warnings,
-    }
+    })
 }
 
 enum PluginLoadOutcome {
     Loaded(LoadedPlugin),
     SkippedGenerated(SkippedGeneratedPlugin),
+}
+
+enum PluginLoadError {
+    Warning(PluginLoadWarning),
+    Cancelled(io::Error),
+}
+
+fn cancelled_error() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "conversion cancelled")
 }
 
 enum RawPluginLoadOutcome {
@@ -302,7 +328,9 @@ mod tests {
                 source_plugin(1, "source.esp", source.as_path()),
             ],
             &|_, _| {},
-        );
+            &CancellationToken::default(),
+        )
+        .unwrap();
 
         assert!(result.warnings.is_empty());
         assert_eq!(result.skipped_generated.len(), 1);
@@ -331,7 +359,9 @@ mod tests {
         let result = load_plugins_for_static_planning(
             vec![source_plugin(0, "source.esp", source.as_path())],
             &|_, _| {},
-        );
+            &CancellationToken::default(),
+        )
+        .unwrap();
 
         assert!(result.warnings.is_empty());
         assert!(result.skipped_generated.is_empty());

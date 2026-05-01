@@ -9,7 +9,7 @@ use std::{
 use rayon::prelude::*;
 use vfstool_lib::{VFS, VfsFile};
 
-use crate::groundcover::mesh;
+use crate::groundcover::{mesh, progress::CancellationToken};
 
 #[derive(Debug)]
 pub struct MeshCopyJob {
@@ -63,11 +63,16 @@ pub fn resolve_mesh_copy_jobs(
 pub fn copy_meshes(
     jobs: &[MeshCopyJob],
     progress: &(dyn Fn(usize, usize) + Sync),
+    cancellation: &CancellationToken,
 ) -> io::Result<()> {
     let total = jobs.len();
     let completed = AtomicUsize::new(0);
 
     jobs.par_iter().try_for_each(|job| {
+        if cancellation.is_cancelled() {
+            return Err(cancelled_error());
+        }
+
         if let Some(parent) = job.target_path.parent() {
             create_dir_all(parent)?;
         }
@@ -78,6 +83,10 @@ pub fn copy_meshes(
         progress(current, total);
         Ok(())
     })
+}
+
+fn cancelled_error() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "conversion cancelled")
 }
 
 #[cfg(test)]

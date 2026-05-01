@@ -18,7 +18,7 @@ pub mod records;
 
 pub use args::GroundcoverArgs;
 pub use config::GroundcoverConfig;
-pub use progress::{ConversionEvent, ConversionPhase};
+pub use progress::{CancellationToken, ConversionEvent, ConversionPhase};
 
 pub const DEFAULT_CONFIG_NAME: &str = "greenmote.toml";
 pub const DELETED_PLUGIN_NAME: &str = "deleted_groundcover.omwaddon";
@@ -62,7 +62,7 @@ pub fn run_with_output_and_events(
     stderr: &mut dyn Write,
     events: &progress::EventSink<'_>,
 ) -> io::Result<()> {
-    app::run(args, stdout, stderr, events)
+    app::run(args, stdout, stderr, events, &CancellationToken::default())
 }
 
 /// Runs conversion with an already-resolved runtime config.
@@ -74,14 +74,15 @@ pub fn run_with_output_and_events(
 /// # Errors
 ///
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
-pub(crate) fn run_with_config_and_events(
+pub(crate) fn run_with_config_events_and_cancel(
     openmw_cfg: Option<&std::path::Path>,
     config: &GroundcoverConfig,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     events: &progress::EventSink<'_>,
+    cancellation: &CancellationToken,
 ) -> io::Result<()> {
-    app::run_with_config(openmw_cfg, config, stdout, stderr, events)
+    app::run_with_config(openmw_cfg, config, stdout, stderr, events, cancellation)
 }
 
 /// Loads the effective `greenmote.toml` location and editable groundcover config for GUI settings.

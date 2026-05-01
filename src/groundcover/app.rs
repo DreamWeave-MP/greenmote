@@ -1,11 +1,12 @@
 use std::{collections::HashSet, fs::File, io, io::Write, path::Path};
 
 use openmw_config::OpenMWConfiguration;
+use vfstool_lib::VFS;
 
 use crate::groundcover::{
-    GroundcoverArgs, GroundcoverConfig, LOG_NAME, auto_enable, load, openmw, output,
-    plan::{build_static_conversion_plan, scan_cells_parallel},
-    progress::{self, ConversionPhase, EventSink},
+    GroundcoverArgs, GroundcoverConfig, LOG_NAME, auto_enable, load, mesh, openmw, output,
+    plan::{ConversionPlan, build_static_conversion_plan, scan_cells_parallel},
+    progress::{self, CancellationToken, ConversionPhase, EventSink},
 };
 
 pub fn run(
@@ -13,6 +14,7 @@ pub fn run(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     events: &EventSink<'_>,
+    cancellation: &CancellationToken,
 ) -> io::Result<()> {
     let openmw_config = openmw::load_config(&args)?;
     let greenmote_config_path = openmw::greenmote_config_path(&args, &openmw_config);
@@ -32,7 +34,7 @@ pub fn run(
         return Ok(());
     }
 
-    run_loaded_config(openmw_config, &config, stdout, stderr, events)
+    run_loaded_config(openmw_config, &config, stdout, stderr, events, cancellation)
 }
 
 pub fn run_with_config(
@@ -41,6 +43,7 @@ pub fn run_with_config(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     events: &EventSink<'_>,
+    cancellation: &CancellationToken,
 ) -> io::Result<()> {
     if config.validate_config {
         return Err(io::Error::new(
@@ -50,7 +53,7 @@ pub fn run_with_config(
     }
 
     let openmw_config = openmw::load_config_from_path(openmw_cfg)?;
-    run_loaded_config(openmw_config, config, stdout, stderr, events)
+    run_loaded_config(openmw_config, config, stdout, stderr, events, cancellation)
 }
 
 fn run_loaded_config(
@@ -59,25 +62,34 @@ fn run_loaded_config(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     events: &EventSink<'_>,
+    cancellation: &CancellationToken,
 ) -> io::Result<()> {
+    check_cancelled(cancellation)?;
     let initial_enablement = auto_enable::status(&openmw_config, config);
 
     validate_auto_enable(&openmw_config, config, initial_enablement)?;
+    check_cancelled(cancellation)?;
 
     let content_files = openmw::content_files(&openmw_config)?;
     let vfs = openmw::build_vfs(&openmw_config);
+    check_cancelled(cancellation)?;
 
     let sources = load::resolve_source_plugins(&content_files, config, &vfs);
     progress::emit_phase(events, ConversionPhase::LoadingStaticPlugins);
-    let static_load = load::load_plugins_for_static_planning(sources.clone(), &|current, total| {
-        progress::emit_progress(
-            events,
-            ConversionPhase::LoadingStaticPlugins,
-            current,
-            total,
-        );
-    });
+    let static_load = load::load_plugins_for_static_planning(
+        sources.clone(),
+        &|current, total| {
+            progress::emit_progress(
+                events,
+                ConversionPhase::LoadingStaticPlugins,
+                current,
+                total,
+            );
+        },
+        cancellation,
+    )?;
     write_load_warnings(stderr, &static_load.warnings)?;
+    check_cancelled(cancellation)?;
     let skipped_generated_plugins = static_load
         .skipped_generated
         .iter()
@@ -86,16 +98,28 @@ fn run_loaded_config(
     let static_plugins = static_load.plugins;
     progress::emit_phase(events, ConversionPhase::PlanningStatics);
     let static_plan = build_static_conversion_plan(&static_plugins, config);
+    check_cancelled(cancellation)?;
     let (loaded_plugins, cell_plans) = if static_plan.matched_static_ids.is_empty() {
         (static_plugins.len(), Vec::new())
     } else {
         progress::emit_phase(events, ConversionPhase::LoadingCellPlugins);
-        let cell_load = load::load_plugins_for_cell_scanning(sources, &|current, total| {
-            progress::emit_progress(events, ConversionPhase::LoadingCellPlugins, current, total);
-        });
+        let cell_load = load::load_plugins_for_cell_scanning(
+            sources,
+            &|current, total| {
+                progress::emit_progress(
+                    events,
+                    ConversionPhase::LoadingCellPlugins,
+                    current,
+                    total,
+                );
+            },
+            cancellation,
+        )?;
         write_load_warnings(stderr, &cell_load.warnings)?;
+        check_cancelled(cancellation)?;
         let cell_plugins = cell_load.plugins;
         ensure_static_sources_loaded_for_cell_scanning(&static_plan, &cell_plugins)?;
+        check_cancelled(cancellation)?;
         progress::emit_phase(events, ConversionPhase::ScanningCells);
         let cell_plans = scan_cells_parallel(
             &cell_plugins,
@@ -103,12 +127,16 @@ fn run_loaded_config(
             &|current, total| {
                 progress::emit_progress(events, ConversionPhase::ScanningCells, current, total);
             },
-        );
+            cancellation,
+        )?;
+        check_cancelled(cancellation)?;
         (cell_plugins.len(), cell_plans)
     };
     let plan = static_plan.with_cell_plans(cell_plans);
+    check_cancelled(cancellation)?;
     progress::emit_phase(events, ConversionPhase::ResolvingMeshes);
     let mesh_paths = plan.used_mesh_paths()?;
+    check_cancelled(cancellation)?;
     let summary = build_run_summary(
         content_files.len(),
         loaded_plugins,
@@ -120,37 +148,96 @@ fn run_loaded_config(
     if config.debug {
         output::write_summary(&mut *stderr, &summary, &plan, config)?;
     }
+    check_cancelled(cancellation)?;
 
     if config.dry_run {
         output::write_summary(&mut *stdout, &summary, &plan, config)?;
         return Ok(());
     }
 
-    let mesh_jobs = output::resolve_mesh_copy_jobs(&vfs, &mesh_paths, &config.output_directory)?;
-    progress::emit_phase(events, ConversionPhase::WritingPlugins);
-    let built = output::build_plugins(&plan)?;
-    output::save_plugins(built, config)?;
-    progress::emit_phase(events, ConversionPhase::CopyingMeshes);
-    output::copy_meshes(&mesh_jobs, &|current, total| {
-        progress::emit_progress(events, ConversionPhase::CopyingMeshes, current, total);
+    let (log_path, copied_meshes) = write_conversion_outputs(OutputWriteContext {
+        stdout,
+        openmw_config: &mut openmw_config,
+        vfs: &vfs,
+        config,
+        plan: &plan,
+        mesh_paths: &mesh_paths,
+        summary: &summary,
+        events,
+        cancellation,
     })?;
 
-    run_auto_enable(stdout, &mut openmw_config, config, events)?;
-
-    progress::emit_phase(events, ConversionPhase::WritingLog);
-    let log_path = openmw_config.user_config_path().join(LOG_NAME);
-    let mut log = File::create(&log_path)?;
-    output::write_summary(&mut log, &summary, &plan, config)?;
-
-    print_success(
-        stdout,
-        config,
-        &log_path,
-        mesh_jobs.len(),
-        initial_enablement,
-    )?;
+    check_cancelled(cancellation)?;
+    print_success(stdout, config, &log_path, copied_meshes, initial_enablement)?;
 
     Ok(())
+}
+
+struct OutputWriteContext<'a, 'b> {
+    stdout: &'a mut dyn Write,
+    openmw_config: &'a mut openmw_config::OpenMWConfiguration,
+    vfs: &'a VFS,
+    config: &'a GroundcoverConfig,
+    plan: &'a ConversionPlan,
+    mesh_paths: &'a std::collections::BTreeSet<mesh::MeshCopyPath>,
+    summary: &'a output::RunSummary,
+    events: &'a EventSink<'b>,
+    cancellation: &'a CancellationToken,
+}
+
+fn write_conversion_outputs(
+    ctx: OutputWriteContext<'_, '_>,
+) -> io::Result<(std::path::PathBuf, usize)> {
+    let OutputWriteContext {
+        stdout,
+        openmw_config,
+        vfs,
+        config,
+        plan,
+        mesh_paths,
+        summary,
+        events,
+        cancellation,
+    } = ctx;
+
+    let mesh_jobs = output::resolve_mesh_copy_jobs(vfs, mesh_paths, &config.output_directory)?;
+    check_cancelled(cancellation)?;
+    progress::emit_phase(events, ConversionPhase::WritingPlugins);
+    let built = output::build_plugins(plan)?;
+    check_cancelled(cancellation)?;
+    output::save_plugins(built, config)?;
+    progress::emit_phase(events, ConversionPhase::CopyingMeshes);
+    output::copy_meshes(
+        &mesh_jobs,
+        &|current, total| {
+            progress::emit_progress(events, ConversionPhase::CopyingMeshes, current, total);
+        },
+        cancellation,
+    )?;
+
+    check_cancelled(cancellation)?;
+    run_auto_enable(stdout, openmw_config, config, events)?;
+
+    check_cancelled(cancellation)?;
+    progress::emit_phase(events, ConversionPhase::WritingLog);
+    let log_path = openmw_config.user_config_path().join(LOG_NAME);
+    check_cancelled(cancellation)?;
+    let mut log = File::create(&log_path)?;
+    output::write_summary(&mut log, summary, plan, config)?;
+    check_cancelled(cancellation)?;
+
+    Ok((log_path, mesh_jobs.len()))
+}
+
+fn check_cancelled(cancellation: &CancellationToken) -> io::Result<()> {
+    if cancellation.is_cancelled() {
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "conversion cancelled",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_auto_enable(

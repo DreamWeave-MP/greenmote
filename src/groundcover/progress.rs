@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConversionPhase {
     LoadingStaticPlugins,
@@ -47,6 +52,22 @@ pub enum ConversionEvent {
 /// delivered sample.
 pub type EventSink<'a> = dyn Fn(ConversionEvent) + Sync + 'a;
 
+#[derive(Clone, Debug, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+}
+
 pub fn emit_phase(events: &EventSink<'_>, phase: ConversionPhase) {
     events(ConversionEvent::PhaseStarted(phase));
 }
@@ -57,4 +78,19 @@ pub fn emit_progress(events: &EventSink<'_>, phase: ConversionPhase, current: us
         current,
         total,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CancellationToken;
+
+    #[test]
+    fn cancellation_token_is_shared_between_clones() {
+        let token = CancellationToken::default();
+        let clone = token.clone();
+
+        clone.cancel();
+
+        assert!(token.is_cancelled());
+    }
 }
