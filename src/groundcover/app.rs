@@ -40,7 +40,12 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
         .data_directories_iter()
         .map(openmw_config::DirectorySetting::parsed)
         .collect::<Vec<_>>();
-    let vfs = VFS::from_directories(directories, None);
+    let fallback_archives = openmw_config
+        .fallback_archives_iter()
+        .map(openmw_config::FileSetting::value)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let vfs = VFS::from_directories(directories, Some(fallback_archives));
 
     let sources = load::resolve_source_plugins(&content_files, &config, &vfs);
     let plugins = load::load_plugins(sources);
