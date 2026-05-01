@@ -17,7 +17,6 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
         return Ok(());
     }
 
-    let selected_config_file = selected_config_file_path(&args)?;
     let mut openmw_config = load_openmw_config(&args)?;
     let greenmote_config_path = greenmote_config_path(&args, &openmw_config);
     let default_output_directory = default_output_directory(&openmw_config);
@@ -30,6 +29,10 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     if config.validate_config {
         println!("Validated {} successfully", greenmote_config_path.display());
         return Ok(());
+    }
+
+    if config.auto_enable {
+        validate_auto_enable_output_directory(&openmw_config, &config)?;
     }
 
     let content_files = content_files(&openmw_config)?;
@@ -75,7 +78,7 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     output::copy_meshes(&mesh_jobs)?;
 
     if config.auto_enable {
-        let backup = auto_enable_outputs(&mut openmw_config, &config, &selected_config_file)?;
+        let backup = auto_enable_outputs(&mut openmw_config, &config)?;
         eprintln!(
             "Updated OpenMW config; backup saved at {}",
             backup.display()
@@ -89,16 +92,6 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     print_success(&config, &log_path, mesh_jobs.len());
 
     Ok(())
-}
-
-fn selected_config_file_path(args: &GroundcoverArgs) -> io::Result<PathBuf> {
-    let config_path = get_config_path(args)?;
-
-    Ok(if config_path.is_dir() {
-        config_path.join("openmw.cfg")
-    } else {
-        config_path
-    })
 }
 
 fn get_config_path(args: &GroundcoverArgs) -> io::Result<PathBuf> {
@@ -173,37 +166,44 @@ fn default_output_directory(config: &OpenMWConfiguration) -> PathBuf {
         })
 }
 
-fn backup_openmw_cfg(selected_config_file: &Path) -> io::Result<PathBuf> {
-    let file_name = selected_config_file.file_name().ok_or_else(|| {
+fn backup_openmw_cfg(openmw_cfg: &Path) -> io::Result<PathBuf> {
+    let file_name = openmw_cfg.file_name().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "selected OpenMW config path has no file name",
+            "OpenMW user config path has no file name",
         )
     })?;
     let backup_name = format!("{}.greenmote.bak", file_name.to_string_lossy());
-    let backup_path = selected_config_file.with_file_name(backup_name);
+    let backup_path = openmw_cfg.with_file_name(backup_name);
 
-    copy(selected_config_file, &backup_path)?;
+    copy(openmw_cfg, &backup_path)?;
 
     Ok(backup_path)
 }
 
-fn auto_enable_outputs(
-    config: &mut OpenMWConfiguration,
+fn validate_auto_enable_output_directory(
+    config: &OpenMWConfiguration,
     groundcover_config: &GroundcoverConfig,
-    selected_config_file: &Path,
-) -> io::Result<PathBuf> {
-    if !output_directory_is_visible(config, &groundcover_config.output_directory) {
-        return Err(io::Error::new(
+) -> io::Result<()> {
+    if output_directory_is_visible(config, &groundcover_config.output_directory) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
                 "refusing to auto-enable outputs in {} because it is not data-local or a configured data directory",
                 groundcover_config.output_directory.display()
             ),
-        ));
+        ))
     }
+}
 
-    let backup = backup_openmw_cfg(selected_config_file)?;
+fn auto_enable_outputs(
+    config: &mut OpenMWConfiguration,
+    groundcover_config: &GroundcoverConfig,
+) -> io::Result<PathBuf> {
+    let user_openmw_cfg = config.user_config_path().join("openmw.cfg");
+    let backup = backup_openmw_cfg(&user_openmw_cfg)?;
 
     if !config.has_groundcover_file(&groundcover_config.groundcover_output) {
         config
