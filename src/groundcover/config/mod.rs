@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::groundcover::{GroundcoverArgs, default};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 // These are persisted/CLI-facing runtime toggles. Hiding them behind enums would make the Rust
 // type prettier and the TOML schema worse. That is not a trade.
 #[allow(clippy::struct_excessive_bools)]
@@ -86,6 +86,41 @@ impl GroundcoverConfig {
 }
 
 impl GroundcoverConfig {
+    /// Loads `greenmote.toml` for GUI editing without applying transient CLI overrides or writing
+    /// a generated file as a side effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns filesystem errors, TOML parse errors as invalid data, or regex compilation errors as
+    /// invalid input.
+    pub(crate) fn load_for_edit(
+        config_path: &Path,
+        default_output_directory: PathBuf,
+    ) -> io::Result<Self> {
+        let config = if config_path.is_file() {
+            let contents = read_to_string(config_path)?;
+            file::GroundcoverConfigFile::from_toml(&contents, default_output_directory)?
+        } else {
+            Self::with_output_directory(default_output_directory)
+        };
+
+        Ok(config)
+    }
+
+    /// Saves `greenmote.toml` after validating regex-backed settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-data error for malformed regex settings or filesystem errors while
+    /// writing the TOML file.
+    pub(crate) fn save_for_edit(&self, path: &Path) -> io::Result<Self> {
+        let mut normalized = self.clone();
+        normalized.ensure_generated_outputs_are_ignored();
+        normalized.compile_regex_sets()?;
+        normalized.save_to(path)?;
+        Ok(normalized)
+    }
+
     /// Loads, merges, validates, and optionally initializes `greenmote.toml`.
     ///
     /// # Errors

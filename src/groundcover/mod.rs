@@ -1,4 +1,7 @@
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+};
 
 mod app;
 mod args;
@@ -58,4 +61,32 @@ pub fn run_with_output_and_events(
     events: &progress::EventSink<'_>,
 ) -> io::Result<()> {
     app::run(args, stdout, stderr, events)
+}
+
+/// Loads the effective `greenmote.toml` location and editable groundcover config for GUI settings.
+///
+/// # Errors
+///
+/// Returns filesystem, `OpenMW` configuration, TOML parse, or regex validation errors.
+pub(crate) fn load_config_for_edit(
+    args: &GroundcoverArgs,
+) -> io::Result<(PathBuf, GroundcoverConfig)> {
+    let openmw_config = openmw::load_config(args)?;
+    let config_path = openmw::greenmote_config_path(args, &openmw_config);
+    let default_output_directory = openmw::default_output_directory(&openmw_config);
+    let config = GroundcoverConfig::load_for_edit(&config_path, default_output_directory)?;
+
+    Ok((config_path, config))
+}
+
+/// Saves editable GUI settings through the same TOML schema used by the CLI.
+///
+/// # Errors
+///
+/// Returns regex validation or filesystem errors.
+pub(crate) fn save_config_for_edit(
+    config: &GroundcoverConfig,
+    path: &std::path::Path,
+) -> io::Result<GroundcoverConfig> {
+    config.save_for_edit(path)
 }
