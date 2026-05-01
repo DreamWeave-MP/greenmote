@@ -3,21 +3,31 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Normalizes a source mesh path for VFS lookup/copying.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MeshCopyPath {
+    pub source: String,
+    pub target: String,
+}
+
+/// Normalizes a source mesh path into separate VFS lookup and output-relative paths.
 ///
 /// # Errors
 ///
 /// Returns invalid input if the mesh path contains empty, current-directory, parent-directory,
 /// or drive-prefixed components.
-pub fn normalize_mesh_for_copy(mesh: &str) -> io::Result<Option<String>> {
+pub fn normalize_mesh_for_copy(mesh: &str) -> io::Result<MeshCopyPath> {
     let normalized = mesh.replace('/', "\\").to_ascii_lowercase();
     validate_mesh_path_components(&normalized)?;
+    let target = normalized
+        .strip_prefix("grass\\")
+        .unwrap_or(&normalized)
+        .to_owned();
+    validate_mesh_path_components(&target)?;
 
-    if normalized.starts_with("grass\\") {
-        Ok(None)
-    } else {
-        Ok(Some(normalized))
-    }
+    Ok(MeshCopyPath {
+        source: normalized,
+        target,
+    })
 }
 
 /// Normalizes a source mesh path and ensures it is rooted under `grass\`.
@@ -79,16 +89,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mesh_copy_normalization_skips_existing_grass_meshes() {
-        assert_eq!(normalize_mesh_for_copy("Grass\\foo.nif").unwrap(), None);
-        assert_eq!(normalize_mesh_for_copy("grass/foo.nif").unwrap(), None);
+    fn mesh_copy_normalization_strips_existing_grass_prefix_from_target_only() {
+        assert_eq!(
+            normalize_mesh_for_copy("Grass\\Foo.nif").unwrap(),
+            MeshCopyPath {
+                source: "grass\\foo.nif".to_owned(),
+                target: "foo.nif".to_owned(),
+            }
+        );
+        assert_eq!(
+            normalize_mesh_for_copy("grass/Sky/foo.nif").unwrap(),
+            MeshCopyPath {
+                source: "grass\\sky\\foo.nif".to_owned(),
+                target: "sky\\foo.nif".to_owned(),
+            }
+        );
     }
 
     #[test]
     fn mesh_copy_normalization_lowercases_non_grass_meshes() {
         assert_eq!(
             normalize_mesh_for_copy("Flora/Foo.NIF").unwrap(),
-            Some("flora\\foo.nif".to_owned())
+            MeshCopyPath {
+                source: "flora\\foo.nif".to_owned(),
+                target: "flora\\foo.nif".to_owned(),
+            }
         );
     }
 

@@ -110,14 +110,14 @@ pub struct ConversionPlan {
     pub static_plans: Vec<StaticPlan>,
     pub cell_plans: Vec<PluginCellPlan>,
     pub matched_static_ids: HashSet<String>,
-    pub mesh_paths: BTreeSet<String>,
+    pub mesh_paths: BTreeSet<mesh::MeshCopyPath>,
 }
 
 #[derive(Debug)]
 pub struct StaticConversionPlan {
     pub static_plans: Vec<StaticPlan>,
     pub matched_static_ids: HashSet<String>,
-    pub mesh_paths: BTreeSet<String>,
+    pub mesh_paths: BTreeSet<mesh::MeshCopyPath>,
 }
 
 impl StaticConversionPlan {
@@ -175,7 +175,11 @@ pub fn build_static_conversion_plan(
 fn collect_winning_statics(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,
-) -> io::Result<(Vec<StaticPlan>, HashSet<String>, BTreeSet<String>)> {
+) -> io::Result<(
+    Vec<StaticPlan>,
+    HashSet<String>,
+    BTreeSet<mesh::MeshCopyPath>,
+)> {
     let mut seen_static_ids = HashSet::new();
     let mut matched_static_ids = HashSet::new();
     let mut static_plans = Vec::new();
@@ -193,9 +197,7 @@ fn collect_winning_statics(
 
             matched_static_ids.insert(lower_id);
 
-            if let Some(mesh_path) = mesh::normalize_mesh_for_copy(&static_record.mesh)? {
-                mesh_paths.insert(mesh_path);
-            }
+            mesh_paths.insert(mesh::normalize_mesh_for_copy(&static_record.mesh)?);
 
             let mut output_static = static_record.clone();
             output_static.mesh = mesh::grass_prefixed_mesh(&output_static.mesh)?;
@@ -327,6 +329,25 @@ mod tests {
             "grass\\flora\\planter.nif"
         );
         assert!(plan.matched_static_ids.contains("flora_grass_01"));
+    }
+
+    #[test]
+    fn existing_grass_meshes_are_still_planned_for_copy() {
+        let plugins = vec![loaded(
+            0,
+            vec![static_record("flora_grass_01", "Grass\\Sky_Flora_GS_01_01.nif").into()],
+        )];
+
+        let plan = build_conversion_plan(&plugins, &config()).unwrap();
+        let mesh_path = plan.mesh_paths.iter().next().unwrap();
+
+        assert_eq!(plan.mesh_paths.len(), 1);
+        assert_eq!(mesh_path.source, "grass\\sky_flora_gs_01_01.nif");
+        assert_eq!(mesh_path.target, "sky_flora_gs_01_01.nif");
+        assert_eq!(
+            plan.static_plans[0].output_static.mesh,
+            "Grass\\Sky_Flora_GS_01_01.nif"
+        );
     }
 
     #[test]

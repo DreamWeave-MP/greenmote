@@ -261,15 +261,15 @@ pub fn save_plugins(mut built: BuiltPlugins, config: &GroundcoverConfig) -> io::
 
 pub fn resolve_mesh_copy_jobs(
     vfs: &VFS,
-    mesh_paths: &BTreeSet<String>,
+    mesh_paths: &BTreeSet<mesh::MeshCopyPath>,
     output_directory: &Path,
 ) -> io::Result<Vec<MeshCopyJob>> {
     let mut missing = Vec::new();
     let jobs = mesh_paths
         .iter()
         .map(|mesh_path| {
-            let backslash_key = format!("Meshes\\{mesh_path}");
-            let slash_key = format!("Meshes/{}", mesh_path.replace('\\', "/"));
+            let backslash_key = format!("Meshes\\{}", mesh_path.source);
+            let slash_key = format!("Meshes/{}", mesh_path.source.replace('\\', "/"));
             let source = vfs
                 .get_file(&backslash_key)
                 .or_else(|| vfs.get_file(&slash_key));
@@ -277,7 +277,7 @@ pub fn resolve_mesh_copy_jobs(
             if let Some(source) = source {
                 Ok(Some(MeshCopyJob {
                     source: source.clone(),
-                    target_path: mesh::mesh_output_path(output_directory, mesh_path)?,
+                    target_path: mesh::mesh_output_path(output_directory, &mesh_path.target)?,
                 }))
             } else {
                 missing.push(backslash_key);
@@ -373,8 +373,8 @@ pub fn write_summary(
         writeln!(
             writer,
             "MESH {:?} -> {}",
-            mesh_path,
-            mesh::mesh_output_path(&config.output_directory, mesh_path)?.display()
+            mesh_path.source,
+            mesh::mesh_output_path(&config.output_directory, &mesh_path.target)?.display()
         )?;
     }
 
