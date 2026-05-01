@@ -8,6 +8,8 @@ use eframe::egui;
 
 use crate::groundcover::{self, ConversionEvent, ConversionPhase, GroundcoverArgs};
 
+const MAX_EVENTS_PER_FRAME: usize = 256;
+
 struct GreenmoteApp {
     screen: Screen,
     convert: ConvertUiState,
@@ -147,18 +149,39 @@ impl GreenmoteApp {
             return;
         };
 
+        let mut pending_progress = None;
+        let mut processed = 0;
+
         loop {
+            if processed >= MAX_EVENTS_PER_FRAME {
+                if self.convert.running {
+                    self.convert.event_receiver = Some(receiver);
+                }
+                self.apply_pending_progress(pending_progress);
+                return;
+            }
+
             match receiver.try_recv() {
-                Ok(event) => self.handle_gui_event(event),
+                Ok(GuiEvent::Progress(event)) => {
+                    pending_progress = Some(event);
+                    processed += 1;
+                }
+                Ok(event) => {
+                    self.apply_pending_progress(pending_progress.take());
+                    self.handle_gui_event(event);
+                    processed += 1;
+                }
                 Err(mpsc::TryRecvError::Empty) => {
                     if self.convert.running {
                         self.convert.event_receiver = Some(receiver);
                     }
+                    self.apply_pending_progress(pending_progress);
                     return;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.convert.running = false;
                     self.set_status("Conversion worker disconnected.");
+                    self.apply_pending_progress(pending_progress);
                     return;
                 }
             }
@@ -187,12 +210,36 @@ impl GreenmoteApp {
                 current,
                 total,
             } => {
+                let current = self.monotonic_current(phase, current);
                 self.convert.progress = Some(ProgressState {
                     phase,
                     progress: ProgressKind::Counted { current, total },
                 });
                 self.set_status(phase.label());
             }
+        }
+    }
+
+    fn apply_pending_progress(&mut self, event: Option<ConversionEvent>) {
+        if let Some(event) = event {
+            self.handle_progress_event(event);
+        }
+    }
+
+    fn monotonic_current(&self, phase: ConversionPhase, current: usize) -> usize {
+        let Some(progress) = &self.convert.progress else {
+            return current;
+        };
+
+        if progress.phase != phase {
+            return current;
+        }
+
+        match progress.progress {
+            ProgressKind::Indeterminate => current,
+            ProgressKind::Counted {
+                current: previous, ..
+            } => current.max(previous),
         }
     }
 
@@ -295,9 +342,11 @@ fn progress_fraction(current: usize, total: usize) -> f32 {
         return 1.0;
     }
 
-    let current = u16::try_from(current.min(total)).unwrap_or(u16::MAX);
-    let total = u16::try_from(total).unwrap_or(u16::MAX).max(1);
-    f32::from(current) / f32::from(total)
+    let current = u128::try_from(current.min(total)).unwrap_or(u128::MAX);
+    let total = u128::try_from(total).unwrap_or(u128::MAX).max(1);
+    let basis_points = u16::try_from((current * 10_000) / total).unwrap_or(10_000);
+
+    f32::from(basis_points) / 10_000.0
 }
 
 /// Runs the `greenmote` graphical user interface.

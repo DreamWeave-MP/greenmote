@@ -27,7 +27,7 @@ pub fn build_conversion_plan(
     let cell_plans = if static_plan.matched_static_ids.is_empty() {
         Vec::new()
     } else {
-        scan_cells_parallel(loaded_plugins, &static_plan.matched_static_ids)
+        scan_cells_parallel(loaded_plugins, &static_plan.matched_static_ids, &|_, _| {})
     };
 
     static_plan.with_cell_plans(cell_plans)

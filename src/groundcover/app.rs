@@ -62,29 +62,19 @@ pub fn run(
         let cell_plugins = cell_load.plugins;
         ensure_static_sources_loaded_for_cell_scanning(&static_plan, &cell_plugins)?;
         progress::emit_phase(events, ConversionPhase::ScanningCells);
-        let cell_plans = scan_cells_parallel(&cell_plugins, &static_plan.matched_static_ids);
+        let cell_plans = scan_cells_parallel(
+            &cell_plugins,
+            &static_plan.matched_static_ids,
+            &|current, total| {
+                progress::emit_progress(events, ConversionPhase::ScanningCells, current, total);
+            },
+        );
         (cell_plugins.len(), cell_plans)
     };
     let plan = static_plan.with_cell_plans(cell_plans);
     progress::emit_phase(events, ConversionPhase::ResolvingMeshes);
     let mesh_paths = plan.used_mesh_paths()?;
-    let summary = output::RunSummary {
-        content_files: content_files.len(),
-        loaded_plugins,
-        matched_statics: plan.static_plans.len(),
-        used_statics: plan.used_static_ids.len(),
-        changed_cells: plan
-            .cell_plans
-            .iter()
-            .map(|cell_plan| cell_plan.groundcover_cells.len())
-            .sum(),
-        touched_refs: plan
-            .cell_plans
-            .iter()
-            .map(|cell_plan| cell_plan.touched_refs)
-            .sum(),
-        meshes_to_copy: mesh_paths.len(),
-    };
+    let summary = build_run_summary(content_files.len(), loaded_plugins, &plan, mesh_paths.len());
 
     if config.debug {
         output::write_summary(&mut *stderr, &summary, &plan, &config)?;
@@ -122,6 +112,31 @@ pub fn run(
     print_success(stdout, &config, &log_path, mesh_jobs.len())?;
 
     Ok(())
+}
+
+fn build_run_summary(
+    content_files: usize,
+    loaded_plugins: usize,
+    plan: &crate::groundcover::plan::ConversionPlan,
+    meshes_to_copy: usize,
+) -> output::RunSummary {
+    output::RunSummary {
+        content_files,
+        loaded_plugins,
+        matched_statics: plan.static_plans.len(),
+        used_statics: plan.used_static_ids.len(),
+        changed_cells: plan
+            .cell_plans
+            .iter()
+            .map(|cell_plan| cell_plan.groundcover_cells.len())
+            .sum(),
+        touched_refs: plan
+            .cell_plans
+            .iter()
+            .map(|cell_plan| cell_plan.touched_refs)
+            .sum(),
+        meshes_to_copy,
+    }
 }
 
 fn write_load_warnings(

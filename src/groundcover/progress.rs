@@ -38,6 +38,11 @@ pub enum ConversionEvent {
     },
 }
 
+/// Receives conversion progress events.
+///
+/// Implementations must be safe to call from Rayon worker threads. Counted progress events from
+/// parallel phases are monotonic by work completed, but their delivery order is not guaranteed.
+/// Consumers that display the latest progress should clamp regressions for each phase.
 pub type EventSink<'a> = dyn Fn(ConversionEvent) + Sync + 'a;
 
 pub fn emit_phase(events: &EventSink<'_>, phase: ConversionPhase) {
