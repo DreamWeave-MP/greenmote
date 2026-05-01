@@ -1,4 +1,4 @@
-use std::{io, sync::mpsc, thread};
+use std::{ffi::OsString, io, path::Path, process::Command, sync::mpsc, thread};
 
 use eframe::egui;
 
@@ -125,6 +125,13 @@ impl GreenmoteApp {
         }
         ui.separator();
 
+        egui::TopBottomPanel::bottom("convert_output_actions")
+            .resizable(false)
+            .show_separator_line(true)
+            .show_inside(ui, |ui| {
+                self.show_convert_output_actions(ui, ctx);
+            });
+
         let output_size = finite_widget_size(ui.available_size());
         ui.allocate_ui_with_layout(
             output_size,
@@ -210,6 +217,57 @@ impl GreenmoteApp {
             if self.settings.is_dirty() && differs {
                 ui.label("Save or discard Settings changes before saving these as defaults.");
             }
+        });
+    }
+
+    fn show_convert_output_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(ui.spacing().item_spacing.y);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    !self.convert.output.is_empty(),
+                    egui::Button::new("Clear output"),
+                )
+                .clicked()
+            {
+                self.convert.output.clear();
+                self.set_status("Output cleared.");
+            }
+
+            if ui
+                .add_enabled(
+                    !self.convert.output.is_empty(),
+                    egui::Button::new("Copy output"),
+                )
+                .clicked()
+            {
+                ctx.copy_text(self.convert.output.clone());
+                self.set_status("Copied output to clipboard.");
+            }
+
+            if ui
+                .add_enabled(
+                    self.config_recovery_error.is_none(),
+                    egui::Button::new("Open output dir"),
+                )
+                .clicked()
+            {
+                let output_directory = self.settings.output_directory();
+                self.open_directory(&output_directory, "output");
+            }
+
+            if ui
+                .add_enabled(
+                    self.settings.log_directory().is_some(),
+                    egui::Button::new("Open log dir"),
+                )
+                .clicked()
+                && let Some(log_directory) = self.settings.log_directory()
+            {
+                self.open_directory(&log_directory, "log");
+            }
+
+            ui.add_enabled(false, egui::Button::new("Cancel"));
         });
     }
 
@@ -376,6 +434,27 @@ impl GreenmoteApp {
     pub(super) fn set_status(&mut self, status: impl Into<String>) {
         self.convert.status = status.into();
     }
+
+    fn open_directory(&mut self, directory: &Path, label: &str) {
+        if !directory.is_dir() {
+            self.set_status(format!(
+                "Cannot open {label} directory because it does not exist: {}",
+                directory.display()
+            ));
+            return;
+        }
+
+        match open_directory_native(directory) {
+            Ok(()) => self.set_status(format!(
+                "Requested opening {label} directory: {}",
+                directory.display()
+            )),
+            Err(error) => self.set_status(format!(
+                "Failed to open {label} directory {}: {error}",
+                directory.display()
+            )),
+        }
+    }
 }
 
 impl PendingProgress {
@@ -493,9 +572,84 @@ fn finite_widget_extent(extent: f32) -> f32 {
     }
 }
 
+struct DirectoryOpenCommand {
+    program: &'static str,
+    args: Vec<OsString>,
+}
+
+fn open_directory_native(path: &Path) -> io::Result<()> {
+    let mut last_error = None;
+
+    for candidate in directory_open_commands(path) {
+        let mut command = Command::new(candidate.program);
+        command.args(&candidate.args);
+        match command.status() {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                last_error = Some(io::Error::other(format!(
+                    "{} exited with {status}",
+                    candidate.program
+                )));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                last_error = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(io::ErrorKind::NotFound, "no directory opener available")
+    }))
+}
+
+#[cfg(target_os = "windows")]
+fn directory_open_commands(path: &Path) -> Vec<DirectoryOpenCommand> {
+    vec![DirectoryOpenCommand {
+        program: "explorer",
+        args: vec![path.as_os_str().to_owned()],
+    }]
+}
+
+#[cfg(target_os = "macos")]
+fn directory_open_commands(path: &Path) -> Vec<DirectoryOpenCommand> {
+    vec![DirectoryOpenCommand {
+        program: "open",
+        args: vec![path.as_os_str().to_owned()],
+    }]
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn directory_open_commands(path: &Path) -> Vec<DirectoryOpenCommand> {
+    let path = path.as_os_str().to_owned();
+    vec![
+        DirectoryOpenCommand {
+            program: "xdg-open",
+            args: vec![path.clone()],
+        },
+        DirectoryOpenCommand {
+            program: "gio",
+            args: vec![OsString::from("open"), path.clone()],
+        },
+        DirectoryOpenCommand {
+            program: "kde-open5",
+            args: vec![path.clone()],
+        },
+        DirectoryOpenCommand {
+            program: "kde-open",
+            args: vec![path],
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{ffi::OsString, path::Path};
+
     use super::{ConvertRunOptions, ConvertUiState};
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    use super::directory_open_commands;
 
     #[test]
     fn settings_save_preserves_unrelated_transient_run_options() {
@@ -567,6 +721,21 @@ mod tests {
                 debug: true,
                 auto_enable: false,
             }
+        );
+    }
+
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn linux_directory_open_commands_use_paths_not_file_urls() {
+        let path = Path::new("/tmp/greenmote output/log");
+        let commands = directory_open_commands(path);
+
+        assert_eq!(commands[0].program, "xdg-open");
+        assert_eq!(commands[0].args, vec![path.as_os_str().to_owned()]);
+        assert_eq!(commands[1].program, "gio");
+        assert_eq!(
+            commands[1].args,
+            vec![OsString::from("open"), path.as_os_str().to_owned()]
         );
     }
 }

@@ -67,6 +67,17 @@ impl SettingsUiState {
         self.config_path.as_deref()
     }
 
+    pub(super) fn output_directory(&self) -> PathBuf {
+        PathBuf::from(self.draft.output_directory.trim())
+    }
+
+    pub(super) fn log_directory(&self) -> Option<PathBuf> {
+        self.config_path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_owned)
+    }
+
     pub(super) fn replace_saved_config(
         &mut self,
         path: PathBuf,
