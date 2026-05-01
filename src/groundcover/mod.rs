@@ -15,10 +15,10 @@ pub mod records;
 pub use args::GroundcoverArgs;
 pub use config::GroundcoverConfig;
 
-pub const DEFAULT_CONFIG_NAME: &str = "groundcoverify.toml";
+pub const DEFAULT_CONFIG_NAME: &str = "greenmote.toml";
 pub const DELETED_PLUGIN_NAME: &str = "deleted_groundcover.omwaddon";
 pub const GROUNDCOVER_PLUGIN_NAME: &str = "groundcover.omwaddon";
-pub const LOG_NAME: &str = "groundcoverify.log";
+pub const LOG_NAME: &str = "greenmote.log";
 
 /// Runs the groundcover conversion subcommand.
 ///

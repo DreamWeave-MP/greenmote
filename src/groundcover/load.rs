@@ -5,7 +5,7 @@ use std::{
 };
 
 use rayon::prelude::*;
-use tes3::esp::{Cell, Plugin, Static};
+use tes3::esp::{Cell, Header, Plugin, Static};
 use vfstool_lib::VFS;
 
 use crate::groundcover::{GroundcoverConfig, plan::LoadedPlugin};
@@ -83,7 +83,7 @@ pub fn load_plugins(sources: Vec<SourcePlugin>) -> Vec<LoadedPlugin> {
 
 fn load_one_plugin(source: &SourcePlugin) -> io::Result<Plugin> {
     Plugin::from_path_filtered(&source.plugin_path, |tag| {
-        matches!(&tag, Cell::TAG | Static::TAG)
+        matches!(&tag, Header::TAG | Cell::TAG | Static::TAG)
     })
 }
 

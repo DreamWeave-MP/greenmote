@@ -13,7 +13,7 @@ pub struct GroundcoverArgs {
     #[arg(short = 'c', long = "openmw-cfg")]
     pub openmw_cfg: Option<PathBuf>,
 
-    /// Path to `groundcoverify.toml`. Defaults to the `OpenMW` user config directory.
+    /// Path to `greenmote.toml`. Defaults to the `OpenMW` user config directory.
     #[arg(long = "config")]
     pub config: Option<PathBuf>,
 

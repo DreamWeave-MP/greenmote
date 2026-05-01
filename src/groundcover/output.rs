@@ -1,6 +1,6 @@
 use std::{
-    collections::BTreeSet,
-    fs::{copy, create_dir_all, metadata},
+    collections::{BTreeMap, BTreeSet},
+    fs::{copy, create_dir_all},
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -9,7 +9,10 @@ use rayon::prelude::*;
 use tes3::esp::{FixedString, Header, ObjectFlags, Plugin, TES3Object, types::FileType};
 use vfstool_lib::VFS;
 
-use crate::groundcover::{GroundcoverConfig, mesh, plan::ConversionPlan};
+use crate::groundcover::{
+    GroundcoverConfig, mesh,
+    plan::{ConversionPlan, MasterSpec, PluginCellPlan},
+};
 
 #[derive(Debug)]
 pub struct BuiltPlugins {
@@ -17,7 +20,6 @@ pub struct BuiltPlugins {
     pub deleted_plugin: Plugin,
     pub groundcover_header: Header,
     pub deleted_header: Header,
-    pub contributing_masters: BTreeSet<usize>,
 }
 
 #[derive(Debug)]
@@ -36,19 +38,18 @@ pub struct RunSummary {
     pub meshes_to_copy: usize,
 }
 
-#[must_use]
-pub fn build_plugins(plan: &ConversionPlan) -> BuiltPlugins {
+pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
     let mut groundcover_plugin = Plugin::new();
     let mut deleted_plugin = Plugin::new();
     let mut groundcover_header = groundcover_header();
     let mut deleted_header = deleted_header();
-    let mut contributing_masters = BTreeSet::new();
+    let groundcover_master_indices = groundcover_master_indices(plan);
+    let deleted_master_indices = deleted_master_indices(plan);
 
     for static_plan in &plan.static_plans {
         groundcover_plugin
             .objects
             .push(static_plan.output_static.clone().into());
-        contributing_masters.insert(static_plan.source_load_index);
     }
 
     for cell_plan in &plan.cell_plans {
@@ -56,22 +57,20 @@ pub fn build_plugins(plan: &ConversionPlan) -> BuiltPlugins {
             continue;
         }
 
-        contributing_masters.insert(cell_plan.load_index);
-        groundcover_plugin.objects.extend(
-            cell_plan
-                .groundcover_cells
-                .iter()
-                .cloned()
-                .map(TES3Object::from),
-        );
-        deleted_plugin.objects.extend(
-            cell_plan
-                .deleted_cells
-                .iter()
-                .cloned()
-                .map(TES3Object::from),
-        );
+        for cell in &cell_plan.groundcover_cells {
+            groundcover_plugin
+                .objects
+                .push(remap_cell(cell, cell_plan, &groundcover_master_indices)?.into());
+        }
+        for cell in &cell_plan.deleted_cells {
+            deleted_plugin
+                .objects
+                .push(remap_cell(cell, cell_plan, &deleted_master_indices)?.into());
+        }
     }
+
+    groundcover_header.masters = masters_from_index_map(&groundcover_master_indices);
+    deleted_header.masters = masters_from_index_map(&deleted_master_indices);
 
     groundcover_header.num_objects = groundcover_plugin
         .objects
@@ -80,61 +79,142 @@ pub fn build_plugins(plan: &ConversionPlan) -> BuiltPlugins {
         .unwrap_or(u32::MAX);
     deleted_header.num_objects = deleted_plugin.objects.len().try_into().unwrap_or(u32::MAX);
 
-    BuiltPlugins {
+    Ok(BuiltPlugins {
         groundcover_plugin,
         deleted_plugin,
         groundcover_header,
         deleted_header,
-        contributing_masters,
+    })
+}
+
+fn groundcover_master_indices(plan: &ConversionPlan) -> BTreeMap<MasterSpec, u32> {
+    let mut masters = MasterIndexBuilder::default();
+
+    for static_plan in &plan.static_plans {
+        masters.insert(static_plan.source_master.clone());
+    }
+
+    for cell_plan in plan
+        .cell_plans
+        .iter()
+        .filter(|cell_plan| cell_plan.is_used())
+    {
+        for cell in &cell_plan.groundcover_cells {
+            masters.insert_cell_reference_masters(cell, cell_plan);
+        }
+    }
+
+    masters.into_map()
+}
+
+fn deleted_master_indices(plan: &ConversionPlan) -> BTreeMap<MasterSpec, u32> {
+    let mut masters = MasterIndexBuilder::default();
+
+    for cell_plan in plan
+        .cell_plans
+        .iter()
+        .filter(|cell_plan| cell_plan.is_used())
+    {
+        for cell in &cell_plan.deleted_cells {
+            masters.insert_cell_reference_masters(cell, cell_plan);
+        }
+    }
+
+    masters.into_map()
+}
+
+#[derive(Default)]
+struct MasterIndexBuilder {
+    masters: Vec<MasterSpec>,
+}
+
+impl MasterIndexBuilder {
+    fn insert(&mut self, master: MasterSpec) {
+        if !self.masters.contains(&master) {
+            self.masters.push(master);
+        }
+    }
+
+    fn insert_cell_reference_masters(
+        &mut self,
+        cell: &tes3::esp::Cell,
+        cell_plan: &PluginCellPlan,
+    ) {
+        for (key, reference) in &cell.references {
+            if let Some(master) = cell_plan.master_for_source_index(key.0) {
+                self.insert(master.clone());
+            }
+            if reference.mast_index != key.0
+                && let Some(master) = cell_plan.master_for_source_index(reference.mast_index)
+            {
+                self.insert(master.clone());
+            }
+        }
+    }
+
+    fn into_map(self) -> BTreeMap<MasterSpec, u32> {
+        self.masters
+            .into_iter()
+            .enumerate()
+            .map(|(index, master)| (master, u32::try_from(index + 1).unwrap_or(u32::MAX)))
+            .collect()
     }
 }
 
-pub fn add_masters(built: &mut BuiltPlugins, plan: &ConversionPlan) -> io::Result<()> {
-    let mut load_indices = built
-        .contributing_masters
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    load_indices.sort_unstable();
+fn masters_from_index_map(master_indices: &BTreeMap<MasterSpec, u32>) -> Vec<(String, u64)> {
+    let mut indexed_masters = master_indices.iter().collect::<Vec<_>>();
+    indexed_masters.sort_by_key(|(_, index)| *index);
 
-    for load_index in load_indices {
-        let path = source_path_for_load_index(plan, load_index).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("missing source path for contributing load index {load_index}"),
-            )
-        })?;
-        let master = plugin_master(path)?;
-        built.groundcover_header.masters.push(master.clone());
-        built.deleted_header.masters.push(master);
+    indexed_masters
+        .into_iter()
+        .map(|(master, _)| master.as_header_master())
+        .collect()
+}
+
+fn remap_cell(
+    cell: &tes3::esp::Cell,
+    cell_plan: &PluginCellPlan,
+    master_indices: &BTreeMap<MasterSpec, u32>,
+) -> io::Result<tes3::esp::Cell> {
+    let mut remapped = cell.clone();
+    remapped.references.clear();
+
+    for (key, reference) in &cell.references {
+        let remapped_key_mast = remap_source_mast_index(key.0, cell_plan, master_indices)?;
+        let mut remapped_reference = reference.clone();
+        remapped_reference.mast_index =
+            remap_source_mast_index(remapped_reference.mast_index, cell_plan, master_indices)?;
+        remapped
+            .references
+            .insert((remapped_key_mast, key.1), remapped_reference);
     }
 
-    Ok(())
+    Ok(remapped)
 }
 
-fn source_path_for_load_index(plan: &ConversionPlan, load_index: usize) -> Option<&Path> {
-    plan.static_plans
-        .iter()
-        .find(|static_plan| static_plan.source_load_index == load_index)
-        .map(|static_plan| static_plan.source_plugin_path.as_path())
-        .or_else(|| {
-            plan.cell_plans
-                .iter()
-                .find(|cell_plan| cell_plan.load_index == load_index)
-                .map(|cell_plan| cell_plan.plugin_path.as_path())
-        })
-}
-
-fn plugin_master(plugin_path: &Path) -> io::Result<(String, u64)> {
-    let plugin_size = metadata(plugin_path)?.len();
-    let name = plugin_path.file_name().ok_or_else(|| {
+fn remap_source_mast_index(
+    mast_index: u32,
+    cell_plan: &PluginCellPlan,
+    master_indices: &BTreeMap<MasterSpec, u32>,
+) -> io::Result<u32> {
+    let source_master = cell_plan.master_for_source_index(mast_index).ok_or_else(|| {
         io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("plugin path has no file name: {}", plugin_path.display()),
+            io::ErrorKind::InvalidData,
+            format!(
+                "cell ref in {} uses source master index {mast_index}, but that plugin header does not define it",
+                cell_plan.plugin_name
+            ),
         )
     })?;
-
-    Ok((name.to_string_lossy().to_string(), plugin_size))
+    master_indices.get(source_master).copied().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "generated master list is missing {} while remapping {}",
+                source_master.name, cell_plan.plugin_name
+            ),
+        )
+    })
 }
 
 pub fn save_plugins(mut built: BuiltPlugins, config: &GroundcoverConfig) -> io::Result<()> {
@@ -166,8 +246,9 @@ pub fn resolve_mesh_copy_jobs(
     vfs: &VFS,
     mesh_paths: &BTreeSet<String>,
     output_directory: &Path,
-) -> Vec<MeshCopyJob> {
-    mesh_paths
+) -> io::Result<Vec<MeshCopyJob>> {
+    let mut missing = Vec::new();
+    let jobs = mesh_paths
         .iter()
         .filter_map(|mesh_path| {
             let backslash_key = format!("Meshes\\{mesh_path}");
@@ -182,11 +263,23 @@ pub fn resolve_mesh_copy_jobs(
                     target_path: mesh::mesh_output_path(output_directory, mesh_path),
                 })
             } else {
-                eprintln!("[ WARNING ]: Mesh not found in VFS: {backslash_key}");
+                missing.push(backslash_key);
                 None
             }
         })
-        .collect()
+        .collect();
+
+    if missing.is_empty() {
+        Ok(jobs)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "missing required meshes in OpenMW VFS:\n{}",
+                missing.join("\n")
+            ),
+        ))
+    }
 }
 
 pub fn copy_meshes(jobs: &[MeshCopyJob]) -> io::Result<()> {
@@ -203,8 +296,30 @@ pub fn write_summary(
     mut writer: impl Write,
     summary: &RunSummary,
     plan: &ConversionPlan,
+    config: &GroundcoverConfig,
 ) -> io::Result<()> {
     writeln!(writer, "# greenmote convert {}", env!("CARGO_PKG_VERSION"))?;
+    writeln!(
+        writer,
+        "# output directory: {}",
+        config.output_directory.display()
+    )?;
+    writeln!(
+        writer,
+        "# groundcover output: {}",
+        config
+            .output_directory
+            .join(&config.groundcover_output)
+            .display()
+    )?;
+    writeln!(
+        writer,
+        "# deleted output: {}",
+        config
+            .output_directory
+            .join(&config.deleted_output)
+            .display()
+    )?;
     writeln!(writer, "# content files: {}", summary.content_files)?;
     writeln!(writer, "# loaded plugins: {}", summary.loaded_plugins)?;
     writeln!(writer, "# matched statics: {}", summary.matched_statics)?;
@@ -229,6 +344,15 @@ pub fn write_summary(
             cell_plan.plugin_name,
             cell_plan.touched_refs,
             cell_plan.groundcover_cells.len()
+        )?;
+    }
+
+    for mesh_path in &plan.mesh_paths {
+        writeln!(
+            writer,
+            "MESH {:?} -> {}",
+            mesh_path,
+            mesh::mesh_output_path(&config.output_directory, mesh_path).display()
         )?;
     }
 
@@ -268,6 +392,10 @@ mod tests {
         path::PathBuf,
     };
 
+    use tes3::esp::{Cell, Reference, Static};
+
+    use crate::groundcover::plan::{PluginCellPlan, StaticPlan};
+
     use super::*;
 
     #[test]
@@ -292,10 +420,63 @@ mod tests {
             mesh_paths: BTreeSet::new(),
         };
 
-        let built = build_plugins(&plan);
+        let built = build_plugins(&plan).unwrap();
 
         assert!(built.groundcover_plugin.objects.is_empty());
         assert!(built.deleted_plugin.objects.is_empty());
-        assert!(built.contributing_masters.is_empty());
+        assert!(built.groundcover_header.masters.is_empty());
+        assert!(built.deleted_header.masters.is_empty());
+    }
+
+    #[test]
+    fn copied_cell_refs_are_remapped_to_generated_master_indices() {
+        let source_master = MasterSpec {
+            name: "Source.esp".to_owned(),
+            size: 42,
+        };
+        let mut cell = Cell::default();
+        cell.references.insert(
+            (0, 7),
+            Reference {
+                id: "flora_grass_01".to_owned(),
+                mast_index: 0,
+                ..Reference::default()
+            },
+        );
+        let plan = ConversionPlan {
+            static_plans: vec![StaticPlan {
+                source_load_index: 0,
+                source_plugin_name: "Source.esp".to_owned(),
+                source_plugin_path: PathBuf::from("Source.esp"),
+                source_master: source_master.clone(),
+                output_static: Static::default(),
+            }],
+            cell_plans: vec![PluginCellPlan {
+                load_index: 0,
+                plugin_name: "Source.esp".to_owned(),
+                plugin_path: PathBuf::from("Source.esp"),
+                source_master,
+                header_masters: Vec::new(),
+                groundcover_cells: vec![cell.clone()],
+                deleted_cells: vec![cell],
+                touched_refs: 1,
+            }],
+            matched_static_ids: HashSet::from(["flora_grass_01".to_owned()]),
+            mesh_paths: BTreeSet::new(),
+        };
+
+        let built = build_plugins(&plan).unwrap();
+        let generated_cell = built
+            .groundcover_plugin
+            .objects_of_type::<Cell>()
+            .next()
+            .unwrap();
+
+        assert_eq!(
+            built.groundcover_header.masters,
+            vec![("Source.esp".to_owned(), 42)]
+        );
+        assert!(generated_cell.references.contains_key(&(1, 7)));
+        assert_eq!(generated_cell.references[&(1, 7)].mast_index, 1);
     }
 }

@@ -65,29 +65,33 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     };
 
     if config.debug {
-        output::write_summary(io::stderr(), &summary, &plan)?;
+        output::write_summary(io::stderr(), &summary, &plan, &config)?;
     }
 
     if config.dry_run {
-        output::write_summary(io::stdout(), &summary, &plan)?;
+        output::write_summary(io::stdout(), &summary, &plan, &config)?;
         return Ok(());
     }
 
-    let mut built = output::build_plugins(&plan);
-    output::add_masters(&mut built, &plan)?;
-    output::save_plugins(built, &config)?;
-
     let mesh_jobs =
-        output::resolve_mesh_copy_jobs(&vfs, &plan.mesh_paths, &config.output_directory);
+        output::resolve_mesh_copy_jobs(&vfs, &plan.mesh_paths, &config.output_directory)?;
+    let built = output::build_plugins(&plan)?;
+    output::save_plugins(built, &config)?;
     output::copy_meshes(&mesh_jobs)?;
 
     if config.auto_enable {
-        auto_enable_outputs(&mut openmw_config, &config, &selected_config_file)?;
+        let backup = auto_enable_outputs(&mut openmw_config, &config, &selected_config_file)?;
+        eprintln!(
+            "Updated OpenMW config; backup saved at {}",
+            backup.display()
+        );
     }
 
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
-    let mut log = File::create(log_path)?;
-    output::write_summary(&mut log, &summary, &plan)?;
+    let mut log = File::create(&log_path)?;
+    output::write_summary(&mut log, &summary, &plan, &config)?;
+
+    print_success(&config, &log_path, mesh_jobs.len());
 
     Ok(())
 }
@@ -183,8 +187,18 @@ fn auto_enable_outputs(
     config: &mut OpenMWConfiguration,
     groundcover_config: &GroundcoverConfig,
     selected_config_file: &Path,
-) -> io::Result<()> {
-    let _backup = backup_openmw_cfg(selected_config_file)?;
+) -> io::Result<PathBuf> {
+    if !output_directory_is_visible(config, &groundcover_config.output_directory) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to auto-enable outputs in {} because it is not data-local or a configured data directory",
+                groundcover_config.output_directory.display()
+            ),
+        ));
+    }
+
+    let backup = backup_openmw_cfg(selected_config_file)?;
 
     if !config.has_groundcover_file(&groundcover_config.groundcover_output) {
         config
@@ -198,7 +212,40 @@ fn auto_enable_outputs(
             .map_err(to_io_error)?;
     }
 
-    config.save_user().map_err(to_io_error)
+    config.save_user().map_err(to_io_error)?;
+    Ok(backup)
+}
+
+fn output_directory_is_visible(config: &OpenMWConfiguration, output_directory: &Path) -> bool {
+    config
+        .data_local()
+        .is_some_and(|data_local| paths_equal(data_local.parsed(), output_directory))
+        || config
+            .data_directories_iter()
+            .any(|data_dir| paths_equal(data_dir.parsed(), output_directory))
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
+}
+
+fn print_success(config: &GroundcoverConfig, log_path: &Path, copied_meshes: usize) {
+    println!(
+        "Generated {} and {} in {}",
+        config.groundcover_output,
+        config.deleted_output,
+        config.output_directory.display()
+    );
+    println!("Copied {copied_meshes} meshes under Meshes/grass");
+    println!("Wrote log to {}", log_path.display());
+    if !config.auto_enable {
+        println!(
+            "Add {} as groundcover= and {} as content= in openmw.cfg.",
+            config.groundcover_output, config.deleted_output
+        );
+    }
 }
 
 fn to_io_error<E: std::fmt::Display>(error: E) -> io::Error {

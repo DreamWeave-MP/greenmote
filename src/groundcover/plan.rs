@@ -4,7 +4,7 @@ use std::{
 };
 
 use rayon::prelude::*;
-use tes3::esp::{Cell, Plugin, Static};
+use tes3::esp::{Cell, Header, Plugin, Static};
 
 use crate::groundcover::{GroundcoverConfig, mesh, records};
 
@@ -15,11 +15,60 @@ pub struct LoadedPlugin {
     pub plugin: Plugin,
 }
 
+impl LoadedPlugin {
+    #[must_use]
+    pub fn source_master(&self) -> MasterSpec {
+        MasterSpec::from_path(&self.plugin_path)
+    }
+
+    #[must_use]
+    pub fn header_masters(&self) -> Vec<MasterSpec> {
+        self.plugin
+            .objects_of_type::<Header>()
+            .next()
+            .map_or_else(Vec::new, |header| {
+                header
+                    .masters
+                    .iter()
+                    .map(|(name, size)| MasterSpec {
+                        name: name.clone(),
+                        size: *size,
+                    })
+                    .collect()
+            })
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MasterSpec {
+    pub name: String,
+    pub size: u64,
+}
+
+impl MasterSpec {
+    #[must_use]
+    pub fn from_path(path: &std::path::Path) -> Self {
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().to_string(),
+        );
+        let size = std::fs::metadata(path).map_or(0, |metadata| metadata.len());
+
+        Self { name, size }
+    }
+
+    #[must_use]
+    pub fn as_header_master(&self) -> (String, u64) {
+        (self.name.clone(), self.size)
+    }
+}
+
 #[derive(Debug)]
 pub struct StaticPlan {
     pub source_load_index: usize,
     pub source_plugin_name: String,
     pub source_plugin_path: PathBuf,
+    pub source_master: MasterSpec,
     pub output_static: Static,
 }
 
@@ -28,9 +77,23 @@ pub struct PluginCellPlan {
     pub load_index: usize,
     pub plugin_name: String,
     pub plugin_path: PathBuf,
+    pub source_master: MasterSpec,
+    pub header_masters: Vec<MasterSpec>,
     pub groundcover_cells: Vec<Cell>,
     pub deleted_cells: Vec<Cell>,
     pub touched_refs: usize,
+}
+
+impl PluginCellPlan {
+    #[must_use]
+    pub fn master_for_source_index(&self, mast_index: u32) -> Option<&MasterSpec> {
+        if mast_index == 0 {
+            return Some(&self.source_master);
+        }
+
+        let index = usize::try_from(mast_index - 1).ok()?;
+        self.header_masters.get(index)
+    }
 }
 
 impl PluginCellPlan {
@@ -55,7 +118,11 @@ pub fn build_conversion_plan(
 ) -> ConversionPlan {
     let (static_plans, matched_static_ids, mesh_paths) =
         collect_winning_statics(loaded_plugins, config);
-    let mut cell_plans = scan_cells_parallel(loaded_plugins, &matched_static_ids);
+    let mut cell_plans = if matched_static_ids.is_empty() {
+        Vec::new()
+    } else {
+        scan_cells_parallel(loaded_plugins, &matched_static_ids)
+    };
     cell_plans.sort_by(|left, right| right.load_index.cmp(&left.load_index));
 
     ConversionPlan {
@@ -98,6 +165,7 @@ fn collect_winning_statics(
                 source_load_index: loaded.load_index,
                 source_plugin_name: loaded.plugin_name.clone(),
                 source_plugin_path: loaded.plugin_path.clone(),
+                source_master: loaded.source_master(),
                 output_static,
             });
         }
@@ -120,6 +188,8 @@ fn scan_cells_parallel(
                 load_index: loaded.load_index,
                 plugin_name: loaded.plugin_name.clone(),
                 plugin_path: loaded.plugin_path.clone(),
+                source_master: loaded.source_master(),
+                header_masters: loaded.header_masters(),
                 groundcover_cells,
                 deleted_cells,
                 touched_refs,

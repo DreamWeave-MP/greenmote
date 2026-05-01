@@ -81,7 +81,7 @@ impl GroundcoverConfig {
 }
 
 impl GroundcoverConfig {
-    /// Loads, merges, validates, and optionally initializes `groundcoverify.toml`.
+    /// Loads, merges, validates, and optionally initializes `greenmote.toml`.
     ///
     /// # Errors
     ///
@@ -105,6 +105,7 @@ impl GroundcoverConfig {
         };
 
         config.apply_args(args);
+        config.ensure_generated_outputs_are_ignored();
         config.compile_regex_sets()?;
 
         if config_missing && !config.dry_run && !config.validate_config {
@@ -136,6 +137,16 @@ impl GroundcoverConfig {
 
         self.auto_enable |= args.auto_enable;
         self.debug |= args.debug;
+    }
+
+    fn ensure_generated_outputs_are_ignored(&mut self) {
+        if !self
+            .ignored_plugins
+            .iter()
+            .any(|plugin| plugin == &self.deleted_output)
+        {
+            self.ignored_plugins.push(self.deleted_output.clone());
+        }
     }
 
     fn save_to(&self, path: &Path) -> io::Result<()> {
@@ -370,6 +381,24 @@ groundcover_output = "gc.omwaddon"
             GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
 
         assert_eq!(config.output_directory, default_output_directory);
+    }
+
+    #[test]
+    fn configured_deleted_output_is_ignored_automatically() {
+        let dir = TempDir::new();
+        let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+        std::fs::write(
+            &config_path,
+            r#"
+deleted_output = "my_deleted_groundcover.omwaddon"
+"#,
+        )
+        .unwrap();
+        let args = GroundcoverArgs::parse_from(["convert"]);
+
+        let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
+
+        assert!(config.is_ignored_plugin_name("my_deleted_groundcover.omwaddon"));
     }
 
     #[test]
