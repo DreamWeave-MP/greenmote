@@ -4,7 +4,7 @@ use eframe::egui;
 
 use crate::groundcover::{self, ConversionEvent, ConversionPhase, GroundcoverArgs};
 
-use super::GreenmoteApp;
+use super::{ConvertRunOptions, GreenmoteApp};
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
 const MIN_WIDGET_SIZE: f32 = 1.0;
@@ -16,6 +16,8 @@ pub(super) struct ConvertUiState {
     output: String,
     progress: Option<ProgressState>,
     event_receiver: Option<mpsc::Receiver<GuiEvent>>,
+    run_options: ConvertRunOptions,
+    saved_run_options: ConvertRunOptions,
 }
 
 enum GuiEvent {
@@ -56,6 +58,41 @@ impl ConvertUiState {
             ..Self::default()
         }
     }
+
+    pub(super) fn sync_run_options(&mut self, options: ConvertRunOptions) {
+        self.run_options = options;
+        self.saved_run_options = options;
+    }
+
+    pub(super) fn current_run_options(&self) -> ConvertRunOptions {
+        self.run_options
+    }
+
+    pub(super) fn mark_run_options_saved(&mut self, options: ConvertRunOptions) {
+        self.saved_run_options = options;
+    }
+
+    pub(super) fn sync_saved_run_options_from_settings(&mut self, options: ConvertRunOptions) {
+        let saved = self.saved_run_options;
+
+        if self.run_options.dry_run == saved.dry_run || options.dry_run != saved.dry_run {
+            self.run_options.dry_run = options.dry_run;
+        }
+        if self.run_options.debug == saved.debug || options.debug != saved.debug {
+            self.run_options.debug = options.debug;
+        }
+        if self.run_options.auto_enable == saved.auto_enable
+            || options.auto_enable != saved.auto_enable
+        {
+            self.run_options.auto_enable = options.auto_enable;
+        }
+
+        self.saved_run_options = options;
+    }
+
+    fn run_options_differ_from_saved(&self) -> bool {
+        self.run_options != self.saved_run_options
+    }
 }
 
 impl GreenmoteApp {
@@ -66,6 +103,10 @@ impl GreenmoteApp {
         } else {
             ui.label(&self.convert.status);
         }
+        ui.add_space(8.0);
+
+        self.show_convert_run_options(ui);
+
         ui.add_space(8.0);
         let can_start = !self.convert.running
             && !self.settings.is_dirty()
@@ -110,12 +151,75 @@ impl GreenmoteApp {
         );
     }
 
+    fn show_convert_run_options(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Run options").strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.add_enabled_ui(!self.convert.running, |ui| {
+                    let mut dry_run = self.convert.run_options.dry_run;
+                    if ui.checkbox(&mut dry_run, "Dry run").changed() {
+                        self.convert.run_options.set_dry_run(dry_run);
+                    }
+
+                    let mut debug = self.convert.run_options.debug;
+                    if ui.checkbox(&mut debug, "Debug diagnostics").changed() {
+                        self.convert.run_options.set_debug(debug);
+                    }
+
+                    ui.add_enabled(
+                        self.convert.run_options.can_edit_auto_enable(),
+                        egui::Checkbox::new(
+                            &mut self.convert.run_options.auto_enable,
+                            "Auto-enable generated plugins",
+                        ),
+                    );
+                });
+            });
+
+            let differs = self.convert.run_options_differ_from_saved();
+            ui.horizontal_wrapped(|ui| {
+                let can_save = differs
+                    && !self.convert.running
+                    && !self.settings.is_dirty()
+                    && self.config_recovery_error.is_none();
+                if ui
+                    .add_enabled(can_save, egui::Button::new("Save as defaults"))
+                    .clicked()
+                {
+                    let _saved = self.save_convert_run_options_as_defaults();
+                }
+
+                if ui
+                    .add_enabled(
+                        differs && !self.convert.running,
+                        egui::Button::new("Reset from saved"),
+                    )
+                    .clicked()
+                {
+                    self.convert.run_options = self.convert.saved_run_options;
+                    self.set_status("Reset run options from saved settings.");
+                }
+
+                if differs {
+                    ui.label("Run options differ from saved defaults.");
+                } else {
+                    ui.label("Run options match saved defaults.");
+                }
+            });
+
+            if self.settings.is_dirty() && differs {
+                ui.label("Save or discard Settings changes before saving these as defaults.");
+            }
+        });
+    }
+
     fn start_conversion(&mut self, ctx: &egui::Context) {
         let (sender, receiver) = mpsc::channel();
         let sink = GuiEventSink::new(sender, ctx.clone());
+        let options = self.convert.run_options;
 
         self.convert.running = true;
-        self.set_status("Converting with saved settings...");
+        self.set_status("Converting with current run options...");
         self.convert.progress = None;
         self.convert.event_receiver = Some(receiver);
         self.convert.output.clear();
@@ -124,12 +228,22 @@ impl GreenmoteApp {
             let mut stdout = GuiOutput::new(sink.clone());
             let mut stderr = GuiOutput::new(sink.clone());
             let progress_sink = sink.clone();
-            let error = groundcover::run_with_output_and_events(
-                GroundcoverArgs::default(),
-                &mut stdout,
-                &mut stderr,
-                &move |event| progress_sink.send(GuiEvent::Progress(event)),
-            )
+            let args = GroundcoverArgs::default();
+            let error = match groundcover::load_config_for_edit(&args) {
+                Ok((_path, mut config)) => {
+                    options.apply_to_config(&mut config);
+                    config.compile_regex_sets().and_then(|()| {
+                        groundcover::run_with_config_and_events(
+                            args.openmw_cfg.as_deref(),
+                            &config,
+                            &mut stdout,
+                            &mut stderr,
+                            &move |event| progress_sink.send(GuiEvent::Progress(event)),
+                        )
+                    })
+                }
+                Err(error) => Err(error),
+            }
             .err()
             .map(|error| error.to_string());
 
@@ -259,7 +373,7 @@ impl GreenmoteApp {
         ui.add(progress.progress_bar(finite_widget_extent(ui.available_width())));
     }
 
-    fn set_status(&mut self, status: impl Into<String>) {
+    pub(super) fn set_status(&mut self, status: impl Into<String>) {
         self.convert.status = status.into();
     }
 }
@@ -376,5 +490,83 @@ fn finite_widget_extent(extent: f32) -> f32 {
         extent.max(MIN_WIDGET_SIZE)
     } else {
         MIN_WIDGET_SIZE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConvertRunOptions, ConvertUiState};
+
+    #[test]
+    fn settings_save_preserves_unrelated_transient_run_options() {
+        let saved = ConvertRunOptions::default();
+        let transient = ConvertRunOptions {
+            dry_run: true,
+            debug: false,
+            auto_enable: false,
+        };
+        let mut state = ConvertUiState::ready();
+        state.sync_run_options(saved);
+        state.run_options = transient;
+
+        state.sync_saved_run_options_from_settings(saved);
+
+        assert_eq!(state.current_run_options(), transient);
+    }
+
+    #[test]
+    fn settings_save_applies_changed_saved_run_option_fields() {
+        let saved = ConvertRunOptions::default();
+        let changed = ConvertRunOptions {
+            dry_run: false,
+            debug: true,
+            auto_enable: false,
+        };
+        let mut state = ConvertUiState::ready();
+        state.sync_run_options(saved);
+        state.run_options = ConvertRunOptions {
+            dry_run: true,
+            debug: false,
+            auto_enable: false,
+        };
+
+        state.sync_saved_run_options_from_settings(changed);
+
+        assert_eq!(
+            state.current_run_options(),
+            ConvertRunOptions {
+                dry_run: true,
+                debug: true,
+                auto_enable: false,
+            }
+        );
+    }
+
+    #[test]
+    fn settings_save_overwrites_transient_field_when_that_default_changes() {
+        let saved = ConvertRunOptions::default();
+        let changed = ConvertRunOptions {
+            dry_run: true,
+            debug: false,
+            auto_enable: false,
+        };
+        let mut state = ConvertUiState::ready();
+        state.sync_run_options(saved);
+        state.run_options = ConvertRunOptions {
+            dry_run: false,
+            debug: true,
+            auto_enable: false,
+        };
+
+        state.sync_saved_run_options_from_settings(changed);
+
+        assert_eq!(
+            state.current_run_options(),
+            ConvertRunOptions {
+                dry_run: true,
+                debug: true,
+                auto_enable: false,
+            }
+        );
     }
 }

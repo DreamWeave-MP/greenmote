@@ -4,7 +4,7 @@ use eframe::egui;
 
 use crate::groundcover::{self, GroundcoverArgs, GroundcoverConfig};
 
-use super::{GreenmoteApp, PendingNavigation};
+use super::{ConvertRunOptions, GreenmoteApp, PendingNavigation};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsTab {
@@ -57,6 +57,28 @@ impl SettingsUiState {
 
     pub(super) fn select_tab(&mut self, tab: SettingsTab) {
         self.selected_tab = tab;
+    }
+
+    pub(super) fn run_options(&self) -> ConvertRunOptions {
+        self.draft.run_options()
+    }
+
+    pub(super) fn config_path(&self) -> Option<&Path> {
+        self.config_path.as_deref()
+    }
+
+    pub(super) fn replace_saved_config(
+        &mut self,
+        path: PathBuf,
+        config: &GroundcoverConfig,
+        status: String,
+    ) {
+        self.draft = SettingsDraft::from_config(config);
+        self.config_path = Some(path);
+        self.loaded = true;
+        self.dirty = false;
+        self.status = status;
+        self.error = None;
     }
 }
 
@@ -164,24 +186,7 @@ impl GreenmoteApp {
         );
 
         ui.add_space(8.0);
-        setting_checkbox(
-            ui,
-            "Dry run",
-            &mut self.settings.draft.dry_run,
-            &mut self.settings.dirty,
-        );
-        setting_checkbox(
-            ui,
-            "Debug diagnostics",
-            &mut self.settings.draft.debug,
-            &mut self.settings.dirty,
-        );
-        setting_checkbox(
-            ui,
-            "Auto-enable generated plugins",
-            &mut self.settings.draft.auto_enable,
-            &mut self.settings.dirty,
-        );
+        ui.label("Run options are configured on the Convert screen.");
     }
 
     pub(super) fn load_settings(&mut self) -> bool {
@@ -203,12 +208,13 @@ impl GreenmoteApp {
     pub(super) fn regenerate_settings(&mut self) -> bool {
         match groundcover::regenerate_config_for_edit(&GroundcoverArgs::default()) {
             Ok((path, config)) => {
-                self.settings.draft = SettingsDraft::from_config(&config);
-                self.settings.config_path = Some(path.clone());
-                self.settings.loaded = true;
-                self.settings.dirty = false;
-                self.settings.status = format!("Regenerated {}", path.display());
-                self.settings.error = None;
+                self.settings.replace_saved_config(
+                    path.clone(),
+                    &config,
+                    format!("Regenerated {}", path.display()),
+                );
+                self.convert
+                    .sync_run_options(ConvertRunOptions::from_config(&config));
                 true
             }
             Err(error) => {
@@ -227,12 +233,13 @@ impl GreenmoteApp {
     fn load_settings_from_disk(&mut self, verb: &str) -> bool {
         match groundcover::load_config_for_edit(&GroundcoverArgs::default()) {
             Ok((path, config)) => {
-                self.settings.draft = SettingsDraft::from_config(&config);
-                self.settings.config_path = Some(path.clone());
-                self.settings.loaded = true;
-                self.settings.dirty = false;
-                self.settings.status = format!("{verb} {}", path.display());
-                self.settings.error = None;
+                self.settings.replace_saved_config(
+                    path.clone(),
+                    &config,
+                    format!("{verb} {}", path.display()),
+                );
+                self.convert
+                    .sync_run_options(ConvertRunOptions::from_config(&config));
                 true
             }
             Err(error) => {
@@ -253,10 +260,13 @@ impl GreenmoteApp {
         let config = self.settings.draft.to_config();
         match groundcover::save_config_for_edit(&config, &path) {
             Ok(config) => {
-                self.settings.draft = SettingsDraft::from_config(&config);
-                self.settings.dirty = false;
-                self.settings.status = format!("Saved {}", path.display());
-                self.settings.error = None;
+                self.settings.replace_saved_config(
+                    path.clone(),
+                    &config,
+                    format!("Saved {}", path.display()),
+                );
+                self.convert
+                    .sync_saved_run_options_from_settings(ConvertRunOptions::from_config(&config));
                 true
             }
             Err(error) => {
@@ -286,6 +296,7 @@ impl GreenmoteApp {
 
 impl SettingsDraft {
     fn from_config(config: &GroundcoverConfig) -> Self {
+        let run_options = ConvertRunOptions::from_config(config);
         Self {
             output_directory: path_to_string(&config.output_directory),
             groundcover_output: config.groundcover_output.clone(),
@@ -293,9 +304,9 @@ impl SettingsDraft {
             grass_ids: vec_to_lines(&config.grass_ids),
             exclude: vec_to_lines(&config.exclude),
             ignored_plugins: vec_to_lines(&config.ignored_plugins),
-            dry_run: config.dry_run,
-            debug: config.debug,
-            auto_enable: config.auto_enable,
+            dry_run: run_options.dry_run,
+            debug: run_options.debug,
+            auto_enable: run_options.auto_enable,
         }
     }
 
@@ -316,6 +327,14 @@ impl SettingsDraft {
         config.auto_enable = self.auto_enable;
         config
     }
+
+    fn run_options(&self) -> ConvertRunOptions {
+        ConvertRunOptions {
+            dry_run: self.dry_run,
+            debug: self.debug,
+            auto_enable: self.auto_enable,
+        }
+    }
 }
 
 fn setting_text_field(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
@@ -331,12 +350,6 @@ fn setting_multiline_text(ui: &mut egui::Ui, label: &str, value: &mut String, di
         .desired_rows(5)
         .desired_width(f32::INFINITY);
     if ui.add(editor).changed() {
-        *dirty = true;
-    }
-}
-
-fn setting_checkbox(ui: &mut egui::Ui, label: &str, value: &mut bool, dirty: &mut bool) {
-    if ui.checkbox(value, label).changed() {
         *dirty = true;
     }
 }

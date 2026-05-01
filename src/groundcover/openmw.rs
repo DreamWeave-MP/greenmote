@@ -1,4 +1,7 @@
-use std::{io, path::PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 use openmw_config::OpenMWConfiguration;
 use vfstool_lib::VFS;
@@ -6,7 +9,11 @@ use vfstool_lib::VFS;
 use crate::groundcover::GroundcoverArgs;
 
 pub fn load_config(args: &GroundcoverArgs) -> io::Result<OpenMWConfiguration> {
-    OpenMWConfiguration::new(Some(config_path(args)?)).map_err(|error| {
+    load_config_from_path(args.openmw_cfg.as_deref())
+}
+
+pub fn load_config_from_path(openmw_cfg: Option<&Path>) -> io::Result<OpenMWConfiguration> {
+    OpenMWConfiguration::new(Some(config_path(openmw_cfg)?)).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("failed to read OpenMW configuration: {error}"),
@@ -14,8 +21,8 @@ pub fn load_config(args: &GroundcoverArgs) -> io::Result<OpenMWConfiguration> {
     })
 }
 
-fn config_path(args: &GroundcoverArgs) -> io::Result<PathBuf> {
-    if let Some(path) = &args.openmw_cfg {
+fn config_path(openmw_cfg: Option<&Path>) -> io::Result<PathBuf> {
+    if let Some(path) = openmw_cfg {
         let absolute_path = if path.is_relative() {
             path.canonicalize().unwrap_or_else(|_| path.to_owned())
         } else {

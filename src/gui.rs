@@ -4,10 +4,12 @@ use eframe::egui;
 
 mod convert;
 mod nav;
+mod run_options;
 mod settings;
 
 use convert::ConvertUiState;
 use nav::{NavUiState, nav_bar_height};
+use run_options::ConvertRunOptions;
 use settings::{SettingsTab, SettingsUiState};
 
 struct GreenmoteApp {

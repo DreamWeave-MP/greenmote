@@ -1,5 +1,7 @@
 use std::{collections::HashSet, fs::File, io, io::Write, path::Path};
 
+use openmw_config::OpenMWConfiguration;
+
 use crate::groundcover::{
     GroundcoverArgs, GroundcoverConfig, LOG_NAME, auto_enable, load, openmw, output,
     plan::{build_static_conversion_plan, scan_cells_parallel},
@@ -12,7 +14,7 @@ pub fn run(
     stderr: &mut dyn Write,
     events: &EventSink<'_>,
 ) -> io::Result<()> {
-    let mut openmw_config = openmw::load_config(&args)?;
+    let openmw_config = openmw::load_config(&args)?;
     let greenmote_config_path = openmw::greenmote_config_path(&args, &openmw_config);
     let default_output_directory = openmw::default_output_directory(&openmw_config);
     let config = GroundcoverConfig::get(
@@ -30,14 +32,42 @@ pub fn run(
         return Ok(());
     }
 
-    let initial_enablement = auto_enable::status(&openmw_config, &config);
+    run_loaded_config(openmw_config, &config, stdout, stderr, events)
+}
 
-    validate_auto_enable(&openmw_config, &config, initial_enablement)?;
+pub fn run_with_config(
+    openmw_cfg: Option<&Path>,
+    config: &GroundcoverConfig,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    events: &EventSink<'_>,
+) -> io::Result<()> {
+    if config.validate_config {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pre-resolved conversion config must not request validate-config",
+        ));
+    }
+
+    let openmw_config = openmw::load_config_from_path(openmw_cfg)?;
+    run_loaded_config(openmw_config, config, stdout, stderr, events)
+}
+
+fn run_loaded_config(
+    mut openmw_config: OpenMWConfiguration,
+    config: &GroundcoverConfig,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    events: &EventSink<'_>,
+) -> io::Result<()> {
+    let initial_enablement = auto_enable::status(&openmw_config, config);
+
+    validate_auto_enable(&openmw_config, config, initial_enablement)?;
 
     let content_files = openmw::content_files(&openmw_config)?;
     let vfs = openmw::build_vfs(&openmw_config);
 
-    let sources = load::resolve_source_plugins(&content_files, &config, &vfs);
+    let sources = load::resolve_source_plugins(&content_files, config, &vfs);
     progress::emit_phase(events, ConversionPhase::LoadingStaticPlugins);
     let static_load = load::load_plugins_for_static_planning(sources.clone(), &|current, total| {
         progress::emit_progress(
@@ -55,7 +85,7 @@ pub fn run(
         .collect::<Vec<_>>();
     let static_plugins = static_load.plugins;
     progress::emit_phase(events, ConversionPhase::PlanningStatics);
-    let static_plan = build_static_conversion_plan(&static_plugins, &config);
+    let static_plan = build_static_conversion_plan(&static_plugins, config);
     let (loaded_plugins, cell_plans) = if static_plan.matched_static_ids.is_empty() {
         (static_plugins.len(), Vec::new())
     } else {
@@ -88,33 +118,33 @@ pub fn run(
     );
 
     if config.debug {
-        output::write_summary(&mut *stderr, &summary, &plan, &config)?;
+        output::write_summary(&mut *stderr, &summary, &plan, config)?;
     }
 
     if config.dry_run {
-        output::write_summary(&mut *stdout, &summary, &plan, &config)?;
+        output::write_summary(&mut *stdout, &summary, &plan, config)?;
         return Ok(());
     }
 
     let mesh_jobs = output::resolve_mesh_copy_jobs(&vfs, &mesh_paths, &config.output_directory)?;
     progress::emit_phase(events, ConversionPhase::WritingPlugins);
     let built = output::build_plugins(&plan)?;
-    output::save_plugins(built, &config)?;
+    output::save_plugins(built, config)?;
     progress::emit_phase(events, ConversionPhase::CopyingMeshes);
     output::copy_meshes(&mesh_jobs, &|current, total| {
         progress::emit_progress(events, ConversionPhase::CopyingMeshes, current, total);
     })?;
 
-    run_auto_enable(stdout, &mut openmw_config, &config, events)?;
+    run_auto_enable(stdout, &mut openmw_config, config, events)?;
 
     progress::emit_phase(events, ConversionPhase::WritingLog);
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
     let mut log = File::create(&log_path)?;
-    output::write_summary(&mut log, &summary, &plan, &config)?;
+    output::write_summary(&mut log, &summary, &plan, config)?;
 
     print_success(
         stdout,
-        &config,
+        config,
         &log_path,
         mesh_jobs.len(),
         initial_enablement,

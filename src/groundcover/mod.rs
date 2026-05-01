@@ -65,6 +65,25 @@ pub fn run_with_output_and_events(
     app::run(args, stdout, stderr, events)
 }
 
+/// Runs conversion with an already-resolved runtime config.
+///
+/// This is intentionally separate from `GroundcoverArgs`: GUI run toggles must be able to turn
+/// persisted booleans off for one run, while CLI booleans are append/enable-shaped for backwards
+/// compatibility. Reusing the CLI shape here would make the GUI lie. Delightful, but no.
+///
+/// # Errors
+///
+/// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
+pub(crate) fn run_with_config_and_events(
+    openmw_cfg: Option<&std::path::Path>,
+    config: &GroundcoverConfig,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    events: &progress::EventSink<'_>,
+) -> io::Result<()> {
+    app::run_with_config(openmw_cfg, config, stdout, stderr, events)
+}
+
 /// Loads the effective `greenmote.toml` location and editable groundcover config for GUI settings.
 ///
 /// # Errors
