@@ -78,7 +78,7 @@ fn convert_minimal_fixture_writes_plugins_and_copied_meshes() {
     assert_eq!(header(&deleted).num_objects, 1);
 
     let generated_static = groundcover.objects_of_type::<Static>().next().unwrap();
-    assert_eq!(generated_static.id, "greenmote_flora_grass_01");
+    assert!(generated_static.id.starts_with("gm_"));
     assert_eq!(generated_static.mesh, "grass\\flora\\grass.nif");
     assert_eq!(groundcover.objects_of_type::<Static>().count(), 1);
     assert!(
@@ -93,10 +93,7 @@ fn convert_minimal_fixture_writes_plugins_and_copied_meshes() {
     assert!(groundcover_cell.references.contains_key(&(1, 7)));
     assert!(!groundcover_cell.references.contains_key(&(1, 8)));
     assert_eq!(groundcover_cell.references[&(1, 7)].mast_index, 1);
-    assert_eq!(
-        groundcover_cell.references[&(1, 7)].id,
-        "greenmote_flora_grass_01"
-    );
+    assert_eq!(groundcover_cell.references[&(1, 7)].id, generated_static.id);
     assert_eq!(groundcover_cell.references[&(1, 7)].deleted, None);
 
     let deleted_cell = deleted.objects_of_type::<Cell>().next().unwrap();

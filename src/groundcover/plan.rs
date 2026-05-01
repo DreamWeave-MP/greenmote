@@ -10,11 +10,12 @@ use tes3::esp::{Cell, Header, Plugin, Static};
 
 use crate::groundcover::{GroundcoverConfig, mesh, records};
 
-const GENERATED_STATIC_ID_PREFIX: &str = "greenmote_";
+const GENERATED_STATIC_ID_PREFIX: &str = "gm_";
+const MAX_GENERATED_STATIC_ID_LEN: usize = 19;
 
 #[must_use]
-pub fn generated_static_id(source_id: &str) -> String {
-    format!("{GENERATED_STATIC_ID_PREFIX}{source_id}")
+fn generated_static_id(hash: u64) -> String {
+    format!("{GENERATED_STATIC_ID_PREFIX}{hash:016x}")
 }
 
 pub struct LoadedPlugin {
@@ -79,6 +80,7 @@ pub struct StaticPlan {
     pub source_plugin_path: PathBuf,
     pub source_master: MasterSpec,
     pub source_static: Static,
+    pub generated_id: String,
 }
 
 impl StaticPlan {
@@ -94,7 +96,7 @@ impl StaticPlan {
     /// Returns invalid input if the source mesh path cannot be safely rooted under `grass\`.
     pub fn output_static(&self) -> io::Result<Static> {
         let mut output_static = self.source_static.clone();
-        output_static.id = generated_static_id(&self.id_key());
+        output_static.id.clone_from(&self.generated_id);
         output_static.mesh = mesh::grass_prefixed_mesh(&output_static.mesh)?;
 
         Ok(output_static)
@@ -162,6 +164,14 @@ impl ConversionPlan {
         self.used_static_ids
             .iter()
             .filter_map(|id| static_plans_by_id.get(id).copied())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn generated_static_ids_by_source_id(&self) -> BTreeMap<String, String> {
+        self.static_plans
+            .iter()
+            .map(|static_plan| (static_plan.id_key(), static_plan.generated_id.clone()))
             .collect()
     }
 
@@ -243,6 +253,12 @@ fn collect_winning_statics(
     config: &GroundcoverConfig,
 ) -> (Vec<StaticPlan>, HashSet<String>) {
     let mut seen_static_ids = HashSet::new();
+    let all_static_ids = loaded_plugins
+        .iter()
+        .flat_map(|loaded| loaded.plugin.objects_of_type::<Static>())
+        .map(|static_record| static_record.id.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let mut generated_static_ids = HashSet::new();
     let mut matched_static_ids = HashSet::new();
     let mut static_plans = Vec::new();
 
@@ -257,18 +273,62 @@ fn collect_winning_statics(
             }
 
             matched_static_ids.insert(lower_id);
+            let source_master = loaded.source_master();
+            let generated_id = allocate_generated_static_id(
+                &static_record.id.to_ascii_lowercase(),
+                &source_master,
+                &all_static_ids,
+                &mut generated_static_ids,
+            );
 
             static_plans.push(StaticPlan {
                 source_load_index: loaded.load_index,
                 source_plugin_name: loaded.plugin_name.clone(),
                 source_plugin_path: loaded.plugin_path.clone(),
-                source_master: loaded.source_master(),
+                source_master,
                 source_static: static_record.clone(),
+                generated_id,
             });
         }
     }
 
     (static_plans, matched_static_ids)
+}
+
+fn allocate_generated_static_id(
+    source_id: &str,
+    source_master: &MasterSpec,
+    source_static_ids: &HashSet<String>,
+    generated_static_ids: &mut HashSet<String>,
+) -> String {
+    for attempt in 0..u64::MAX {
+        let candidate =
+            generated_static_id(generated_static_hash(source_id, source_master, attempt));
+        debug_assert!(candidate.len() <= MAX_GENERATED_STATIC_ID_LEN);
+        if !source_static_ids.contains(&candidate) && generated_static_ids.insert(candidate.clone())
+        {
+            return candidate;
+        }
+    }
+
+    unreachable!("exhausted generated static id collision attempts")
+}
+
+fn generated_static_hash(source_id: &str, source_master: &MasterSpec, attempt: u64) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325;
+    hash = fnv1a(hash, source_master.name.as_bytes());
+    hash = fnv1a(hash, &source_master.size.to_le_bytes());
+    hash = fnv1a(hash, source_id.as_bytes());
+    fnv1a(hash, &attempt.to_le_bytes())
+}
+
+fn fnv1a(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+
+    hash
 }
 
 #[must_use]
@@ -411,6 +471,26 @@ mod tests {
     }
 
     #[test]
+    fn generated_static_id_allocation_avoids_source_id_collisions() {
+        let source_master = master("Source.esp", 42);
+        let colliding_id =
+            generated_static_id(generated_static_hash("flora_grass_01", &source_master, 0));
+        let source_static_ids = HashSet::from([colliding_id.clone()]);
+        let mut generated_static_ids = HashSet::new();
+
+        let generated_id = allocate_generated_static_id(
+            "flora_grass_01",
+            &source_master,
+            &source_static_ids,
+            &mut generated_static_ids,
+        );
+
+        assert_ne!(generated_id, colliding_id);
+        assert!(generated_id.len() <= MAX_GENERATED_STATIC_ID_LEN);
+        assert!(generated_static_ids.contains(&generated_id));
+    }
+
+    #[test]
     fn later_static_definition_wins_for_duplicate_ids() {
         let plugins = vec![
             loaded(
@@ -429,7 +509,7 @@ mod tests {
         assert_eq!(plan.static_plans[0].source_load_index, 1);
         assert_eq!(
             plan.static_plans[0].output_static().unwrap().id,
-            "greenmote_flora_grass_01"
+            plan.static_plans[0].generated_id
         );
         assert_eq!(
             plan.static_plans[0].output_static().unwrap().mesh,
@@ -457,7 +537,7 @@ mod tests {
         assert_eq!(mesh_path.target, "sky_flora_gs_01_01.nif");
         assert_eq!(
             plan.static_plans[0].output_static().unwrap().id,
-            "greenmote_flora_grass_01"
+            plan.static_plans[0].generated_id
         );
         assert_eq!(
             plan.static_plans[0].output_static().unwrap().mesh,

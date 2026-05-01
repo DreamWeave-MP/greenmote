@@ -11,7 +11,7 @@ use vfstool_lib::{VFS, VfsFile};
 
 use crate::groundcover::{
     GroundcoverConfig, mesh,
-    plan::{ConversionPlan, MasterSpec, PluginCellPlan, generated_static_id},
+    plan::{ConversionPlan, MasterSpec, PluginCellPlan},
 };
 
 #[derive(Debug)]
@@ -48,6 +48,7 @@ pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
     let mut deleted_header = deleted_header();
     let groundcover_master_indices = groundcover_master_indices(plan);
     let deleted_master_indices = deleted_master_indices(plan);
+    let generated_static_ids = plan.generated_static_ids_by_source_id();
     validate_master_count("groundcover", &groundcover_master_indices)?;
     validate_master_count("deleted groundcover", &deleted_master_indices)?;
 
@@ -69,13 +70,21 @@ pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
                     cell_plan,
                     &groundcover_master_indices,
                     RefIdMode::Generated,
+                    &generated_static_ids,
                 )?
                 .into(),
             );
         }
         for cell in &cell_plan.deleted_cells {
             deleted_plugin.objects.push(
-                remap_cell(cell, cell_plan, &deleted_master_indices, RefIdMode::Source)?.into(),
+                remap_cell(
+                    cell,
+                    cell_plan,
+                    &deleted_master_indices,
+                    RefIdMode::Source,
+                    &generated_static_ids,
+                )?
+                .into(),
             );
         }
     }
@@ -227,6 +236,7 @@ fn remap_cell(
     cell_plan: &PluginCellPlan,
     master_indices: &BTreeMap<MasterSpec, u32>,
     ref_id_mode: RefIdMode,
+    generated_static_ids: &BTreeMap<String, String>,
 ) -> io::Result<tes3::esp::Cell> {
     let mut remapped = cell.clone();
     remapped.references.clear();
@@ -235,8 +245,19 @@ fn remap_cell(
         let remapped_key_mast = remap_source_mast_index(key.0, cell_plan, master_indices)?;
         let mut remapped_reference = reference.clone();
         if ref_id_mode == RefIdMode::Generated {
+            let source_id = remapped_reference.id.to_ascii_lowercase();
             remapped_reference.id =
-                generated_static_id(&remapped_reference.id.to_ascii_lowercase());
+                generated_static_ids
+                    .get(&source_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "generated static id map is missing source static {source_id:?}"
+                            ),
+                        )
+                    })?;
         }
         remapped_reference.mast_index =
             remap_source_mast_index(remapped_reference.mast_index, cell_plan, master_indices)?;
@@ -595,6 +616,7 @@ mod tests {
                     mesh: "flora\\grass.nif".to_owned(),
                     ..Static::default()
                 },
+                generated_id: "gm_test_flora_grass_01".to_owned(),
             }],
             cell_plans: vec![PluginCellPlan {
                 load_index: 0,
@@ -632,12 +654,12 @@ mod tests {
             built.groundcover_header.masters,
             vec![("Source.esp".to_owned(), 42)]
         );
-        assert_eq!(generated_static.id, "greenmote_flora_grass_01");
+        assert_eq!(generated_static.id, "gm_test_flora_grass_01");
         assert!(generated_cell.references.contains_key(&(1, 7)));
         assert_eq!(generated_cell.references[&(1, 7)].mast_index, 1);
         assert_eq!(
             generated_cell.references[&(1, 7)].id,
-            "greenmote_flora_grass_01"
+            "gm_test_flora_grass_01"
         );
         assert_eq!(deleted_cell.references[&(1, 7)].id, "flora_grass_01");
     }
@@ -662,7 +684,18 @@ mod tests {
             },
         );
         let plan = ConversionPlan {
-            static_plans: Vec::new(),
+            static_plans: vec![StaticPlan {
+                source_load_index: 1,
+                source_plugin_name: "Bloodmoon.esm".to_owned(),
+                source_plugin_path: PathBuf::from("Bloodmoon.esm"),
+                source_master: bloodmoon_master.clone(),
+                source_static: Static {
+                    id: "flora_grass_01".to_owned(),
+                    mesh: "flora\\grass.nif".to_owned(),
+                    ..Static::default()
+                },
+                generated_id: "gm_flora_grass_01".to_owned(),
+            }],
             cell_plans: vec![PluginCellPlan {
                 load_index: 1,
                 plugin_name: "Bloodmoon.esm".to_owned(),
@@ -722,7 +755,32 @@ mod tests {
             },
         );
         let plan = ConversionPlan {
-            static_plans: Vec::new(),
+            static_plans: vec![
+                StaticPlan {
+                    source_load_index: 0,
+                    source_plugin_name: "Morrowind.esm".to_owned(),
+                    source_plugin_path: PathBuf::from("Morrowind.esm"),
+                    source_master: morrowind_master.clone(),
+                    source_static: Static {
+                        id: "flora_grass_01".to_owned(),
+                        mesh: "flora\\grass_01.nif".to_owned(),
+                        ..Static::default()
+                    },
+                    generated_id: "gm_flora_grass_01".to_owned(),
+                },
+                StaticPlan {
+                    source_load_index: 2,
+                    source_plugin_name: "Bloodmoon.esm".to_owned(),
+                    source_plugin_path: PathBuf::from("Bloodmoon.esm"),
+                    source_master: bloodmoon_master.clone(),
+                    source_static: Static {
+                        id: "flora_grass_02".to_owned(),
+                        mesh: "flora\\grass_02.nif".to_owned(),
+                        ..Static::default()
+                    },
+                    generated_id: "gm_flora_grass_02".to_owned(),
+                },
+            ],
             cell_plans: vec![
                 PluginCellPlan {
                     load_index: 2,
@@ -785,7 +843,21 @@ mod tests {
             },
         );
         let plan = ConversionPlan {
-            static_plans: Vec::new(),
+            static_plans: vec![StaticPlan {
+                source_load_index: 2,
+                source_plugin_name: "Patch.esp".to_owned(),
+                source_plugin_path: PathBuf::from("Patch.esp"),
+                source_master: MasterSpec {
+                    name: "Patch.esp".to_owned(),
+                    size: 10,
+                },
+                source_static: Static {
+                    id: "flora_grass_01".to_owned(),
+                    mesh: "flora\\grass.nif".to_owned(),
+                    ..Static::default()
+                },
+                generated_id: "gm_flora_grass_01".to_owned(),
+            }],
             cell_plans: vec![PluginCellPlan {
                 load_index: 2,
                 plugin_name: "Patch.esp".to_owned(),
@@ -834,6 +906,7 @@ mod tests {
                     id: "flora_grass_unused".to_owned(),
                     ..Static::default()
                 },
+                generated_id: "gm_unused".to_owned(),
             }],
             cell_plans: Vec::new(),
             matched_static_ids: HashSet::new(),
