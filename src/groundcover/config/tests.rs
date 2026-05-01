@@ -1,6 +1,6 @@
 use std::{
     fs::{create_dir, read_to_string},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -29,16 +29,8 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(path_join(
-            &self.path,
-            crate::groundcover::DEFAULT_CONFIG_NAME,
-        ));
-        let _ = std::fs::remove_dir(&self.path);
+        let _ = std::fs::remove_dir_all(&self.path);
     }
-}
-
-fn path_join(path: &Path, child: &str) -> PathBuf {
-    path.join(child)
 }
 
 #[test]
@@ -96,7 +88,7 @@ fn validate_config_is_cli_only() {
 }
 
 #[test]
-fn persisted_validate_config_is_ignored() {
+fn persisted_validate_config_is_rejected() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
@@ -109,9 +101,9 @@ validate_config = true
     .unwrap();
     let args = GroundcoverArgs::parse_from(["convert"]);
 
-    let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
+    let result = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local"));
 
-    assert!(!config.validate_config);
+    assert!(result.is_err());
 }
 
 #[test]
@@ -272,18 +264,34 @@ grass_ids = ["["]
 }
 
 #[test]
-fn regenerating_config_backs_up_existing_file() {
+fn replacing_config_backs_up_existing_file() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(&config_path, "definitely not toml").unwrap();
+    let temp_path = config_path.with_extension("toml.tmp");
     let config = GroundcoverConfig::with_output_directory(dir.path.join("data-local"));
 
-    crate::groundcover::back_up_existing_config(&config_path).unwrap();
-    config.save_for_edit(&config_path).unwrap();
+    config.save_for_edit(&temp_path).unwrap();
+    crate::groundcover::replace_config_with_backup(&config_path, &temp_path).unwrap();
 
     assert_eq!(
         read_to_string(config_path.with_extension("toml.bak")).unwrap(),
         "definitely not toml"
     );
     assert!(read_to_string(config_path).unwrap().contains("[convert]"));
+}
+
+#[test]
+fn replacing_config_rejects_directory_as_backup_source() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    let temp_path = config_path.with_extension("toml.tmp");
+    std::fs::create_dir(&config_path).unwrap();
+    std::fs::write(&temp_path, "[convert]\n").unwrap();
+
+    let result = crate::groundcover::replace_config_with_backup(&config_path, &temp_path);
+
+    assert!(result.is_err());
+    assert!(config_path.is_dir());
+    assert!(temp_path.is_file());
 }

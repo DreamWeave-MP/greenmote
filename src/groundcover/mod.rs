@@ -95,19 +95,76 @@ pub(crate) fn regenerate_config_for_edit(
     let config_path = openmw::greenmote_config_path(args, &openmw_config);
     let default_output_directory = openmw::default_output_directory(&openmw_config);
     let config = GroundcoverConfig::with_output_directory(default_output_directory);
-    back_up_existing_config(&config_path)?;
-    let config = config.save_for_edit(&config_path)?;
+    let temp_path = next_temp_config_path(&config_path);
+    let config = config.save_for_edit(&temp_path)?;
+    replace_config_with_backup(&config_path, &temp_path)?;
 
     Ok((config_path, config))
 }
 
-fn back_up_existing_config(config_path: &Path) -> io::Result<()> {
+fn replace_config_with_backup(config_path: &Path, temp_path: &Path) -> io::Result<()> {
+    let backup_path = back_up_existing_config(config_path)?;
+
+    match rename_with_context(temp_path, config_path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let Some(backup_path) = backup_path {
+                let _ = fs::rename(&backup_path, config_path);
+            }
+            let _ = fs::remove_file(temp_path);
+            Err(error)
+        }
+    }
+}
+
+fn back_up_existing_config(config_path: &Path) -> io::Result<Option<PathBuf>> {
     if !config_path.exists() {
-        return Ok(());
+        return Ok(None);
+    }
+
+    let metadata = fs::symlink_metadata(config_path)?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "cannot back up config {}; expected a file",
+                config_path.display()
+            ),
+        ));
     }
 
     let backup_path = next_backup_path(config_path);
-    fs::rename(config_path, backup_path)
+    rename_with_context(config_path, &backup_path)?;
+    Ok(Some(backup_path))
+}
+
+fn rename_with_context(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(source, destination).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to move {} to {}: {error}",
+                source.display(),
+                destination.display()
+            ),
+        )
+    })
+}
+
+fn next_temp_config_path(config_path: &Path) -> PathBuf {
+    for index in 0.. {
+        let extension = if index == 0 {
+            "toml.tmp".to_owned()
+        } else {
+            format!("toml.tmp.{index}")
+        };
+        let temp_path = config_path.with_extension(extension);
+        if !temp_path.exists() {
+            return temp_path;
+        }
+    }
+
+    unreachable!("unbounded temp suffix search should always find a candidate")
 }
 
 fn next_backup_path(config_path: &Path) -> PathBuf {

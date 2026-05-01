@@ -20,6 +20,7 @@ pub(super) struct GroundcoverConfigFile {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 // Mirrors persisted convert options. CLI-only switches do not belong here; writing transient
 // command mode into TOML is how a config file starts lying to its owner.
 #[allow(clippy::struct_excessive_bools)]
