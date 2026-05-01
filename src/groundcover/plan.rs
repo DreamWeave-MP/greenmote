@@ -125,22 +125,6 @@ impl PluginCellPlan {
         let index = usize::try_from(mast_index - 1).ok()?;
         self.header_masters.get(index)
     }
-
-    #[must_use]
-    pub fn master_chain_for_source_index(&self, mast_index: u32) -> Option<Vec<&MasterSpec>> {
-        if mast_index == 0 {
-            let mut chain = self.header_masters.iter().collect::<Vec<_>>();
-            chain.push(&self.source_master);
-            return Some(chain);
-        }
-
-        let index = usize::try_from(mast_index - 1).ok()?;
-        if index >= self.header_masters.len() {
-            return None;
-        }
-
-        Some(self.header_masters.iter().take(index + 1).collect())
-    }
 }
 
 impl PluginCellPlan {
@@ -380,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn source_index_zero_master_chain_includes_header_masters_then_source() {
+    fn source_index_zero_resolves_to_source_plugin() {
         let cell_plan = PluginCellPlan {
             load_index: 0,
             plugin_name: "Bloodmoon.esm".to_owned(),
@@ -393,14 +377,13 @@ mod tests {
             used_static_ids: BTreeSet::new(),
         };
 
-        let chain = cell_plan.master_chain_for_source_index(0).unwrap();
+        let master = cell_plan.master_for_source_index(0).unwrap();
 
-        assert_eq!(chain[0].name, "Morrowind.esm");
-        assert_eq!(chain[1].name, "Bloodmoon.esm");
+        assert_eq!(master.name, "Bloodmoon.esm");
     }
 
     #[test]
-    fn header_master_index_chain_includes_prefix_through_target() {
+    fn header_master_index_resolves_to_exact_owner() {
         let cell_plan = PluginCellPlan {
             load_index: 0,
             plugin_name: "Patch.esp".to_owned(),
@@ -413,12 +396,10 @@ mod tests {
             used_static_ids: BTreeSet::new(),
         };
 
-        let chain = cell_plan.master_chain_for_source_index(2).unwrap();
+        let master = cell_plan.master_for_source_index(2).unwrap();
 
-        assert_eq!(chain.len(), 2);
-        assert_eq!(chain[0].name, "Morrowind.esm");
-        assert_eq!(chain[1].name, "Tribunal.esm");
-        assert!(cell_plan.master_chain_for_source_index(3).is_none());
+        assert_eq!(master.name, "Tribunal.esm");
+        assert!(cell_plan.master_for_source_index(3).is_none());
     }
 
     #[test]

@@ -93,7 +93,7 @@ pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
 }
 
 fn groundcover_master_indices(plan: &ConversionPlan) -> BTreeMap<MasterSpec, u32> {
-    let mut masters = MasterIndexBuilder::default();
+    let mut masters = MasterIndexBuilder::new(plan);
 
     for cell_plan in plan
         .cell_plans
@@ -109,7 +109,7 @@ fn groundcover_master_indices(plan: &ConversionPlan) -> BTreeMap<MasterSpec, u32
 }
 
 fn deleted_master_indices(plan: &ConversionPlan) -> BTreeMap<MasterSpec, u32> {
-    let mut masters = MasterIndexBuilder::default();
+    let mut masters = MasterIndexBuilder::new(plan);
 
     for cell_plan in plan
         .cell_plans
@@ -141,15 +141,33 @@ fn validate_master_count(
     Ok(())
 }
 
-#[derive(Default)]
 struct MasterIndexBuilder {
-    masters: Vec<MasterSpec>,
+    source_load_indices: BTreeMap<MasterSpec, usize>,
+    masters: Vec<(usize, MasterSpec)>,
 }
 
 impl MasterIndexBuilder {
+    fn new(plan: &ConversionPlan) -> Self {
+        let source_load_indices = plan
+            .cell_plans
+            .iter()
+            .map(|cell_plan| (cell_plan.source_master.clone(), cell_plan.load_index))
+            .collect();
+
+        Self {
+            source_load_indices,
+            masters: Vec::new(),
+        }
+    }
+
     fn insert(&mut self, master: MasterSpec) {
-        if !self.masters.contains(&master) {
-            self.masters.push(master);
+        if !self.masters.iter().any(|(_, existing)| existing == &master) {
+            let load_index = self
+                .source_load_indices
+                .get(&master)
+                .copied()
+                .unwrap_or(usize::MAX);
+            self.masters.push((load_index, master));
         }
     }
 
@@ -159,26 +177,31 @@ impl MasterIndexBuilder {
         cell_plan: &PluginCellPlan,
     ) {
         for (key, reference) in &cell.references {
-            self.insert_source_master_chain(key.0, cell_plan);
+            self.insert_source_master(key.0, cell_plan);
             if reference.mast_index != key.0 {
-                self.insert_source_master_chain(reference.mast_index, cell_plan);
+                self.insert_source_master(reference.mast_index, cell_plan);
             }
         }
     }
 
-    fn insert_source_master_chain(&mut self, mast_index: u32, cell_plan: &PluginCellPlan) {
-        if let Some(masters) = cell_plan.master_chain_for_source_index(mast_index) {
-            for master in masters {
-                self.insert(master.clone());
-            }
+    fn insert_source_master(&mut self, mast_index: u32, cell_plan: &PluginCellPlan) {
+        if let Some(master) = cell_plan.master_for_source_index(mast_index) {
+            self.insert(master.clone());
         }
     }
 
     fn into_map(self) -> BTreeMap<MasterSpec, u32> {
-        self.masters
+        let mut masters = self.masters;
+        masters.sort_by(|(left_index, left_master), (right_index, right_master)| {
+            left_index
+                .cmp(right_index)
+                .then_with(|| left_master.name.cmp(&right_master.name))
+        });
+
+        masters
             .into_iter()
             .enumerate()
-            .map(|(index, master)| (master, u32::try_from(index + 1).unwrap_or(u32::MAX)))
+            .map(|(index, (_, master))| (master, u32::try_from(index + 1).unwrap_or(u32::MAX)))
             .collect()
     }
 }
@@ -587,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn source_plugin_refs_keep_header_masters_before_source_master() {
+    fn source_plugin_refs_use_source_plugin_as_owner_master_only() {
         let morrowind_master = MasterSpec {
             name: "Morrowind.esm".to_owned(),
             size: 79_837_557,
@@ -631,17 +654,86 @@ mod tests {
 
         assert_eq!(
             built.groundcover_header.masters,
+            vec![("Bloodmoon.esm".to_owned(), 9_631_798)]
+        );
+        assert!(generated_cell.references.contains_key(&(1, 7)));
+        assert_eq!(generated_cell.references[&(1, 7)].mast_index, 1);
+    }
+
+    #[test]
+    fn source_owner_masters_follow_load_order_not_cell_plan_order() {
+        let morrowind_master = MasterSpec {
+            name: "Morrowind.esm".to_owned(),
+            size: 79_837_557,
+        };
+        let bloodmoon_master = MasterSpec {
+            name: "Bloodmoon.esm".to_owned(),
+            size: 9_631_798,
+        };
+        let mut morrowind_cell = Cell::default();
+        morrowind_cell.references.insert(
+            (0, 7),
+            Reference {
+                id: "flora_grass_01".to_owned(),
+                mast_index: 0,
+                ..Reference::default()
+            },
+        );
+        let mut bloodmoon_cell = Cell::default();
+        bloodmoon_cell.references.insert(
+            (0, 8),
+            Reference {
+                id: "flora_grass_02".to_owned(),
+                mast_index: 0,
+                ..Reference::default()
+            },
+        );
+        let plan = ConversionPlan {
+            static_plans: Vec::new(),
+            cell_plans: vec![
+                PluginCellPlan {
+                    load_index: 2,
+                    plugin_name: "Bloodmoon.esm".to_owned(),
+                    plugin_path: PathBuf::from("Bloodmoon.esm"),
+                    source_master: bloodmoon_master,
+                    header_masters: Vec::new(),
+                    groundcover_cells: vec![bloodmoon_cell.clone()],
+                    deleted_cells: vec![bloodmoon_cell],
+                    touched_refs: 1,
+                    used_static_ids: BTreeSet::from(["flora_grass_02".to_owned()]),
+                },
+                PluginCellPlan {
+                    load_index: 0,
+                    plugin_name: "Morrowind.esm".to_owned(),
+                    plugin_path: PathBuf::from("Morrowind.esm"),
+                    source_master: morrowind_master,
+                    header_masters: Vec::new(),
+                    groundcover_cells: vec![morrowind_cell.clone()],
+                    deleted_cells: vec![morrowind_cell],
+                    touched_refs: 1,
+                    used_static_ids: BTreeSet::from(["flora_grass_01".to_owned()]),
+                },
+            ],
+            matched_static_ids: HashSet::new(),
+            used_static_ids: BTreeSet::from([
+                "flora_grass_01".to_owned(),
+                "flora_grass_02".to_owned(),
+            ]),
+        };
+
+        let built = build_plugins(&plan).unwrap();
+
+        assert_eq!(
+            built.groundcover_header.masters,
             vec![
                 ("Morrowind.esm".to_owned(), 79_837_557),
                 ("Bloodmoon.esm".to_owned(), 9_631_798),
             ]
         );
-        assert!(generated_cell.references.contains_key(&(2, 7)));
-        assert_eq!(generated_cell.references[&(2, 7)].mast_index, 2);
     }
 
     #[test]
-    fn header_master_refs_keep_prior_header_masters_before_target_master() {
+    fn header_master_refs_use_exact_owner_master_only() {
         let morrowind_master = MasterSpec {
             name: "Morrowind.esm".to_owned(),
             size: 79_837_557,
@@ -688,13 +780,10 @@ mod tests {
 
         assert_eq!(
             built.groundcover_header.masters,
-            vec![
-                ("Morrowind.esm".to_owned(), 79_837_557),
-                ("Tribunal.esm".to_owned(), 4_568_965),
-            ]
+            vec![("Tribunal.esm".to_owned(), 4_568_965)]
         );
-        assert!(generated_cell.references.contains_key(&(2, 7)));
-        assert_eq!(generated_cell.references[&(2, 7)].mast_index, 2);
+        assert!(generated_cell.references.contains_key(&(1, 7)));
+        assert_eq!(generated_cell.references[&(1, 7)].mast_index, 1);
     }
 
     #[test]
