@@ -1,0 +1,230 @@
+use std::{
+    fs::{create_dir, read_to_string},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use clap::Parser;
+
+use super::*;
+
+static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "greenmote-config-test-{}-{}",
+            std::process::id(),
+            NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)
+        ));
+        create_dir(&path).unwrap();
+
+        Self { path }
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(path_join(
+            &self.path,
+            crate::groundcover::DEFAULT_CONFIG_NAME,
+        ));
+        let _ = std::fs::remove_dir(&self.path);
+    }
+}
+
+fn path_join(path: &Path, child: &str) -> PathBuf {
+    path.join(child)
+}
+
+#[test]
+fn missing_config_default_initializes_next_to_user_config() {
+    let dir = TempDir::new();
+    let args = GroundcoverArgs::parse_from(["convert"]);
+    let default_output_directory = dir.path.join("data-local");
+
+    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
+
+    assert_eq!(config.output_directory, default_output_directory);
+    assert!(config.matches_static_id("flora_grass_01"));
+    assert!(!config.matches_static_id("ab_furn_impplantergrass"));
+    assert!(
+        dir.path
+            .join(crate::groundcover::DEFAULT_CONFIG_NAME)
+            .is_file()
+    );
+    assert!(
+        read_to_string(dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME))
+            .unwrap()
+            .contains("[convert]")
+    );
+}
+
+#[test]
+fn dry_run_does_not_default_initialize_config_file() {
+    let dir = TempDir::new();
+    let args = GroundcoverArgs::parse_from(["convert", "--dry-run"]);
+    let default_output_directory = dir.path.join("data-local");
+
+    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
+
+    assert!(config.dry_run);
+    assert_eq!(config.output_directory, default_output_directory);
+    assert!(
+        !dir.path
+            .join(crate::groundcover::DEFAULT_CONFIG_NAME)
+            .exists()
+    );
+}
+
+#[test]
+fn cli_values_merge_over_toml() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[convert]
+groundcover_output = "gc.omwaddon"
+ignored_plugins = ["Generated"]
+dry_run = false
+"#,
+    )
+    .unwrap();
+    let args = GroundcoverArgs::parse_from([
+        "convert",
+        "--dry-run",
+        "--ignore",
+        "OtherGenerated",
+        "--output",
+        "out",
+    ]);
+    let default_output_directory = dir.path.join("data-local");
+
+    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory).unwrap();
+
+    assert_eq!(config.groundcover_output, "gc.omwaddon");
+    assert_eq!(config.output_directory, PathBuf::from("out"));
+    assert!(config.dry_run);
+    assert!(config.is_ignored_plugin_name("Generated.omwaddon"));
+    assert!(config.is_ignored_plugin_name("OtherGenerated.omwaddon"));
+    assert!(read_to_string(config_path).unwrap().contains("gc.omwaddon"));
+}
+
+#[test]
+fn missing_toml_output_directory_uses_effective_data_local() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[convert]
+groundcover_output = "gc.omwaddon"
+"#,
+    )
+    .unwrap();
+    let args = GroundcoverArgs::parse_from(["convert"]);
+    let default_output_directory = dir.path.join("profile-data-local");
+
+    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
+
+    assert_eq!(config.output_directory, default_output_directory);
+}
+
+#[test]
+fn stale_generated_platform_data_local_yields_to_effective_data_local() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        format!(
+            "output_directory = {:?}\n",
+            openmw_config::default_data_local_path()
+                .display()
+                .to_string()
+        ),
+    )
+    .unwrap();
+    let args = GroundcoverArgs::parse_from(["convert"]);
+    let effective_data_local = dir.path.join("Morrowind").join("overwrite");
+
+    let config = GroundcoverConfig::get(args, &dir.path, effective_data_local.clone()).unwrap();
+
+    assert_eq!(config.output_directory, effective_data_local);
+}
+
+#[test]
+fn non_default_toml_output_directory_remains_user_override() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    let custom_output = dir.path.join("custom-output");
+    std::fs::write(
+        &config_path,
+        format!(
+            "output_directory = {:?}\n",
+            custom_output.display().to_string()
+        ),
+    )
+    .unwrap();
+    let args = GroundcoverArgs::parse_from(["convert"]);
+    let effective_data_local = dir.path.join("Morrowind").join("overwrite");
+
+    let config = GroundcoverConfig::get(args, &dir.path, effective_data_local).unwrap();
+
+    assert_eq!(config.output_directory, custom_output);
+}
+
+#[test]
+fn configured_deleted_output_is_ignored_automatically() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[convert]
+deleted_output = "my_deleted_groundcover.omwaddon"
+"#,
+    )
+    .unwrap();
+    let args = GroundcoverArgs::parse_from(["convert"]);
+
+    let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
+
+    assert!(config.is_ignored_plugin_name("my_deleted_groundcover.omwaddon"));
+}
+
+#[test]
+fn root_convert_keys_are_not_part_of_the_schema() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+groundcover_output = "legacy_gc.omwaddon"
+ignored_plugins = ["LegacyGenerated"]
+dry_run = true
+"#,
+    )
+    .unwrap();
+    let args = GroundcoverArgs::parse_from(["convert"]);
+
+    let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
+
+    assert_eq!(config.groundcover_output, default::groundcover_output());
+    assert!(!config.dry_run);
+    assert!(!config.is_ignored_plugin_name("LegacyGenerated.omwaddon"));
+}
+
+#[test]
+fn invalid_regex_fails_validation() {
+    let mut config = GroundcoverConfig {
+        grass_ids: vec!["[".to_owned()],
+        ..GroundcoverConfig::default()
+    };
+
+    assert!(config.compile_regex_sets().is_err());
+}
