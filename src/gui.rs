@@ -12,7 +12,7 @@ use crate::groundcover::{
 };
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
-const NAV_BAR_VERTICAL_MARGIN: f32 = 8.0;
+const NAV_BAR_VERTICAL_PADDING: f32 = 8.0;
 const NAV_BUTTON_MIN_WIDTH: f32 = 96.0;
 
 struct GreenmoteApp {
@@ -95,9 +95,15 @@ struct ProgressState {
     progress: ProgressKind,
 }
 
+#[derive(Clone, Copy)]
 struct NavEntry {
     label: &'static str,
     screen: Screen,
+}
+
+struct NavButton {
+    entry: NavEntry,
+    size: egui::Vec2,
 }
 
 enum ProgressKind {
@@ -165,23 +171,31 @@ impl GreenmoteApp {
             },
         ];
 
-        let button_size = nav_button_size(ui);
-        let nav_width = nav_width(ui, button_size.x, NAV_ENTRIES.len());
-        let top_padding = ((ui.available_height() - button_size.y) / 2.0).max(0.0);
+        let buttons = NAV_ENTRIES
+            .iter()
+            .map(|entry| NavButton {
+                entry: *entry,
+                size: nav_button_size(ui, entry.label),
+            })
+            .collect::<Vec<_>>();
+        let nav_width = nav_width(ui, &buttons);
+        let button_height = ui.spacing().interact_size.y;
+        let top_padding = ((ui.available_height() - button_height) / 2.0).max(0.0);
 
         ui.add_space(top_padding);
         ui.horizontal(|ui| {
             ui.add_space((ui.available_width() - nav_width).max(0.0) / 2.0);
 
-            for entry in NAV_ENTRIES {
+            for button in buttons {
                 if ui
                     .add_sized(
-                        button_size,
-                        egui::Button::new(entry.label).selected(self.screen == entry.screen),
+                        button.size,
+                        egui::Button::new(button.entry.label)
+                            .selected(self.screen == button.entry.screen),
                     )
                     .clicked()
                 {
-                    self.request_screen(entry.screen);
+                    self.request_screen(button.entry.screen);
                 }
             }
         });
@@ -751,24 +765,35 @@ fn setting_text_field(ui: &mut egui::Ui, label: &str, value: &mut String, dirty:
 }
 
 fn nav_bar_height(ctx: &egui::Context) -> f32 {
-    ctx.style().spacing.interact_size.y + (NAV_BAR_VERTICAL_MARGIN * 2.0)
+    ctx.style().spacing.interact_size.y + (NAV_BAR_VERTICAL_PADDING * 2.0)
 }
 
-fn nav_button_size(ui: &egui::Ui) -> egui::Vec2 {
+fn nav_button_size(ui: &egui::Ui, label: &str) -> egui::Vec2 {
     egui::vec2(
-        NAV_BUTTON_MIN_WIDTH.max(ui.spacing().interact_size.x),
+        NAV_BUTTON_MIN_WIDTH.max(nav_button_label_width(ui, label)),
         ui.spacing().interact_size.y,
     )
 }
 
-fn nav_width(ui: &egui::Ui, button_width: f32, button_count: usize) -> f32 {
-    let button_count = u16::try_from(button_count).unwrap_or(u16::MAX);
-    let spacing_count = button_count.saturating_sub(1);
+fn nav_button_label_width(ui: &egui::Ui, label: &str) -> f32 {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font_id, ui.visuals().text_color())
+        .size()
+        .x;
 
-    button_width.mul_add(
-        f32::from(button_count),
-        ui.spacing().item_spacing.x * f32::from(spacing_count),
-    )
+    (ui.spacing().button_padding.x * 2.0) + text_width
+}
+
+fn nav_width(ui: &egui::Ui, buttons: &[NavButton]) -> f32 {
+    let button_widths = buttons.iter().map(|button| button.size.x).sum::<f32>();
+    let spacing_widths = buttons
+        .windows(2)
+        .map(|_window| ui.spacing().item_spacing.x)
+        .sum::<f32>();
+
+    button_widths + spacing_widths
 }
 
 fn setting_multiline_text(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
