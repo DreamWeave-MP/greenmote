@@ -26,7 +26,6 @@ pub fn save_plugins(
     built.groundcover_plugin.sort_objects();
     built.deleted_plugin.sort_objects();
 
-    check_cancelled(cancellation)?;
     built
         .groundcover_plugin
         .save_path(config.output_directory.join(&config.groundcover_output))?;

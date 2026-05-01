@@ -18,6 +18,7 @@ pub(super) struct ConvertUiState {
     output: String,
     cancelling: bool,
     progress: Option<ProgressState>,
+    phase_reached: Option<ConversionPhase>,
     event_receiver: Option<mpsc::Receiver<GuiEvent>>,
     cancellation: Option<CancellationToken>,
     run_options: ConvertRunOptions,
@@ -326,6 +327,7 @@ impl GreenmoteApp {
         self.convert.cancelling = false;
         self.set_status("Converting with current run options...");
         self.convert.progress = None;
+        self.convert.phase_reached = None;
         self.convert.event_receiver = Some(receiver);
         self.convert.cancellation = Some(cancellation);
         self.convert.output.clear();
@@ -429,6 +431,10 @@ impl GreenmoteApp {
     }
 
     fn handle_progress_event(&mut self, event: ConversionEvent) {
+        if let ConversionEvent::PhaseStarted(phase) = event {
+            self.convert.phase_reached = Some(phase);
+        }
+
         if self.convert.cancelling {
             return;
         }
@@ -485,6 +491,7 @@ impl GreenmoteApp {
         self.convert.running = false;
         self.convert.cancelling = false;
         self.convert.progress = None;
+        self.convert.phase_reached = None;
         self.convert.cancellation = None;
 
         if cancelled {
@@ -499,11 +506,11 @@ impl GreenmoteApp {
     }
 
     fn cancellation_notice(&self) -> CancellationNotice {
-        let Some(progress) = &self.convert.progress else {
+        let Some(phase) = self.convert.phase_reached else {
             return CancellationNotice::before_output();
         };
 
-        match progress.phase {
+        match phase {
             ConversionPhase::LoadingStaticPlugins
             | ConversionPhase::PlanningStatics
             | ConversionPhase::LoadingCellPlugins
