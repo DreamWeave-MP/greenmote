@@ -3,6 +3,7 @@ use std::{
     fs::{File, create_dir_all},
     io,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use rayon::prelude::*;
@@ -59,7 +60,13 @@ pub fn resolve_mesh_copy_jobs(
     }
 }
 
-pub fn copy_meshes(jobs: &[MeshCopyJob]) -> io::Result<()> {
+pub fn copy_meshes(
+    jobs: &[MeshCopyJob],
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> io::Result<()> {
+    let total = jobs.len();
+    let completed = AtomicUsize::new(0);
+
     jobs.par_iter().try_for_each(|job| {
         if let Some(parent) = job.target_path.parent() {
             create_dir_all(parent)?;
@@ -67,6 +74,8 @@ pub fn copy_meshes(jobs: &[MeshCopyJob]) -> io::Result<()> {
         let mut source = job.source.open()?;
         let mut target = File::create(&job.target_path)?;
         io::copy(&mut source, &mut target)?;
+        let current = completed.fetch_add(1, Ordering::Relaxed) + 1;
+        progress(current, total);
         Ok(())
     })
 }

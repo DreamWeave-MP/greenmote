@@ -2,6 +2,7 @@ use std::{
     fs::metadata,
     io,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use rayon::prelude::*;
@@ -69,12 +70,18 @@ pub fn resolve_source_plugins(
         .collect()
 }
 
-pub fn load_plugins_for_cell_scanning(sources: Vec<SourcePlugin>) -> PluginLoadResult {
-    load_plugins_matching(sources, PluginLoadMode::Cells)
+pub fn load_plugins_for_cell_scanning(
+    sources: Vec<SourcePlugin>,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> PluginLoadResult {
+    load_plugins_matching(sources, PluginLoadMode::Cells, progress)
 }
 
-pub fn load_plugins_for_static_planning(sources: Vec<SourcePlugin>) -> PluginLoadResult {
-    load_plugins_matching(sources, PluginLoadMode::Statics)
+pub fn load_plugins_for_static_planning(
+    sources: Vec<SourcePlugin>,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> PluginLoadResult {
+    load_plugins_matching(sources, PluginLoadMode::Statics, progress)
 }
 
 #[derive(Clone, Copy)]
@@ -83,21 +90,34 @@ enum PluginLoadMode {
     Cells,
 }
 
-fn load_plugins_matching(sources: Vec<SourcePlugin>, mode: PluginLoadMode) -> PluginLoadResult {
+fn load_plugins_matching(
+    sources: Vec<SourcePlugin>,
+    mode: PluginLoadMode,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> PluginLoadResult {
+    let total = sources.len();
+    let completed = AtomicUsize::new(0);
+
     let mut loaded = sources
         .into_par_iter()
-        .map(|source| match load_one_plugin(&source, mode) {
-            Ok(plugin) => Ok(LoadedPlugin {
-                load_index: source.load_index,
-                plugin_name: source.plugin_name,
-                plugin_path: source.plugin_path,
-                plugin,
-            }),
-            Err(error) => Err(PluginLoadWarning {
-                load_index: source.load_index,
-                plugin_path: source.plugin_path,
-                error,
-            }),
+        .map(|source| {
+            let result = match load_one_plugin(&source, mode) {
+                Ok(plugin) => Ok(LoadedPlugin {
+                    load_index: source.load_index,
+                    plugin_name: source.plugin_name,
+                    plugin_path: source.plugin_path,
+                    plugin,
+                }),
+                Err(error) => Err(PluginLoadWarning {
+                    load_index: source.load_index,
+                    plugin_path: source.plugin_path,
+                    error,
+                }),
+            };
+
+            let current = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            progress(current, total);
+            result
         })
         .collect::<Vec<_>>();
 

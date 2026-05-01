@@ -3,12 +3,14 @@ use std::{collections::HashSet, fs::File, io, io::Write, path::Path};
 use crate::groundcover::{
     GroundcoverArgs, GroundcoverConfig, LOG_NAME, auto_enable, load, openmw, output,
     plan::{build_static_conversion_plan, scan_cells_parallel},
+    progress::{self, ConversionPhase, EventSink},
 };
 
 pub fn run(
     args: GroundcoverArgs,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    events: &EventSink<'_>,
 ) -> io::Result<()> {
     let mut openmw_config = openmw::load_config(&args)?;
     let greenmote_config_path = openmw::greenmote_config_path(&args, &openmw_config);
@@ -36,21 +38,35 @@ pub fn run(
     let vfs = openmw::build_vfs(&openmw_config);
 
     let sources = load::resolve_source_plugins(&content_files, &config, &vfs);
-    let static_load = load::load_plugins_for_static_planning(sources.clone());
+    progress::emit_phase(events, ConversionPhase::LoadingStaticPlugins);
+    let static_load = load::load_plugins_for_static_planning(sources.clone(), &|current, total| {
+        progress::emit_progress(
+            events,
+            ConversionPhase::LoadingStaticPlugins,
+            current,
+            total,
+        );
+    });
     write_load_warnings(stderr, &static_load.warnings)?;
     let static_plugins = static_load.plugins;
+    progress::emit_phase(events, ConversionPhase::PlanningStatics);
     let static_plan = build_static_conversion_plan(&static_plugins, &config);
     let (loaded_plugins, cell_plans) = if static_plan.matched_static_ids.is_empty() {
         (static_plugins.len(), Vec::new())
     } else {
-        let cell_load = load::load_plugins_for_cell_scanning(sources);
+        progress::emit_phase(events, ConversionPhase::LoadingCellPlugins);
+        let cell_load = load::load_plugins_for_cell_scanning(sources, &|current, total| {
+            progress::emit_progress(events, ConversionPhase::LoadingCellPlugins, current, total);
+        });
         write_load_warnings(stderr, &cell_load.warnings)?;
         let cell_plugins = cell_load.plugins;
         ensure_static_sources_loaded_for_cell_scanning(&static_plan, &cell_plugins)?;
+        progress::emit_phase(events, ConversionPhase::ScanningCells);
         let cell_plans = scan_cells_parallel(&cell_plugins, &static_plan.matched_static_ids);
         (cell_plugins.len(), cell_plans)
     };
     let plan = static_plan.with_cell_plans(cell_plans);
+    progress::emit_phase(events, ConversionPhase::ResolvingMeshes);
     let mesh_paths = plan.used_mesh_paths()?;
     let summary = output::RunSummary {
         content_files: content_files.len(),
@@ -80,11 +96,16 @@ pub fn run(
     }
 
     let mesh_jobs = output::resolve_mesh_copy_jobs(&vfs, &mesh_paths, &config.output_directory)?;
+    progress::emit_phase(events, ConversionPhase::WritingPlugins);
     let built = output::build_plugins(&plan)?;
     output::save_plugins(built, &config)?;
-    output::copy_meshes(&mesh_jobs)?;
+    progress::emit_phase(events, ConversionPhase::CopyingMeshes);
+    output::copy_meshes(&mesh_jobs, &|current, total| {
+        progress::emit_progress(events, ConversionPhase::CopyingMeshes, current, total);
+    })?;
 
     if config.auto_enable {
+        progress::emit_phase(events, ConversionPhase::AutoEnabling);
         let backup = auto_enable::outputs(&mut openmw_config, &config)?;
         writeln!(
             stdout,
@@ -93,6 +114,7 @@ pub fn run(
         )?;
     }
 
+    progress::emit_phase(events, ConversionPhase::WritingLog);
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
     let mut log = File::create(&log_path)?;
     output::write_summary(&mut log, &summary, &plan, &config)?;

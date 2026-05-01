@@ -1,8 +1,12 @@
-use std::{cell::RefCell, io, rc::Rc, sync::mpsc, thread};
+use std::{
+    io,
+    sync::{Arc, Mutex, mpsc},
+    thread,
+};
 
 use eframe::egui;
 
-use crate::groundcover::{self, GroundcoverArgs};
+use crate::groundcover::{self, ConversionEvent, ConversionPhase, GroundcoverArgs};
 
 struct GreenmoteApp {
     screen: Screen,
@@ -18,17 +22,34 @@ struct ConvertUiState {
     running: bool,
     status: String,
     output: String,
-    result_receiver: Option<mpsc::Receiver<ConversionResult>>,
+    progress: Option<ProgressState>,
+    event_receiver: Option<mpsc::Receiver<GuiEvent>>,
 }
 
-struct ConversionResult {
-    output: String,
-    error: Option<String>,
+enum GuiEvent {
+    Output(String),
+    Progress(ConversionEvent),
+    Finished { error: Option<String> },
 }
 
 #[derive(Clone)]
-struct SharedOutput {
-    bytes: Rc<RefCell<Vec<u8>>>,
+struct GuiEventSink {
+    sender: Arc<Mutex<mpsc::Sender<GuiEvent>>>,
+    context: egui::Context,
+}
+
+struct GuiOutput {
+    sink: GuiEventSink,
+}
+
+struct ProgressState {
+    phase: ConversionPhase,
+    progress: ProgressKind,
+}
+
+enum ProgressKind {
+    Indeterminate,
+    Counted { current: usize, total: usize },
 }
 
 impl Default for GreenmoteApp {
@@ -45,7 +66,7 @@ impl Default for GreenmoteApp {
 
 impl eframe::App for GreenmoteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.receive_conversion_result();
+        self.receive_conversion_events();
 
         egui::SidePanel::left("greenmote_convert_panel")
             .resizable(false)
@@ -80,7 +101,11 @@ impl GreenmoteApp {
 
     fn show_convert_screen(&self, ui: &mut egui::Ui) {
         ui.heading("Convert");
-        ui.label(&self.convert.status);
+        if self.convert.progress.is_some() {
+            self.show_progress(ui);
+        } else {
+            ui.label(&self.convert.status);
+        }
         ui.separator();
 
         egui::ScrollArea::vertical()
@@ -92,56 +117,104 @@ impl GreenmoteApp {
 
     fn start_conversion(&mut self, ctx: &egui::Context) {
         let (sender, receiver) = mpsc::channel();
-        let repaint_context = ctx.clone();
+        let sink = GuiEventSink::new(sender, ctx.clone());
 
         self.convert.running = true;
         self.set_status("Converting with default settings...");
-        self.convert.result_receiver = Some(receiver);
+        self.convert.progress = None;
+        self.convert.event_receiver = Some(receiver);
         self.convert.output.clear();
 
         thread::spawn(move || {
-            let bytes = Rc::new(RefCell::new(Vec::new()));
-            let mut stdout = SharedOutput::new(bytes.clone());
-            let mut stderr = SharedOutput::new(bytes.clone());
-            let error =
-                groundcover::run_with_output(GroundcoverArgs::default(), &mut stdout, &mut stderr)
-                    .err()
-                    .map(|error| error.to_string());
+            let mut stdout = GuiOutput::new(sink.clone());
+            let mut stderr = GuiOutput::new(sink.clone());
+            let progress_sink = sink.clone();
+            let error = groundcover::run_with_output_and_events(
+                GroundcoverArgs::default(),
+                &mut stdout,
+                &mut stderr,
+                &move |event| progress_sink.send(GuiEvent::Progress(event)),
+            )
+            .err()
+            .map(|error| error.to_string());
 
-            let result = ConversionResult {
-                output: String::from_utf8_lossy(&bytes.borrow()).into_owned(),
-                error,
-            };
-
-            let _send_result = sender.send(result);
-            repaint_context.request_repaint();
+            sink.send(GuiEvent::Finished { error });
         });
     }
 
-    fn receive_conversion_result(&mut self) {
-        let Some(receiver) = self.convert.result_receiver.take() else {
+    fn receive_conversion_events(&mut self) {
+        let Some(receiver) = self.convert.event_receiver.take() else {
             return;
         };
 
-        match receiver.try_recv() {
-            Ok(result) => {
-                self.convert.running = false;
-                self.convert.output = format_conversion_output(&result);
-
-                if let Some(error) = result.error {
-                    self.set_status(format!("Conversion failed: {error}"));
-                } else {
-                    self.set_status("Conversion finished.");
+        loop {
+            match receiver.try_recv() {
+                Ok(event) => self.handle_gui_event(event),
+                Err(mpsc::TryRecvError::Empty) => {
+                    if self.convert.running {
+                        self.convert.event_receiver = Some(receiver);
+                    }
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.convert.running = false;
+                    self.set_status("Conversion worker disconnected.");
+                    return;
                 }
             }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.convert.result_receiver = Some(receiver);
+        }
+    }
+
+    fn handle_gui_event(&mut self, event: GuiEvent) {
+        match event {
+            GuiEvent::Output(output) => self.convert.output.push_str(&output),
+            GuiEvent::Progress(event) => self.handle_progress_event(event),
+            GuiEvent::Finished { error } => self.finish_conversion(error),
+        }
+    }
+
+    fn handle_progress_event(&mut self, event: ConversionEvent) {
+        match event {
+            ConversionEvent::PhaseStarted(phase) => {
+                self.convert.progress = Some(ProgressState {
+                    phase,
+                    progress: ProgressKind::Indeterminate,
+                });
+                self.set_status(phase.label());
             }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.convert.running = false;
-                self.set_status("Conversion worker disconnected.");
+            ConversionEvent::Progress {
+                phase,
+                current,
+                total,
+            } => {
+                self.convert.progress = Some(ProgressState {
+                    phase,
+                    progress: ProgressKind::Counted { current, total },
+                });
+                self.set_status(phase.label());
             }
         }
+    }
+
+    fn finish_conversion(&mut self, error: Option<String>) {
+        self.convert.running = false;
+        self.convert.progress = None;
+
+        if let Some(error) = error {
+            append_error(&mut self.convert.output, &error);
+            self.set_status(format!("Conversion failed: {error}"));
+        } else {
+            self.set_status("Conversion finished.");
+        }
+    }
+
+    fn show_progress(&self, ui: &mut egui::Ui) {
+        let Some(progress) = &self.convert.progress else {
+            return;
+        };
+
+        ui.label(progress.label());
+        ui.add(progress.progress_bar());
     }
 
     fn set_status(&mut self, status: impl Into<String>) {
@@ -149,15 +222,33 @@ impl GreenmoteApp {
     }
 }
 
-impl SharedOutput {
-    fn new(bytes: Rc<RefCell<Vec<u8>>>) -> Self {
-        Self { bytes }
+impl GuiEventSink {
+    fn new(sender: mpsc::Sender<GuiEvent>, context: egui::Context) -> Self {
+        Self {
+            sender: Arc::new(Mutex::new(sender)),
+            context,
+        }
+    }
+
+    fn send(&self, event: GuiEvent) {
+        if let Ok(sender) = self.sender.lock() {
+            let _send_result = sender.send(event);
+            self.context.request_repaint();
+        }
     }
 }
 
-impl io::Write for SharedOutput {
+impl GuiOutput {
+    fn new(sink: GuiEventSink) -> Self {
+        Self { sink }
+    }
+}
+
+impl io::Write for GuiOutput {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.bytes.borrow_mut().extend_from_slice(bytes);
+        self.sink.send(GuiEvent::Output(
+            String::from_utf8_lossy(bytes).into_owned(),
+        ));
         Ok(bytes.len())
     }
 
@@ -166,19 +257,47 @@ impl io::Write for SharedOutput {
     }
 }
 
-fn format_conversion_output(result: &ConversionResult) -> String {
-    let mut output = result.output.clone();
-
-    if let Some(error) = &result.error {
-        if !output.is_empty() {
-            output.push('\n');
+impl ProgressState {
+    fn label(&self) -> String {
+        match self.progress {
+            ProgressKind::Indeterminate => self.phase.label().to_owned(),
+            ProgressKind::Counted { current, total } => {
+                format!("{} ({current}/{total})", self.phase.label())
+            }
         }
-        output.push_str("error:\n");
-        output.push_str(error);
-        output.push('\n');
     }
 
-    output
+    fn progress_bar(&self) -> egui::ProgressBar {
+        match self.progress {
+            ProgressKind::Indeterminate => egui::ProgressBar::new(0.0)
+                .animate(true)
+                .desired_width(f32::INFINITY),
+            ProgressKind::Counted { current, total } => {
+                egui::ProgressBar::new(progress_fraction(current, total))
+                    .show_percentage()
+                    .desired_width(f32::INFINITY)
+            }
+        }
+    }
+}
+
+fn append_error(output: &mut String, error: &str) {
+    if !output.is_empty() {
+        output.push('\n');
+    }
+    output.push_str("error:\n");
+    output.push_str(error);
+    output.push('\n');
+}
+
+fn progress_fraction(current: usize, total: usize) -> f32 {
+    if total == 0 {
+        return 1.0;
+    }
+
+    let current = u16::try_from(current.min(total)).unwrap_or(u16::MAX);
+    let total = u16::try_from(total).unwrap_or(u16::MAX).max(1);
+    f32::from(current) / f32::from(total)
 }
 
 /// Runs the `greenmote` graphical user interface.

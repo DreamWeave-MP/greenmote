@@ -10,10 +10,12 @@ pub mod mesh;
 mod openmw;
 mod output;
 pub mod plan;
+mod progress;
 pub mod records;
 
 pub use args::GroundcoverArgs;
 pub use config::GroundcoverConfig;
+pub use progress::{ConversionEvent, ConversionPhase};
 
 pub const DEFAULT_CONFIG_NAME: &str = "greenmote.toml";
 pub const DELETED_PLUGIN_NAME: &str = "deleted_groundcover.omwaddon";
@@ -41,5 +43,19 @@ pub fn run_with_output(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> io::Result<()> {
-    app::run(args, stdout, stderr)
+    run_with_output_and_events(args, stdout, stderr, &|_event| {})
+}
+
+/// Runs the groundcover conversion subcommand with explicit output streams and progress events.
+///
+/// # Errors
+///
+/// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
+pub fn run_with_output_and_events(
+    args: GroundcoverArgs,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    events: &progress::EventSink<'_>,
+) -> io::Result<()> {
+    app::run(args, stdout, stderr, events)
 }
