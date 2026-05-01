@@ -96,6 +96,22 @@ impl PluginCellPlan {
         let index = usize::try_from(mast_index - 1).ok()?;
         self.header_masters.get(index)
     }
+
+    #[must_use]
+    pub fn master_chain_for_source_index(&self, mast_index: u32) -> Option<Vec<&MasterSpec>> {
+        if mast_index == 0 {
+            let mut chain = self.header_masters.iter().collect::<Vec<_>>();
+            chain.push(&self.source_master);
+            return Some(chain);
+        }
+
+        let index = usize::try_from(mast_index - 1).ok()?;
+        if index >= self.header_masters.len() {
+            return None;
+        }
+
+        Some(self.header_masters.iter().take(index + 1).collect())
+    }
 }
 
 impl PluginCellPlan {

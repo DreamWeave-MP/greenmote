@@ -158,12 +158,16 @@ impl MasterIndexBuilder {
         cell_plan: &PluginCellPlan,
     ) {
         for (key, reference) in &cell.references {
-            if let Some(master) = cell_plan.master_for_source_index(key.0) {
-                self.insert(master.clone());
+            self.insert_source_master_chain(key.0, cell_plan);
+            if reference.mast_index != key.0 {
+                self.insert_source_master_chain(reference.mast_index, cell_plan);
             }
-            if reference.mast_index != key.0
-                && let Some(master) = cell_plan.master_for_source_index(reference.mast_index)
-            {
+        }
+    }
+
+    fn insert_source_master_chain(&mut self, mast_index: u32, cell_plan: &PluginCellPlan) {
+        if let Some(masters) = cell_plan.master_chain_for_source_index(mast_index) {
+            for master in masters {
                 self.insert(master.clone());
             }
         }
@@ -500,6 +504,115 @@ mod tests {
         );
         assert!(generated_cell.references.contains_key(&(1, 7)));
         assert_eq!(generated_cell.references[&(1, 7)].mast_index, 1);
+    }
+
+    #[test]
+    fn source_plugin_refs_keep_header_masters_before_source_master() {
+        let morrowind_master = MasterSpec {
+            name: "Morrowind.esm".to_owned(),
+            size: 79_837_557,
+        };
+        let bloodmoon_master = MasterSpec {
+            name: "Bloodmoon.esm".to_owned(),
+            size: 9_631_798,
+        };
+        let mut cell = Cell::default();
+        cell.references.insert(
+            (0, 7),
+            Reference {
+                id: "flora_grass_01".to_owned(),
+                mast_index: 0,
+                ..Reference::default()
+            },
+        );
+        let plan = ConversionPlan {
+            static_plans: Vec::new(),
+            cell_plans: vec![PluginCellPlan {
+                load_index: 1,
+                plugin_name: "Bloodmoon.esm".to_owned(),
+                plugin_path: PathBuf::from("Bloodmoon.esm"),
+                source_master: bloodmoon_master,
+                header_masters: vec![morrowind_master],
+                groundcover_cells: vec![cell.clone()],
+                deleted_cells: vec![cell],
+                touched_refs: 1,
+            }],
+            matched_static_ids: HashSet::new(),
+            mesh_paths: BTreeSet::new(),
+        };
+
+        let built = build_plugins(&plan).unwrap();
+        let generated_cell = built
+            .groundcover_plugin
+            .objects_of_type::<Cell>()
+            .next()
+            .unwrap();
+
+        assert_eq!(
+            built.groundcover_header.masters,
+            vec![
+                ("Morrowind.esm".to_owned(), 79_837_557),
+                ("Bloodmoon.esm".to_owned(), 9_631_798),
+            ]
+        );
+        assert!(generated_cell.references.contains_key(&(2, 7)));
+        assert_eq!(generated_cell.references[&(2, 7)].mast_index, 2);
+    }
+
+    #[test]
+    fn header_master_refs_keep_prior_header_masters_before_target_master() {
+        let morrowind_master = MasterSpec {
+            name: "Morrowind.esm".to_owned(),
+            size: 79_837_557,
+        };
+        let tribunal_master = MasterSpec {
+            name: "Tribunal.esm".to_owned(),
+            size: 4_568_965,
+        };
+        let mut cell = Cell::default();
+        cell.references.insert(
+            (2, 7),
+            Reference {
+                id: "flora_grass_01".to_owned(),
+                mast_index: 2,
+                ..Reference::default()
+            },
+        );
+        let plan = ConversionPlan {
+            static_plans: Vec::new(),
+            cell_plans: vec![PluginCellPlan {
+                load_index: 2,
+                plugin_name: "Patch.esp".to_owned(),
+                plugin_path: PathBuf::from("Patch.esp"),
+                source_master: MasterSpec {
+                    name: "Patch.esp".to_owned(),
+                    size: 10,
+                },
+                header_masters: vec![morrowind_master, tribunal_master],
+                groundcover_cells: vec![cell.clone()],
+                deleted_cells: vec![cell],
+                touched_refs: 1,
+            }],
+            matched_static_ids: HashSet::new(),
+            mesh_paths: BTreeSet::new(),
+        };
+
+        let built = build_plugins(&plan).unwrap();
+        let generated_cell = built
+            .groundcover_plugin
+            .objects_of_type::<Cell>()
+            .next()
+            .unwrap();
+
+        assert_eq!(
+            built.groundcover_header.masters,
+            vec![
+                ("Morrowind.esm".to_owned(), 79_837_557),
+                ("Tribunal.esm".to_owned(), 4_568_965),
+            ]
+        );
+        assert!(generated_cell.references.contains_key(&(2, 7)));
+        assert_eq!(generated_cell.references[&(2, 7)].mast_index, 2);
     }
 
     #[test]
