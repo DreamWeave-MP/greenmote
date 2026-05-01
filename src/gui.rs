@@ -12,6 +12,8 @@ use crate::groundcover::{
 };
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
+const NAV_BAR_VERTICAL_MARGIN: f32 = 8.0;
+const NAV_BUTTON_MIN_WIDTH: f32 = 96.0;
 
 struct GreenmoteApp {
     screen: Screen,
@@ -93,6 +95,11 @@ struct ProgressState {
     progress: ProgressKind,
 }
 
+struct NavEntry {
+    label: &'static str,
+    screen: Screen,
+}
+
 enum ProgressKind {
     Indeterminate,
     Counted { current: usize, total: usize },
@@ -132,7 +139,7 @@ impl eframe::App for GreenmoteApp {
 
         egui::TopBottomPanel::top("greenmote_navigation_bar")
             .resizable(false)
-            .exact_height(42.0)
+            .exact_height(nav_bar_height(ctx))
             .show(ctx, |ui| {
                 self.show_navigation_bar(ui);
             });
@@ -147,34 +154,35 @@ impl eframe::App for GreenmoteApp {
 
 impl GreenmoteApp {
     fn show_navigation_bar(&mut self, ui: &mut egui::Ui) {
-        const NAV_BUTTON_SIZE: egui::Vec2 = egui::vec2(96.0, 24.0);
-        const NAV_BUTTON_COUNT: f32 = 2.0;
+        const NAV_ENTRIES: &[NavEntry] = &[
+            NavEntry {
+                label: "Convert",
+                screen: Screen::Convert,
+            },
+            NavEntry {
+                label: "Settings",
+                screen: Screen::Settings,
+            },
+        ];
 
-        ui.add_space(8.0);
+        let button_size = nav_button_size(ui);
+        let nav_width = nav_width(ui, button_size.x, NAV_ENTRIES.len());
+        let top_padding = ((ui.available_height() - button_size.y) / 2.0).max(0.0);
+
+        ui.add_space(top_padding);
         ui.horizontal(|ui| {
-            let nav_width = NAV_BUTTON_SIZE
-                .x
-                .mul_add(NAV_BUTTON_COUNT, ui.spacing().item_spacing.x);
             ui.add_space((ui.available_width() - nav_width).max(0.0) / 2.0);
 
-            if ui
-                .add_sized(
-                    NAV_BUTTON_SIZE,
-                    egui::Button::new("Convert").selected(self.screen == Screen::Convert),
-                )
-                .clicked()
-            {
-                self.request_screen(Screen::Convert);
-            }
-
-            if ui
-                .add_sized(
-                    NAV_BUTTON_SIZE,
-                    egui::Button::new("Settings").selected(self.screen == Screen::Settings),
-                )
-                .clicked()
-            {
-                self.request_screen(Screen::Settings);
+            for entry in NAV_ENTRIES {
+                if ui
+                    .add_sized(
+                        button_size,
+                        egui::Button::new(entry.label).selected(self.screen == entry.screen),
+                    )
+                    .clicked()
+                {
+                    self.request_screen(entry.screen);
+                }
             }
         });
     }
@@ -740,6 +748,27 @@ fn setting_text_field(ui: &mut egui::Ui, label: &str, value: &mut String, dirty:
     if ui.text_edit_singleline(value).changed() {
         *dirty = true;
     }
+}
+
+fn nav_bar_height(ctx: &egui::Context) -> f32 {
+    ctx.style().spacing.interact_size.y + (NAV_BAR_VERTICAL_MARGIN * 2.0)
+}
+
+fn nav_button_size(ui: &egui::Ui) -> egui::Vec2 {
+    egui::vec2(
+        NAV_BUTTON_MIN_WIDTH.max(ui.spacing().interact_size.x),
+        ui.spacing().interact_size.y,
+    )
+}
+
+fn nav_width(ui: &egui::Ui, button_width: f32, button_count: usize) -> f32 {
+    let button_count = u16::try_from(button_count).unwrap_or(u16::MAX);
+    let spacing_count = button_count.saturating_sub(1);
+
+    button_width.mul_add(
+        f32::from(button_count),
+        ui.spacing().item_spacing.x * f32::from(spacing_count),
+    )
 }
 
 fn setting_multiline_text(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
