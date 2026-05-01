@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 #[must_use]
 pub fn normalize_mesh_for_copy(mesh: &str) -> Option<String> {
@@ -23,11 +26,25 @@ pub fn grass_prefixed_mesh(mesh: &str) -> String {
 }
 
 #[must_use]
-pub fn mesh_output_path(output_directory: &Path, normalized_mesh: &str) -> PathBuf {
-    normalized_mesh.split('\\').fold(
-        output_directory.join("Meshes").join("grass"),
-        |path, part| path.join(part),
-    )
+pub fn mesh_output_path(output_directory: &Path, normalized_mesh: &str) -> io::Result<PathBuf> {
+    let mut path = output_directory.join("Meshes").join("grass");
+
+    for part in normalized_mesh.split('\\') {
+        if unsafe_mesh_component(part) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("mesh path {normalized_mesh:?} contains unsafe component {part:?}"),
+            ));
+        }
+
+        path = path.join(part);
+    }
+
+    Ok(path)
+}
+
+fn unsafe_mesh_component(part: &str) -> bool {
+    part.is_empty() || part == "." || part == ".." || part.contains(':')
 }
 
 #[cfg(test)]
@@ -55,5 +72,18 @@ mod tests {
             "grass\\flora\\foo.nif"
         );
         assert_eq!(grass_prefixed_mesh("Grass\\foo.nif"), "Grass\\foo.nif");
+    }
+
+    #[test]
+    fn mesh_output_path_rejects_unsafe_components() {
+        for mesh in [
+            "..\\evil.nif",
+            "flora\\..\\evil.nif",
+            "flora\\.\\evil.nif",
+            "flora\\\\evil.nif",
+            "c:\\evil.nif",
+        ] {
+            assert!(mesh_output_path(Path::new("out"), mesh).is_err());
+        }
     }
 }

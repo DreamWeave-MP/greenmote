@@ -267,7 +267,7 @@ pub fn resolve_mesh_copy_jobs(
     let mut missing = Vec::new();
     let jobs = mesh_paths
         .iter()
-        .filter_map(|mesh_path| {
+        .map(|mesh_path| {
             let backslash_key = format!("Meshes\\{mesh_path}");
             let slash_key = format!("Meshes/{}", mesh_path.replace('\\', "/"));
             let source = vfs
@@ -275,15 +275,18 @@ pub fn resolve_mesh_copy_jobs(
                 .or_else(|| vfs.get_file(&slash_key));
 
             if let Some(source) = source {
-                Some(MeshCopyJob {
+                Ok(Some(MeshCopyJob {
                     source_path: source.path().to_path_buf(),
-                    target_path: mesh::mesh_output_path(output_directory, mesh_path),
-                })
+                    target_path: mesh::mesh_output_path(output_directory, mesh_path)?,
+                }))
             } else {
                 missing.push(backslash_key);
-                None
+                Ok(None)
             }
         })
+        .collect::<io::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
 
     if missing.is_empty() {
@@ -369,7 +372,7 @@ pub fn write_summary(
             writer,
             "MESH {:?} -> {}",
             mesh_path,
-            mesh::mesh_output_path(&config.output_directory, mesh_path).display()
+            mesh::mesh_output_path(&config.output_directory, mesh_path)?.display()
         )?;
     }
 
@@ -418,7 +421,7 @@ mod tests {
     #[test]
     fn mesh_output_path_preserves_subdirectories_under_meshes_grass() {
         assert_eq!(
-            mesh::mesh_output_path(Path::new("out"), "flora\\tree\\grass.nif"),
+            mesh::mesh_output_path(Path::new("out"), "flora\\tree\\grass.nif").unwrap(),
             PathBuf::from("out")
                 .join("Meshes")
                 .join("grass")
