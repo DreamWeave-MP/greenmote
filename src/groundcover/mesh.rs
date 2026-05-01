@@ -24,11 +24,10 @@ pub fn grass_prefixed_mesh(mesh: &str) -> String {
 
 #[must_use]
 pub fn mesh_output_path(output_directory: &Path, normalized_mesh: &str) -> PathBuf {
-    normalized_mesh
-        .split('\\')
-        .fold(output_directory.join("Meshes").join("grass"), |path, part| {
-            path.join(part)
-        })
+    normalized_mesh.split('\\').fold(
+        output_directory.join("Meshes").join("grass"),
+        |path, part| path.join(part),
+    )
 }
 
 #[cfg(test)]
@@ -51,7 +50,10 @@ mod tests {
 
     #[test]
     fn grass_prefix_is_not_added_twice() {
-        assert_eq!(grass_prefixed_mesh("flora/foo.nif"), "grass\\flora\\foo.nif");
+        assert_eq!(
+            grass_prefixed_mesh("flora/foo.nif"),
+            "grass\\flora\\foo.nif"
+        );
         assert_eq!(grass_prefixed_mesh("Grass\\foo.nif"), "Grass\\foo.nif");
     }
 }

@@ -11,6 +11,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Convert vanilla-style static exterior refs into OpenMW groundcover.
+    /// Convert vanilla-style static exterior refs into `OpenMW` groundcover.
     Convert(GroundcoverArgs),
 }

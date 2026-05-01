@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::groundcover::{GroundcoverArgs, default};
 
 #[derive(Debug, Serialize, Deserialize)]
+// These are persisted/CLI-facing runtime toggles. Hiding them behind enums would make the Rust
+// type prettier and the TOML schema worse. That is not a trade.
+#[allow(clippy::struct_excessive_bools)]
 pub struct GroundcoverConfig {
     #[serde(default = "default::output_directory")]
     pub output_directory: PathBuf,
@@ -131,6 +134,11 @@ impl GroundcoverConfig {
         file.write_all(contents.as_bytes())
     }
 
+    /// Compiles the include, exclude, and ignored-plugin regex sets used during conversion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-data error if any configured regex is malformed.
     pub fn compile_regex_sets(&mut self) -> io::Result<()> {
         self.include_set = RegexSet::new(&self.grass_ids).map_err(to_io_error)?;
         self.exclude_set = RegexSet::new(&self.exclude).map_err(to_io_error)?;
@@ -187,7 +195,10 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(path_join(&self.path, crate::groundcover::DEFAULT_CONFIG_NAME));
+            let _ = std::fs::remove_file(path_join(
+                &self.path,
+                crate::groundcover::DEFAULT_CONFIG_NAME,
+            ));
             let _ = std::fs::remove_dir(&self.path);
         }
     }
@@ -205,7 +216,11 @@ mod tests {
 
         assert!(config.matches_static_id("flora_grass_01"));
         assert!(!config.matches_static_id("ab_furn_impplantergrass"));
-        assert!(dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME).is_file());
+        assert!(
+            dir.path
+                .join(crate::groundcover::DEFAULT_CONFIG_NAME)
+                .is_file()
+        );
     }
 
     #[test]
@@ -216,7 +231,11 @@ mod tests {
         let config = GroundcoverConfig::get(args, &dir.path).unwrap();
 
         assert!(config.dry_run);
-        assert!(!dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME).exists());
+        assert!(
+            !dir.path
+                .join(crate::groundcover::DEFAULT_CONFIG_NAME)
+                .exists()
+        );
     }
 
     #[test]

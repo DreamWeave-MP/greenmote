@@ -82,7 +82,9 @@ pub fn load_plugins(sources: Vec<SourcePlugin>) -> Vec<LoadedPlugin> {
 }
 
 fn load_one_plugin(source: &SourcePlugin) -> io::Result<Plugin> {
-    Plugin::from_path_filtered(&source.plugin_path, |tag| matches!(&tag, Cell::TAG | Static::TAG))
+    Plugin::from_path_filtered(&source.plugin_path, |tag| {
+        matches!(&tag, Cell::TAG | Static::TAG)
+    })
 }
 
 #[cfg(test)]

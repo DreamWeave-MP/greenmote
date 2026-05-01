@@ -2,8 +2,8 @@ use std::io;
 
 use clap::CommandFactory;
 
-mod args;
 mod app;
+mod args;
 mod config;
 pub mod default;
 mod load;
@@ -20,6 +20,11 @@ pub const DELETED_PLUGIN_NAME: &str = "deleted_groundcover.omwaddon";
 pub const GROUNDCOVER_PLUGIN_NAME: &str = "groundcover.omwaddon";
 pub const LOG_NAME: &str = "groundcoverify.log";
 
+/// Runs the groundcover conversion subcommand.
+///
+/// # Errors
+///
+/// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
 pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     app::run(args)
 }

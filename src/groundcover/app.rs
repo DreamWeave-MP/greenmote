@@ -51,7 +51,11 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
             .iter()
             .map(|cell_plan| cell_plan.groundcover_cells.len())
             .sum(),
-        touched_refs: plan.cell_plans.iter().map(|cell_plan| cell_plan.touched_refs).sum(),
+        touched_refs: plan
+            .cell_plans
+            .iter()
+            .map(|cell_plan| cell_plan.touched_refs)
+            .sum(),
         meshes_to_copy: plan.mesh_paths.len(),
     };
 
@@ -68,7 +72,8 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     output::add_masters(&mut built, &plan)?;
     output::save_plugins(built, &config)?;
 
-    let mesh_jobs = output::resolve_mesh_copy_jobs(&vfs, &plan.mesh_paths, &config.output_directory);
+    let mesh_jobs =
+        output::resolve_mesh_copy_jobs(&vfs, &plan.mesh_paths, &config.output_directory);
     output::copy_meshes(&mesh_jobs)?;
 
     if config.auto_enable {
@@ -106,7 +111,9 @@ fn get_config_path(args: &GroundcoverArgs) -> PathBuf {
             return absolute_path;
         }
 
-        panic!("explicit --openmw-cfg path is neither a file nor a directory containing openmw.cfg");
+        panic!(
+            "explicit --openmw-cfg path is neither a file nor a directory containing openmw.cfg"
+        );
     }
 
     let cwd_cfg = std::env::current_dir()

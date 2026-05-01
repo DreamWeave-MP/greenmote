@@ -73,7 +73,11 @@ pub fn build_plugins(plan: &ConversionPlan) -> BuiltPlugins {
         );
     }
 
-    groundcover_header.num_objects = groundcover_plugin.objects.len().try_into().unwrap_or(u32::MAX);
+    groundcover_header.num_objects = groundcover_plugin
+        .objects
+        .len()
+        .try_into()
+        .unwrap_or(u32::MAX);
     deleted_header.num_objects = deleted_plugin.objects.len().try_into().unwrap_or(u32::MAX);
 
     BuiltPlugins {
@@ -85,11 +89,12 @@ pub fn build_plugins(plan: &ConversionPlan) -> BuiltPlugins {
     }
 }
 
-pub fn add_masters(
-    built: &mut BuiltPlugins,
-    plan: &ConversionPlan,
-) -> io::Result<()> {
-    let mut load_indices = built.contributing_masters.iter().copied().collect::<Vec<_>>();
+pub fn add_masters(built: &mut BuiltPlugins, plan: &ConversionPlan) -> io::Result<()> {
+    let mut load_indices = built
+        .contributing_masters
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
     load_indices.sort_unstable();
 
     for load_index in load_indices {
@@ -171,15 +176,14 @@ pub fn resolve_mesh_copy_jobs(
                 .get_file(&backslash_key)
                 .or_else(|| vfs.get_file(&slash_key));
 
-            match source {
-                Some(source) => Some(MeshCopyJob {
+            if let Some(source) = source {
+                Some(MeshCopyJob {
                     source_path: source.path().to_path_buf(),
                     target_path: mesh::mesh_output_path(output_directory, mesh_path),
-                }),
-                None => {
-                    eprintln!("[ WARNING ]: Mesh not found in VFS: {backslash_key}");
-                    None
-                }
+                })
+            } else {
+                eprintln!("[ WARNING ]: Mesh not found in VFS: {backslash_key}");
+                None
             }
         })
         .collect()
@@ -235,7 +239,9 @@ fn groundcover_header() -> Header {
     Header {
         version: 1.3,
         author: FixedString("greenmote".to_owned()),
-        description: FixedString("Generated groundcover plugin from vanilla-style static refs".to_owned()),
+        description: FixedString(
+            "Generated groundcover plugin from vanilla-style static refs".to_owned(),
+        ),
         file_type: FileType::Esp,
         flags: ObjectFlags::default(),
         num_objects: 0,
@@ -257,7 +263,10 @@ fn deleted_header() -> Header {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, path::PathBuf};
+    use std::{
+        collections::{BTreeSet, HashSet},
+        path::PathBuf,
+    };
 
     use super::*;
 
@@ -265,7 +274,12 @@ mod tests {
     fn mesh_output_path_preserves_subdirectories_under_meshes_grass() {
         assert_eq!(
             mesh::mesh_output_path(Path::new("out"), "flora\\tree\\grass.nif"),
-            PathBuf::from("out").join("Meshes").join("grass").join("flora").join("tree").join("grass.nif")
+            PathBuf::from("out")
+                .join("Meshes")
+                .join("grass")
+                .join("flora")
+                .join("tree")
+                .join("grass.nif")
         );
     }
 
@@ -274,7 +288,7 @@ mod tests {
         let plan = ConversionPlan {
             static_plans: Vec::new(),
             cell_plans: Vec::new(),
-            matched_static_ids: Default::default(),
+            matched_static_ids: HashSet::new(),
             mesh_paths: BTreeSet::new(),
         };
 

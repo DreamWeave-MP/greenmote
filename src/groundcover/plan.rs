@@ -53,7 +53,8 @@ pub fn build_conversion_plan(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,
 ) -> ConversionPlan {
-    let (static_plans, matched_static_ids, mesh_paths) = collect_winning_statics(loaded_plugins, config);
+    let (static_plans, matched_static_ids, mesh_paths) =
+        collect_winning_statics(loaded_plugins, config);
     let mut cell_plans = scan_cells_parallel(loaded_plugins, &matched_static_ids);
     cell_plans.sort_by(|left, right| right.load_index.cmp(&left.load_index));
 
@@ -197,8 +198,14 @@ mod tests {
     #[test]
     fn later_static_definition_wins_for_duplicate_ids() {
         let plugins = vec![
-            loaded(0, vec![static_record("flora_grass_01", "flora\\grass.nif").into()]),
-            loaded(1, vec![static_record("flora_grass_01", "flora\\planter.nif").into()]),
+            loaded(
+                0,
+                vec![static_record("flora_grass_01", "flora\\grass.nif").into()],
+            ),
+            loaded(
+                1,
+                vec![static_record("flora_grass_01", "flora\\planter.nif").into()],
+            ),
         ];
 
         let plan = build_conversion_plan(&plugins, &config());
@@ -225,7 +232,10 @@ mod tests {
         let plan = build_conversion_plan(&plugins, &config());
 
         assert_eq!(plan.static_plans.len(), 1);
-        assert_eq!(plan.static_plans[0].output_static.mesh, "grass\\flora\\grass.nif");
+        assert_eq!(
+            plan.static_plans[0].output_static.mesh,
+            "grass\\flora\\grass.nif"
+        );
         assert_eq!(plan.cell_plans[0].touched_refs, 1);
         assert_eq!(plan.cell_plans[0].groundcover_cells.len(), 1);
         assert_eq!(plan.cell_plans[0].deleted_cells.len(), 1);
@@ -242,7 +252,11 @@ mod tests {
             0,
             vec![
                 static_record("flora_grass_01", "flora\\grass.nif").into(),
-                interior_cell("Caius Cosades' House", [((0, 1), reference("flora_grass_01"))]).into(),
+                interior_cell(
+                    "Caius Cosades' House",
+                    [((0, 1), reference("flora_grass_01"))],
+                )
+                .into(),
             ],
         )];
 

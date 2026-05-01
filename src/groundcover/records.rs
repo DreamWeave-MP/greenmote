@@ -1,21 +1,26 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, hash::BuildHasher};
 
 use tes3::esp::{Cell, Plugin, Reference};
 
 #[must_use]
-pub fn process_exterior_cells(
+pub fn process_exterior_cells<S: BuildHasher>(
     plugin: &Plugin,
-    matched_static_ids: &HashSet<String>,
+    matched_static_ids: &HashSet<String, S>,
 ) -> (Vec<Cell>, Vec<Cell>, usize) {
     let mut groundcover_cells = Vec::new();
     let mut deleted_cells = Vec::new();
     let mut touched_refs = 0;
 
-    for cell in plugin.objects_of_type::<Cell>().filter(|cell| cell.is_exterior()) {
+    for cell in plugin
+        .objects_of_type::<Cell>()
+        .filter(|cell| cell.is_exterior())
+    {
         let matching_refs = cell
             .references
             .iter()
-            .filter(|(_, reference)| matched_static_ids.contains(&reference.id.to_ascii_lowercase()))
+            .filter(|(_, reference)| {
+                matched_static_ids.contains(&reference.id.to_ascii_lowercase())
+            })
             .collect::<Vec<_>>();
 
         if matching_refs.is_empty() {
@@ -42,16 +47,9 @@ pub fn process_exterior_cells(
 }
 
 fn minimal_cell_shell(source: &Cell) -> Cell {
-    Cell {
-        flags: source.flags,
-        name: source.name.clone(),
-        data: source.data.clone(),
-        region: source.region.clone(),
-        map_color: source.map_color,
-        water_height: source.water_height,
-        atmosphere_data: source.atmosphere_data.clone(),
-        references: Default::default(),
-    }
+    let mut cell = source.clone();
+    cell.references.clear();
+    cell
 }
 
 fn mark_reference_deleted(reference: &mut Reference) {
