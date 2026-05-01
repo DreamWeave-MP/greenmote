@@ -323,6 +323,53 @@ mod tests {
         config
     }
 
+    fn master(name: &str, size: u64) -> MasterSpec {
+        MasterSpec {
+            name: name.to_owned(),
+            size,
+        }
+    }
+
+    #[test]
+    fn source_index_zero_master_chain_includes_header_masters_then_source() {
+        let cell_plan = PluginCellPlan {
+            load_index: 0,
+            plugin_name: "Bloodmoon.esm".to_owned(),
+            plugin_path: PathBuf::from("Bloodmoon.esm"),
+            source_master: master("Bloodmoon.esm", 2),
+            header_masters: vec![master("Morrowind.esm", 1)],
+            groundcover_cells: Vec::new(),
+            deleted_cells: Vec::new(),
+            touched_refs: 0,
+        };
+
+        let chain = cell_plan.master_chain_for_source_index(0).unwrap();
+
+        assert_eq!(chain[0].name, "Morrowind.esm");
+        assert_eq!(chain[1].name, "Bloodmoon.esm");
+    }
+
+    #[test]
+    fn header_master_index_chain_includes_prefix_through_target() {
+        let cell_plan = PluginCellPlan {
+            load_index: 0,
+            plugin_name: "Patch.esp".to_owned(),
+            plugin_path: PathBuf::from("Patch.esp"),
+            source_master: master("Patch.esp", 3),
+            header_masters: vec![master("Morrowind.esm", 1), master("Tribunal.esm", 2)],
+            groundcover_cells: Vec::new(),
+            deleted_cells: Vec::new(),
+            touched_refs: 0,
+        };
+
+        let chain = cell_plan.master_chain_for_source_index(2).unwrap();
+
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].name, "Morrowind.esm");
+        assert_eq!(chain[1].name, "Tribunal.esm");
+        assert!(cell_plan.master_chain_for_source_index(3).is_none());
+    }
+
     #[test]
     fn later_static_definition_wins_for_duplicate_ids() {
         let plugins = vec![
