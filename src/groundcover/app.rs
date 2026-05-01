@@ -30,9 +30,9 @@ pub fn run(
         return Ok(());
     }
 
-    if config.auto_enable {
-        auto_enable::validate_output_directory(&openmw_config, &config)?;
-    }
+    let initial_enablement = auto_enable::status(&openmw_config, &config);
+
+    validate_auto_enable(&openmw_config, &config, initial_enablement)?;
 
     let content_files = openmw::content_files(&openmw_config)?;
     let vfs = openmw::build_vfs(&openmw_config);
@@ -105,24 +105,49 @@ pub fn run(
         progress::emit_progress(events, ConversionPhase::CopyingMeshes, current, total);
     })?;
 
-    if config.auto_enable {
-        progress::emit_phase(events, ConversionPhase::AutoEnabling);
-        let backup = auto_enable::outputs(&mut openmw_config, &config)?;
-        writeln!(
-            stdout,
-            "Updated OpenMW config; backup saved at {}",
-            backup.display()
-        )?;
-    }
+    run_auto_enable(stdout, &mut openmw_config, &config, events)?;
 
     progress::emit_phase(events, ConversionPhase::WritingLog);
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
     let mut log = File::create(&log_path)?;
     output::write_summary(&mut log, &summary, &plan, &config)?;
 
-    print_success(stdout, &config, &log_path, mesh_jobs.len())?;
+    print_success(
+        stdout,
+        &config,
+        &log_path,
+        mesh_jobs.len(),
+        initial_enablement,
+    )?;
 
     Ok(())
+}
+
+fn validate_auto_enable(
+    openmw_config: &openmw_config::OpenMWConfiguration,
+    config: &GroundcoverConfig,
+    enablement: auto_enable::OutputEnablement,
+) -> io::Result<()> {
+    if config.auto_enable && enablement.has_missing_outputs() {
+        auto_enable::validate_output_directory(openmw_config, config)?;
+    }
+
+    Ok(())
+}
+
+fn run_auto_enable(
+    stdout: &mut dyn Write,
+    openmw_config: &mut openmw_config::OpenMWConfiguration,
+    config: &GroundcoverConfig,
+    events: &EventSink<'_>,
+) -> io::Result<()> {
+    if !config.auto_enable {
+        return Ok(());
+    }
+
+    progress::emit_phase(events, ConversionPhase::AutoEnabling);
+    let result = auto_enable::outputs(openmw_config, config)?;
+    print_auto_enable_result(stdout, config, &result)
 }
 
 fn build_run_summary(
@@ -201,6 +226,7 @@ fn print_success(
     config: &GroundcoverConfig,
     log_path: &Path,
     copied_meshes: usize,
+    enablement: auto_enable::OutputEnablement,
 ) -> io::Result<()> {
     writeln!(
         writer,
@@ -212,12 +238,73 @@ fn print_success(
     writeln!(writer, "Copied {copied_meshes} meshes under Meshes/grass")?;
     writeln!(writer, "Wrote log to {}", log_path.display())?;
     if !config.auto_enable {
-        writeln!(
-            writer,
-            "Add {} as groundcover= and {} as content= in openmw.cfg.",
-            config.groundcover_output, config.deleted_output
-        )?;
+        print_manual_enablement_guidance(writer, config, enablement)?;
     }
 
     Ok(())
+}
+
+fn print_auto_enable_result(
+    writer: &mut dyn Write,
+    config: &GroundcoverConfig,
+    result: &auto_enable::AutoEnableResult,
+) -> io::Result<()> {
+    let Some(backup) = &result.backup else {
+        writeln!(
+            writer,
+            "OpenMW config already enables generated plugins; no update needed."
+        )?;
+        return Ok(());
+    };
+
+    match (result.added_groundcover, result.added_deleted) {
+        (true, true) => writeln!(
+            writer,
+            "Updated OpenMW config with {} as groundcover= and {} as content=; backup saved at {}",
+            config.groundcover_output,
+            config.deleted_output,
+            backup.display()
+        ),
+        (true, false) => writeln!(
+            writer,
+            "Updated OpenMW config with {} as groundcover=; backup saved at {}",
+            config.groundcover_output,
+            backup.display()
+        ),
+        (false, true) => writeln!(
+            writer,
+            "Updated OpenMW config with {} as content=; backup saved at {}",
+            config.deleted_output,
+            backup.display()
+        ),
+        (false, false) => unreachable!("auto-enable backup without added outputs is meaningless"),
+    }
+}
+
+fn print_manual_enablement_guidance(
+    writer: &mut dyn Write,
+    config: &GroundcoverConfig,
+    enablement: auto_enable::OutputEnablement,
+) -> io::Result<()> {
+    match (enablement.groundcover_enabled, enablement.deleted_enabled) {
+        (true, true) => writeln!(
+            writer,
+            "Generated plugins are already enabled in openmw.cfg."
+        ),
+        (false, false) => writeln!(
+            writer,
+            "Add {} as groundcover= and {} as content= in openmw.cfg.",
+            config.groundcover_output, config.deleted_output
+        ),
+        (false, true) => writeln!(
+            writer,
+            "Add {} as groundcover= in openmw.cfg.",
+            config.groundcover_output
+        ),
+        (true, false) => writeln!(
+            writer,
+            "Add {} as content= in openmw.cfg.",
+            config.deleted_output
+        ),
+    }
 }

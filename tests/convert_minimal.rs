@@ -1,4 +1,5 @@
 use std::{
+    io::Cursor,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -134,6 +135,179 @@ fn convert_outputs_are_deterministic_for_same_fixture() {
     assert_eq!(first.deleted, second.deleted);
 }
 
+#[test]
+fn manual_guidance_reports_already_enabled_outputs() {
+    let config_dir = TempDir::new("manual-enabled-config");
+    let data_dir = TempDir::new("manual-enabled-data");
+    let output_dir = TempDir::new("manual-enabled-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        true,
+        true,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(args_for(config_dir.path()), &mut stdout, &mut stderr)
+        .unwrap();
+
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert!(stdout.contains("Generated plugins are already enabled in openmw.cfg."));
+    assert!(!stdout.contains("Add groundcover.omwaddon"));
+}
+
+#[test]
+fn manual_guidance_reports_only_missing_deleted_output() {
+    let config_dir = TempDir::new("manual-deleted-config");
+    let data_dir = TempDir::new("manual-deleted-data");
+    let output_dir = TempDir::new("manual-deleted-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        true,
+        false,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(args_for(config_dir.path()), &mut stdout, &mut stderr)
+        .unwrap();
+
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert!(stdout.contains("Add deleted_groundcover.omwaddon as content= in openmw.cfg."));
+    assert!(!stdout.contains("groundcover.omwaddon as groundcover="));
+}
+
+#[test]
+fn auto_enable_does_not_rewrite_when_outputs_are_already_enabled() {
+    let config_dir = TempDir::new("auto-enabled-config");
+    let data_dir = TempDir::new("auto-enabled-data");
+    let output_dir = TempDir::new("auto-enabled-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        true,
+        true,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let before = std::fs::read(config_dir.path().join("openmw.cfg")).unwrap();
+    let mut args = args_for(config_dir.path());
+    args.auto_enable = true;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr).unwrap();
+
+    let after = std::fs::read(config_dir.path().join("openmw.cfg")).unwrap();
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert_eq!(after, before);
+    assert!(!config_dir.path().join("openmw.cfg.greenmote.bak").exists());
+    assert!(stdout.contains("OpenMW config already enables generated plugins; no update needed."));
+}
+
+#[test]
+fn auto_enable_adds_only_missing_deleted_output() {
+    let config_dir = TempDir::new("auto-deleted-config");
+    let data_dir = TempDir::new("auto-deleted-data");
+    let output_dir = TempDir::new("auto-deleted-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        true,
+        false,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let mut args = args_for(config_dir.path());
+    args.auto_enable = true;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr).unwrap();
+
+    let openmw_cfg = std::fs::read_to_string(config_dir.path().join("openmw.cfg")).unwrap();
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert!(config_dir.path().join("openmw.cfg.greenmote.bak").exists());
+    assert_eq!(
+        openmw_cfg
+            .matches("groundcover=groundcover.omwaddon")
+            .count(),
+        1
+    );
+    assert!(openmw_cfg.contains("content=deleted_groundcover.omwaddon"));
+    assert!(stdout.contains("Updated OpenMW config with deleted_groundcover.omwaddon as content="));
+    assert!(!stdout.contains("groundcover.omwaddon as groundcover= and"));
+}
+
+#[test]
+fn auto_enable_allows_invisible_output_when_outputs_are_already_enabled() {
+    let config_dir = TempDir::new("auto-invisible-enabled-config");
+    let data_dir = TempDir::new("auto-invisible-enabled-data");
+    let output_dir = TempDir::new("auto-invisible-enabled-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        true,
+        true,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let invisible_output = TempDir::new("auto-invisible-enabled-target");
+    let mut args = args_for(config_dir.path());
+    args.auto_enable = true;
+    args.output = Some(invisible_output.path().to_owned());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr).unwrap();
+
+    assert!(!config_dir.path().join("openmw.cfg.greenmote.bak").exists());
+}
+
+#[test]
+fn auto_enable_rejects_invisible_output_when_an_output_is_missing() {
+    let config_dir = TempDir::new("auto-invisible-missing-config");
+    let data_dir = TempDir::new("auto-invisible-missing-data");
+    let output_dir = TempDir::new("auto-invisible-missing-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        true,
+        false,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let invisible_output = TempDir::new("auto-invisible-missing-target");
+    let mut args = args_for(config_dir.path());
+    args.auto_enable = true;
+    args.output = Some(invisible_output.path().to_owned());
+    let mut stdout = Cursor::new(Vec::new());
+    let mut stderr = Cursor::new(Vec::new());
+
+    let result = greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr);
+
+    assert!(result.is_err());
+    assert!(
+        !invisible_output
+            .path()
+            .join(GROUNDCOVER_PLUGIN_NAME)
+            .exists()
+    );
+    assert!(!config_dir.path().join("openmw.cfg.greenmote.bak").exists());
+}
+
 struct GeneratedBytes {
     groundcover: Vec<u8>,
     deleted: Vec<u8>,
@@ -169,15 +343,29 @@ fn args_for(config_dir: &Path) -> GroundcoverArgs {
 }
 
 fn write_openmw_cfg(config_dir: &Path, data_dir: &Path, output_dir: &Path) {
-    std::fs::write(
-        config_dir.join("openmw.cfg"),
-        format!(
-            "data-local={}\ndata={}\ncontent=Source.esp\n",
-            output_dir.display(),
-            data_dir.display()
-        ),
-    )
-    .unwrap();
+    write_openmw_cfg_with_outputs(config_dir, data_dir, output_dir, false, false);
+}
+
+fn write_openmw_cfg_with_outputs(
+    config_dir: &Path,
+    data_dir: &Path,
+    output_dir: &Path,
+    groundcover_enabled: bool,
+    deleted_enabled: bool,
+) {
+    let mut contents = format!(
+        "data-local={}\ndata={}\ncontent=Source.esp\n",
+        output_dir.display(),
+        data_dir.display()
+    );
+    if groundcover_enabled {
+        contents.push_str("groundcover=groundcover.omwaddon\n");
+    }
+    if deleted_enabled {
+        contents.push_str("content=deleted_groundcover.omwaddon\n");
+    }
+
+    std::fs::write(config_dir.join("openmw.cfg"), contents).unwrap();
 }
 
 fn write_source_plugin(data_dir: &Path) {

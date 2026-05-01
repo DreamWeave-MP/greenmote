@@ -8,6 +8,26 @@ use openmw_config::OpenMWConfiguration;
 
 use crate::groundcover::GroundcoverConfig;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OutputEnablement {
+    pub groundcover_enabled: bool,
+    pub deleted_enabled: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct AutoEnableResult {
+    pub backup: Option<PathBuf>,
+    pub added_groundcover: bool,
+    pub added_deleted: bool,
+}
+
+impl OutputEnablement {
+    #[must_use]
+    pub fn has_missing_outputs(self) -> bool {
+        !self.groundcover_enabled || !self.deleted_enabled
+    }
+}
+
 pub fn validate_output_directory(
     config: &OpenMWConfiguration,
     groundcover_config: &GroundcoverConfig,
@@ -25,27 +45,50 @@ pub fn validate_output_directory(
     }
 }
 
+pub fn status(
+    config: &OpenMWConfiguration,
+    groundcover_config: &GroundcoverConfig,
+) -> OutputEnablement {
+    OutputEnablement {
+        groundcover_enabled: config.has_groundcover_file(&groundcover_config.groundcover_output),
+        deleted_enabled: config.has_content_file(&groundcover_config.deleted_output),
+    }
+}
+
 pub fn outputs(
     config: &mut OpenMWConfiguration,
     groundcover_config: &GroundcoverConfig,
-) -> io::Result<PathBuf> {
+) -> io::Result<AutoEnableResult> {
+    let status = status(config, groundcover_config);
+    if !status.has_missing_outputs() {
+        return Ok(AutoEnableResult {
+            backup: None,
+            added_groundcover: false,
+            added_deleted: false,
+        });
+    }
+
     let user_openmw_cfg = config.user_config_path().join("openmw.cfg");
     let backup = backup_openmw_cfg(&user_openmw_cfg)?;
 
-    if !config.has_groundcover_file(&groundcover_config.groundcover_output) {
+    if !status.groundcover_enabled {
         config
             .add_groundcover_file(&groundcover_config.groundcover_output)
             .map_err(to_io_error)?;
     }
 
-    if !config.has_content_file(&groundcover_config.deleted_output) {
+    if !status.deleted_enabled {
         config
             .add_content_file(&groundcover_config.deleted_output)
             .map_err(to_io_error)?;
     }
 
     config.save_user().map_err(to_io_error)?;
-    Ok(backup)
+    Ok(AutoEnableResult {
+        backup: Some(backup),
+        added_groundcover: !status.groundcover_enabled,
+        added_deleted: !status.deleted_enabled,
+    })
 }
 
 fn backup_openmw_cfg(openmw_cfg: &Path) -> io::Result<PathBuf> {
