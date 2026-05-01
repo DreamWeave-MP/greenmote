@@ -395,6 +395,7 @@ impl GreenmoteApp {
 
             match receiver.try_recv() {
                 Ok(GuiEvent::Progress(event)) => {
+                    self.record_reached_phase(event_phase(event));
                     pending_progress.merge(event);
                     processed += 1;
                 }
