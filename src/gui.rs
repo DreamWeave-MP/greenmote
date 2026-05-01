@@ -44,10 +44,17 @@ struct SettingsUiState {
     selected_tab: SettingsTab,
     draft: SettingsDraft,
     config_path: Option<PathBuf>,
+    pending_action: Option<PendingSettingsAction>,
     loaded: bool,
     dirty: bool,
     status: String,
     error: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum PendingSettingsAction {
+    ShowScreen(Screen),
+    SelectTab(SettingsTab),
 }
 
 #[derive(Default)]
@@ -110,6 +117,7 @@ impl Default for SettingsUiState {
             selected_tab: SettingsTab::General,
             draft: SettingsDraft::from_config(&GroundcoverConfig::default()),
             config_path: None,
+            pending_action: None,
             loaded: false,
             dirty: false,
             status: String::new(),
@@ -132,6 +140,8 @@ impl eframe::App for GreenmoteApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.show_active_screen(ui, ctx);
         });
+
+        self.show_pending_settings_prompt(ctx);
     }
 }
 
@@ -143,15 +153,14 @@ impl GreenmoteApp {
                 .add(egui::Button::new("Convert").selected(self.screen == Screen::Convert))
                 .clicked()
             {
-                self.screen = Screen::Convert;
+                self.request_screen(Screen::Convert);
             }
 
             if ui
                 .add(egui::Button::new("Settings").selected(self.screen == Screen::Settings))
                 .clicked()
             {
-                self.screen = Screen::Settings;
-                self.load_settings();
+                self.request_screen(Screen::Settings);
             }
         });
     }
@@ -193,16 +202,24 @@ impl GreenmoteApp {
     fn show_settings_screen(&mut self, ui: &mut egui::Ui) {
         ui.heading("Settings");
         ui.horizontal(|ui| {
-            ui.selectable_value(
-                &mut self.settings.selected_tab,
-                SettingsTab::General,
-                "General",
-            );
-            ui.selectable_value(
-                &mut self.settings.selected_tab,
-                SettingsTab::Convert,
-                "Convert",
-            );
+            if ui
+                .selectable_label(
+                    self.settings.selected_tab == SettingsTab::General,
+                    "General",
+                )
+                .clicked()
+            {
+                self.request_settings_tab(SettingsTab::General);
+            }
+            if ui
+                .selectable_label(
+                    self.settings.selected_tab == SettingsTab::Convert,
+                    "Convert",
+                )
+                .clicked()
+            {
+                self.request_settings_tab(SettingsTab::Convert);
+            }
         });
         ui.separator();
 
@@ -326,27 +343,41 @@ impl GreenmoteApp {
             return;
         }
 
+        self.reload_settings();
+    }
+
+    fn reload_settings(&mut self) -> bool {
+        self.load_settings_from_disk("Loaded")
+    }
+
+    fn discard_settings(&mut self) -> bool {
+        self.load_settings_from_disk("Discarded changes and reloaded")
+    }
+
+    fn load_settings_from_disk(&mut self, verb: &str) -> bool {
         match groundcover::load_config_for_edit(&GroundcoverArgs::default()) {
             Ok((path, config)) => {
                 self.settings.draft = SettingsDraft::from_config(&config);
                 self.settings.config_path = Some(path.clone());
                 self.settings.loaded = true;
                 self.settings.dirty = false;
-                self.settings.status = format!("Loaded {}", path.display());
+                self.settings.status = format!("{verb} {}", path.display());
                 self.settings.error = None;
+                true
             }
             Err(error) => {
                 self.settings.loaded = false;
                 self.settings.status.clear();
                 self.settings.error = Some(format!("Failed to load settings: {error}"));
+                false
             }
         }
     }
 
-    fn save_settings(&mut self) {
+    fn save_settings(&mut self) -> bool {
         let Some(path) = self.settings.config_path.clone() else {
             self.settings.error = Some("No greenmote.toml path is available.".to_owned());
-            return;
+            return false;
         };
 
         let config = self.settings.draft.to_config();
@@ -356,11 +387,92 @@ impl GreenmoteApp {
                 self.settings.dirty = false;
                 self.settings.status = format!("Saved {}", path.display());
                 self.settings.error = None;
+                true
             }
             Err(error) => {
                 self.settings.status.clear();
                 self.settings.error = Some(format!("Failed to save settings: {error}"));
+                false
             }
+        }
+    }
+
+    fn request_screen(&mut self, screen: Screen) {
+        if self.screen == screen {
+            return;
+        }
+
+        if self.settings.dirty {
+            self.settings.pending_action = Some(PendingSettingsAction::ShowScreen(screen));
+        } else {
+            self.show_screen(screen);
+        }
+    }
+
+    fn request_settings_tab(&mut self, tab: SettingsTab) {
+        if self.settings.selected_tab == tab {
+            return;
+        }
+
+        if self.settings.dirty {
+            self.settings.pending_action = Some(PendingSettingsAction::SelectTab(tab));
+        } else {
+            self.settings.selected_tab = tab;
+        }
+    }
+
+    fn show_screen(&mut self, screen: Screen) {
+        self.screen = screen;
+        if screen == Screen::Settings {
+            self.load_settings();
+        }
+    }
+
+    fn perform_pending_settings_action(&mut self) {
+        let Some(action) = self.settings.pending_action.take() else {
+            return;
+        };
+
+        match action {
+            PendingSettingsAction::ShowScreen(screen) => self.show_screen(screen),
+            PendingSettingsAction::SelectTab(tab) => self.settings.selected_tab = tab,
+        }
+    }
+
+    fn show_pending_settings_prompt(&mut self, ctx: &egui::Context) {
+        if self.settings.pending_action.is_none() {
+            return;
+        }
+
+        let mut save = false;
+        let mut discard = false;
+        let mut cancel = false;
+
+        egui::Window::new("Unsaved settings")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Settings have unsaved changes.");
+                ui.label("Save them before switching views?");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    save = ui.button("Save").clicked();
+                    discard = ui.button("Discard").clicked();
+                    cancel = ui.button("Cancel").clicked();
+                });
+            });
+
+        if save {
+            if self.save_settings() {
+                self.perform_pending_settings_action();
+            }
+        } else if discard {
+            if self.discard_settings() {
+                self.perform_pending_settings_action();
+            }
+        } else if cancel {
+            self.settings.pending_action = None;
         }
     }
 
