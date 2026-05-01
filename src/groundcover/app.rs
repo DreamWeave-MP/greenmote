@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::{File, copy},
     io,
     path::{Path, PathBuf},
@@ -49,11 +50,12 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
 
     let sources = load::resolve_source_plugins(&content_files, &config, &vfs);
     let static_plugins = load::load_plugins_for_static_planning(sources.clone());
-    let static_plan = build_static_conversion_plan(&static_plugins, &config);
+    let static_plan = build_static_conversion_plan(&static_plugins, &config)?;
     let (loaded_plugins, cell_plans) = if static_plan.matched_static_ids.is_empty() {
         (static_plugins.len(), Vec::new())
     } else {
-        let cell_plugins = load::load_plugins(sources);
+        let cell_plugins = load::load_plugins_for_cell_scanning(sources);
+        ensure_static_sources_loaded_for_cell_scanning(&static_plan, &cell_plugins)?;
         let cell_plans = scan_cells_parallel(&cell_plugins, &static_plan.matched_static_ids);
         (cell_plugins.len(), cell_plans)
     };
@@ -170,6 +172,34 @@ fn content_files(config: &OpenMWConfiguration) -> io::Result<Vec<String>> {
         ))
     } else {
         Ok(content_files)
+    }
+}
+
+fn ensure_static_sources_loaded_for_cell_scanning(
+    static_plan: &crate::groundcover::plan::StaticConversionPlan,
+    cell_plugins: &[crate::groundcover::plan::LoadedPlugin],
+) -> io::Result<()> {
+    let cell_load_indices = cell_plugins
+        .iter()
+        .map(|plugin| plugin.load_index)
+        .collect::<HashSet<_>>();
+    let missing = static_plan
+        .static_plans
+        .iter()
+        .filter(|plan| !cell_load_indices.contains(&plan.source_load_index))
+        .map(|plan| plan.source_plugin_name.as_str())
+        .collect::<Vec<_>>();
+
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "plugins contributed matched statics but could not be loaded for cell scanning: {}",
+                missing.join(", ")
+            ),
+        ))
     }
 }
 

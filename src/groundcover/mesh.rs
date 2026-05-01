@@ -3,26 +3,40 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[must_use]
-pub fn normalize_mesh_for_copy(mesh: &str) -> Option<String> {
+/// Normalizes a source mesh path for VFS lookup/copying.
+///
+/// # Errors
+///
+/// Returns invalid input if the mesh path contains empty, current-directory, parent-directory,
+/// or drive-prefixed components.
+pub fn normalize_mesh_for_copy(mesh: &str) -> io::Result<Option<String>> {
     let normalized = mesh.replace('/', "\\").to_ascii_lowercase();
+    validate_mesh_path_components(&normalized)?;
 
     if normalized.starts_with("grass\\") {
-        None
+        Ok(None)
     } else {
-        Some(normalized)
+        Ok(Some(normalized))
     }
 }
 
-#[must_use]
-pub fn grass_prefixed_mesh(mesh: &str) -> String {
+/// Normalizes a source mesh path and ensures it is rooted under `grass\`.
+///
+/// # Errors
+///
+/// Returns invalid input if the final mesh path contains empty, current-directory,
+/// parent-directory, or drive-prefixed components.
+pub fn grass_prefixed_mesh(mesh: &str) -> io::Result<String> {
     let normalized = mesh.replace('/', "\\");
-
-    if normalized.to_ascii_lowercase().starts_with("grass\\") {
+    let prefixed = if normalized.to_ascii_lowercase().starts_with("grass\\") {
         normalized
     } else {
         format!("grass\\{normalized}")
-    }
+    };
+
+    validate_mesh_path_components(&prefixed)?;
+
+    Ok(prefixed)
 }
 
 /// Builds the output path for a normalized mesh under `Meshes/grass`.
@@ -34,18 +48,26 @@ pub fn grass_prefixed_mesh(mesh: &str) -> String {
 pub fn mesh_output_path(output_directory: &Path, normalized_mesh: &str) -> io::Result<PathBuf> {
     let mut path = output_directory.join("Meshes").join("grass");
 
-    for part in normalized_mesh.split('\\') {
-        if unsafe_mesh_component(part) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("mesh path {normalized_mesh:?} contains unsafe component {part:?}"),
-            ));
-        }
+    validate_mesh_path_components(normalized_mesh)?;
 
+    for part in normalized_mesh.split('\\') {
         path = path.join(part);
     }
 
     Ok(path)
+}
+
+fn validate_mesh_path_components(mesh_path: &str) -> io::Result<()> {
+    for part in mesh_path.split('\\') {
+        if unsafe_mesh_component(part) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("mesh path {mesh_path:?} contains unsafe component {part:?}"),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn unsafe_mesh_component(part: &str) -> bool {
@@ -58,14 +80,14 @@ mod tests {
 
     #[test]
     fn mesh_copy_normalization_skips_existing_grass_meshes() {
-        assert_eq!(normalize_mesh_for_copy("Grass\\foo.nif"), None);
-        assert_eq!(normalize_mesh_for_copy("grass/foo.nif"), None);
+        assert_eq!(normalize_mesh_for_copy("Grass\\foo.nif").unwrap(), None);
+        assert_eq!(normalize_mesh_for_copy("grass/foo.nif").unwrap(), None);
     }
 
     #[test]
     fn mesh_copy_normalization_lowercases_non_grass_meshes() {
         assert_eq!(
-            normalize_mesh_for_copy("Flora/Foo.NIF"),
+            normalize_mesh_for_copy("Flora/Foo.NIF").unwrap(),
             Some("flora\\foo.nif".to_owned())
         );
     }
@@ -73,10 +95,26 @@ mod tests {
     #[test]
     fn grass_prefix_is_not_added_twice() {
         assert_eq!(
-            grass_prefixed_mesh("flora/foo.nif"),
+            grass_prefixed_mesh("flora/foo.nif").unwrap(),
             "grass\\flora\\foo.nif"
         );
-        assert_eq!(grass_prefixed_mesh("Grass\\foo.nif"), "Grass\\foo.nif");
+        assert_eq!(
+            grass_prefixed_mesh("Grass\\foo.nif").unwrap(),
+            "Grass\\foo.nif"
+        );
+    }
+
+    #[test]
+    fn existing_grass_meshes_still_reject_unsafe_components() {
+        for mesh in [
+            "grass\\..\\evil.nif",
+            "grass\\.\\evil.nif",
+            "grass\\\\evil.nif",
+            "grass\\c:\\evil.nif",
+        ] {
+            assert!(normalize_mesh_for_copy(mesh).is_err());
+            assert!(grass_prefixed_mesh(mesh).is_err());
+        }
     }
 
     #[test]

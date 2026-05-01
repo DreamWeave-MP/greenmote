@@ -1,13 +1,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{copy, create_dir_all},
+    fs::{File, create_dir_all},
     io::{self, Write},
     path::{Path, PathBuf},
 };
 
 use rayon::prelude::*;
 use tes3::esp::{FixedString, Header, ObjectFlags, Plugin, TES3Object, types::FileType};
-use vfstool_lib::VFS;
+use vfstool_lib::{VFS, VfsFile};
 
 use crate::groundcover::{
     GroundcoverConfig, mesh,
@@ -24,7 +24,7 @@ pub struct BuiltPlugins {
 
 #[derive(Debug)]
 pub struct MeshCopyJob {
-    pub source_path: PathBuf,
+    pub source: VfsFile,
     pub target_path: PathBuf,
 }
 
@@ -276,7 +276,7 @@ pub fn resolve_mesh_copy_jobs(
 
             if let Some(source) = source {
                 Ok(Some(MeshCopyJob {
-                    source_path: source.path().to_path_buf(),
+                    source: source.clone(),
                     target_path: mesh::mesh_output_path(output_directory, mesh_path)?,
                 }))
             } else {
@@ -307,7 +307,9 @@ pub fn copy_meshes(jobs: &[MeshCopyJob]) -> io::Result<()> {
         if let Some(parent) = job.target_path.parent() {
             create_dir_all(parent)?;
         }
-        copy(&job.source_path, &job.target_path)?;
+        let mut source = job.source.open()?;
+        let mut target = File::create(&job.target_path)?;
+        io::copy(&mut source, &mut target)?;
         Ok(())
     })
 }

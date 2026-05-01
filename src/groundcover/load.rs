@@ -57,7 +57,7 @@ pub fn resolve_source_plugins(
         .collect()
 }
 
-pub fn load_plugins(sources: Vec<SourcePlugin>) -> Vec<LoadedPlugin> {
+pub fn load_plugins_for_cell_scanning(sources: Vec<SourcePlugin>) -> Vec<LoadedPlugin> {
     load_plugins_matching(sources, PluginLoadMode::Cells)
 }
 

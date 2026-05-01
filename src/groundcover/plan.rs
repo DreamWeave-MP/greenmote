@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeSet, HashSet},
     hash::BuildHasher,
+    io,
     path::PathBuf,
 };
 
@@ -133,40 +134,48 @@ impl StaticConversionPlan {
     }
 }
 
-#[must_use]
+/// Builds the full conversion plan from already-loaded plugins.
+///
+/// # Errors
+///
+/// Returns invalid input if a matched static uses an unsafe mesh path.
 pub fn build_conversion_plan(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,
-) -> ConversionPlan {
-    let static_plan = build_static_conversion_plan(loaded_plugins, config);
+) -> io::Result<ConversionPlan> {
+    let static_plan = build_static_conversion_plan(loaded_plugins, config)?;
     let cell_plans = if static_plan.matched_static_ids.is_empty() {
         Vec::new()
     } else {
         scan_cells_parallel(loaded_plugins, &static_plan.matched_static_ids)
     };
 
-    static_plan.with_cell_plans(cell_plans)
+    Ok(static_plan.with_cell_plans(cell_plans))
 }
 
-#[must_use]
+/// Builds the conversion plan portion that only needs `Header | Static` records.
+///
+/// # Errors
+///
+/// Returns invalid input if a matched static uses an unsafe mesh path.
 pub fn build_static_conversion_plan(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,
-) -> StaticConversionPlan {
+) -> io::Result<StaticConversionPlan> {
     let (static_plans, matched_static_ids, mesh_paths) =
-        collect_winning_statics(loaded_plugins, config);
+        collect_winning_statics(loaded_plugins, config)?;
 
-    StaticConversionPlan {
+    Ok(StaticConversionPlan {
         static_plans,
         matched_static_ids,
         mesh_paths,
-    }
+    })
 }
 
 fn collect_winning_statics(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,
-) -> (Vec<StaticPlan>, HashSet<String>, BTreeSet<String>) {
+) -> io::Result<(Vec<StaticPlan>, HashSet<String>, BTreeSet<String>)> {
     let mut seen_static_ids = HashSet::new();
     let mut matched_static_ids = HashSet::new();
     let mut static_plans = Vec::new();
@@ -184,12 +193,12 @@ fn collect_winning_statics(
 
             matched_static_ids.insert(lower_id);
 
-            if let Some(mesh_path) = mesh::normalize_mesh_for_copy(&static_record.mesh) {
+            if let Some(mesh_path) = mesh::normalize_mesh_for_copy(&static_record.mesh)? {
                 mesh_paths.insert(mesh_path);
             }
 
             let mut output_static = static_record.clone();
-            output_static.mesh = mesh::grass_prefixed_mesh(&output_static.mesh);
+            output_static.mesh = mesh::grass_prefixed_mesh(&output_static.mesh)?;
 
             static_plans.push(StaticPlan {
                 source_load_index: loaded.load_index,
@@ -201,7 +210,7 @@ fn collect_winning_statics(
         }
     }
 
-    (static_plans, matched_static_ids, mesh_paths)
+    Ok((static_plans, matched_static_ids, mesh_paths))
 }
 
 #[must_use]
@@ -309,7 +318,7 @@ mod tests {
             ),
         ];
 
-        let plan = build_conversion_plan(&plugins, &config());
+        let plan = build_conversion_plan(&plugins, &config()).unwrap();
 
         assert_eq!(plan.static_plans.len(), 1);
         assert_eq!(plan.static_plans[0].source_load_index, 1);
@@ -330,7 +339,7 @@ mod tests {
             ],
         )];
 
-        let plan = build_conversion_plan(&plugins, &config());
+        let plan = build_conversion_plan(&plugins, &config()).unwrap();
 
         assert_eq!(plan.static_plans.len(), 1);
         assert_eq!(
@@ -361,7 +370,7 @@ mod tests {
             ],
         )];
 
-        let plan = build_conversion_plan(&plugins, &config());
+        let plan = build_conversion_plan(&plugins, &config()).unwrap();
 
         assert_eq!(plan.static_plans.len(), 1);
         assert_eq!(plan.cell_plans[0].touched_refs, 0);
