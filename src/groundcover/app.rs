@@ -137,9 +137,11 @@ fn load_openmw_config(args: &GroundcoverArgs) -> io::Result<OpenMWConfiguration>
 }
 
 fn greenmote_config_path(args: &GroundcoverArgs, config: &OpenMWConfiguration) -> PathBuf {
-    args.config
-        .clone()
-        .unwrap_or_else(|| config.user_config_path().join(crate::groundcover::DEFAULT_CONFIG_NAME))
+    args.config.clone().unwrap_or_else(|| {
+        config
+            .user_config_path()
+            .join(crate::groundcover::DEFAULT_CONFIG_NAME)
+    })
 }
 
 fn content_files(config: &OpenMWConfiguration) -> io::Result<Vec<String>> {
