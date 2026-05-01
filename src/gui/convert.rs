@@ -48,6 +48,34 @@ struct ProgressState {
     progress: ProgressKind,
 }
 
+struct CancellationNotice {
+    status: &'static str,
+    output: &'static str,
+}
+
+impl CancellationNotice {
+    const fn before_output() -> Self {
+        Self {
+            status: "Conversion cancelled. No generated files or OpenMW config were updated.",
+            output: "Conversion cancelled. No generated files or OpenMW config were updated.",
+        }
+    }
+
+    const fn output_side_effects() -> Self {
+        Self {
+            status: "Conversion cancelled. Generated files or copied meshes may have been updated.",
+            output: "Conversion cancelled. Generated files or copied meshes may have been updated. OpenMW config was not edited unless auto-enable had already started.",
+        }
+    }
+
+    const fn config_side_effects() -> Self {
+        Self {
+            status: "Conversion cancelled. Generated files and OpenMW config may have been updated.",
+            output: "Conversion cancelled. Generated files and OpenMW config may have been updated. See greenmote.log for the durable cancellation marker if output writing had started.",
+        }
+    }
+}
+
 enum ProgressKind {
     Indeterminate,
     Counted { current: usize, total: usize },
@@ -453,24 +481,40 @@ impl GreenmoteApp {
     }
 
     fn finish_conversion(&mut self, error: Option<String>, cancelled: bool) {
+        let cancellation_notice = self.cancellation_notice();
         self.convert.running = false;
         self.convert.cancelling = false;
         self.convert.progress = None;
         self.convert.cancellation = None;
 
         if cancelled {
-            append_notice(
-                &mut self.convert.output,
-                "Conversion cancelled. Generated files and OpenMW config may have been updated depending on the phase reached.",
-            );
-            self.set_status(
-                "Conversion cancelled. Generated files and OpenMW config may have been updated.",
-            );
+            append_notice(&mut self.convert.output, cancellation_notice.output);
+            self.set_status(cancellation_notice.status);
         } else if let Some(error) = error {
             append_error(&mut self.convert.output, &error);
             self.set_status(format!("Conversion failed: {error}"));
         } else {
             self.set_status("Conversion finished.");
+        }
+    }
+
+    fn cancellation_notice(&self) -> CancellationNotice {
+        let Some(progress) = &self.convert.progress else {
+            return CancellationNotice::before_output();
+        };
+
+        match progress.phase {
+            ConversionPhase::LoadingStaticPlugins
+            | ConversionPhase::PlanningStatics
+            | ConversionPhase::LoadingCellPlugins
+            | ConversionPhase::ScanningCells
+            | ConversionPhase::ResolvingMeshes => CancellationNotice::before_output(),
+            ConversionPhase::WritingPlugins | ConversionPhase::CopyingMeshes => {
+                CancellationNotice::output_side_effects()
+            }
+            ConversionPhase::AutoEnabling | ConversionPhase::WritingLog => {
+                CancellationNotice::config_side_effects()
+            }
         }
     }
 

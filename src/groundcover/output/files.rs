@@ -30,7 +30,6 @@ pub fn save_plugins(
     built
         .groundcover_plugin
         .save_path(config.output_directory.join(&config.groundcover_output))?;
-    check_cancelled(cancellation)?;
     built
         .deleted_plugin
         .save_path(config.output_directory.join(&config.deleted_output))?;

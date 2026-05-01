@@ -168,7 +168,6 @@ fn run_loaded_config(
         cancellation,
     })?;
 
-    check_cancelled(cancellation)?;
     print_success(stdout, config, &log_path, copied_meshes, initial_enablement)?;
 
     Ok(())
@@ -208,37 +207,85 @@ fn write_conversion_outputs(
     check_cancelled(cancellation)?;
     output::save_plugins(built, config, cancellation)?;
     progress::emit_phase(events, ConversionPhase::CopyingMeshes);
-    output::copy_meshes(
+    if let Err(error) = output::copy_meshes(
         &mesh_jobs,
         &|current, total| {
             progress::emit_progress(events, ConversionPhase::CopyingMeshes, current, total);
         },
         cancellation,
-    )?;
+    ) {
+        if is_cancelled_error(&error, cancellation) {
+            write_cancellation_log(openmw_config, config, summary, plan)?;
+        }
+        return Err(error);
+    }
 
-    check_cancelled(cancellation)?;
+    check_cancelled_after_output_side_effects(cancellation, openmw_config, config, summary, plan)?;
     run_auto_enable(stdout, openmw_config, config, events)?;
 
-    check_cancelled(cancellation)?;
+    check_cancelled_after_output_side_effects(cancellation, openmw_config, config, summary, plan)?;
     progress::emit_phase(events, ConversionPhase::WritingLog);
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
-    check_cancelled(cancellation)?;
+    check_cancelled_after_output_side_effects(cancellation, openmw_config, config, summary, plan)?;
     let mut log = File::create(&log_path)?;
     output::write_summary(&mut log, summary, plan, config)?;
-    check_cancelled(cancellation)?;
+    if cancellation.is_cancelled() {
+        write_cancellation_notice(&mut log)?;
+        return Err(cancelled_error());
+    }
 
     Ok((log_path, mesh_jobs.len()))
 }
 
 fn check_cancelled(cancellation: &CancellationToken) -> io::Result<()> {
     if cancellation.is_cancelled() {
-        Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "conversion cancelled",
-        ))
+        Err(cancelled_error())
     } else {
         Ok(())
     }
+}
+
+fn check_cancelled_after_output_side_effects(
+    cancellation: &CancellationToken,
+    openmw_config: &openmw_config::OpenMWConfiguration,
+    config: &GroundcoverConfig,
+    summary: &output::RunSummary,
+    plan: &ConversionPlan,
+) -> io::Result<()> {
+    if cancellation.is_cancelled() {
+        write_cancellation_log(openmw_config, config, summary, plan)?;
+        Err(cancelled_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn write_cancellation_log(
+    openmw_config: &openmw_config::OpenMWConfiguration,
+    config: &GroundcoverConfig,
+    summary: &output::RunSummary,
+    plan: &ConversionPlan,
+) -> io::Result<()> {
+    let log_path = openmw_config.user_config_path().join(LOG_NAME);
+    let mut log = File::create(log_path)?;
+    output::write_summary(&mut log, summary, plan, config)?;
+    write_cancellation_notice(&mut log)
+}
+
+fn write_cancellation_notice(writer: &mut dyn Write) -> io::Result<()> {
+    writeln!(writer)?;
+    writeln!(
+        writer,
+        "Conversion cancelled after output writing started. Generated files, copied meshes, and OpenMW config may have been updated depending on the phase reached."
+    )
+}
+
+fn is_cancelled_error(error: &io::Error, cancellation: &CancellationToken) -> bool {
+    error.kind() == io::ErrorKind::Interrupted && cancellation.is_cancelled()
+}
+
+fn cancelled_error() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "conversion cancelled")
 }
 
 fn validate_auto_enable(
