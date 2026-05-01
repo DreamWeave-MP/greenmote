@@ -2,10 +2,12 @@ use std::io;
 
 mod app;
 mod args;
+mod auto_enable;
 mod config;
 pub mod default;
 mod load;
 pub mod mesh;
+mod openmw;
 mod output;
 pub mod plan;
 pub mod records;
