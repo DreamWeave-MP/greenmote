@@ -32,7 +32,6 @@ pub(super) struct SettingsDraft {
     exclude: String,
     ignored_plugins: String,
     dry_run: bool,
-    validate_config: bool,
     debug: bool,
     auto_enable: bool,
 }
@@ -173,20 +172,6 @@ impl GreenmoteApp {
             &mut self.settings.draft.dry_run,
             &mut self.settings.dirty,
         );
-        if self.settings.draft.dry_run && self.settings.draft.validate_config {
-            self.settings.draft.validate_config = false;
-            self.settings.dirty = true;
-        }
-        setting_checkbox(
-            ui,
-            "Validate config",
-            &mut self.settings.draft.validate_config,
-            &mut self.settings.dirty,
-        );
-        if self.settings.draft.validate_config && self.settings.draft.dry_run {
-            self.settings.draft.dry_run = false;
-            self.settings.dirty = true;
-        }
         setting_checkbox(
             ui,
             "Debug diagnostics",
@@ -201,16 +186,40 @@ impl GreenmoteApp {
         );
     }
 
-    pub(super) fn load_settings(&mut self) {
+    pub(super) fn load_settings(&mut self) -> bool {
         if self.settings.loaded {
-            return;
+            return true;
         }
 
-        self.reload_settings();
+        self.reload_settings()
+    }
+
+    pub(super) fn settings_error(&self) -> Option<&str> {
+        self.settings.error.as_deref()
     }
 
     fn reload_settings(&mut self) -> bool {
         self.load_settings_from_disk("Loaded")
+    }
+
+    pub(super) fn regenerate_settings(&mut self) -> bool {
+        match groundcover::regenerate_config_for_edit(&GroundcoverArgs::default()) {
+            Ok((path, config)) => {
+                self.settings.draft = SettingsDraft::from_config(&config);
+                self.settings.config_path = Some(path.clone());
+                self.settings.loaded = true;
+                self.settings.dirty = false;
+                self.settings.status = format!("Regenerated {}", path.display());
+                self.settings.error = None;
+                true
+            }
+            Err(error) => {
+                self.settings.loaded = false;
+                self.settings.status.clear();
+                self.settings.error = Some(format!("Failed to regenerate settings: {error}"));
+                false
+            }
+        }
     }
 
     pub(super) fn discard_settings(&mut self) -> bool {
@@ -287,7 +296,6 @@ impl SettingsDraft {
             exclude: vec_to_lines(&config.exclude),
             ignored_plugins: vec_to_lines(&config.ignored_plugins),
             dry_run: config.dry_run,
-            validate_config: config.validate_config,
             debug: config.debug,
             auto_enable: config.auto_enable,
         }
@@ -306,7 +314,6 @@ impl SettingsDraft {
         config.exclude = lines_to_vec(&self.exclude);
         config.ignored_plugins = lines_to_vec(&self.ignored_plugins);
         config.dry_run = self.dry_run;
-        config.validate_config = self.validate_config;
         config.debug = self.debug;
         config.auto_enable = self.auto_enable;
         config

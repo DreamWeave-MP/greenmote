@@ -81,6 +81,23 @@ pub(crate) fn load_config_for_edit(
     Ok((config_path, config))
 }
 
+/// Replaces the editable `greenmote.toml` with a validated generated default config.
+///
+/// # Errors
+///
+/// Returns `OpenMW` configuration or filesystem errors.
+pub(crate) fn regenerate_config_for_edit(
+    args: &GroundcoverArgs,
+) -> io::Result<(PathBuf, GroundcoverConfig)> {
+    let openmw_config = openmw::load_config(args)?;
+    let config_path = openmw::greenmote_config_path(args, &openmw_config);
+    let default_output_directory = openmw::default_output_directory(&openmw_config);
+    let config = GroundcoverConfig::with_output_directory(default_output_directory);
+    let config = config.save_for_edit(&config_path)?;
+
+    Ok((config_path, config))
+}
+
 /// Saves editable GUI settings through the same TOML schema used by the CLI.
 ///
 /// # Errors

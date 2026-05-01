@@ -20,8 +20,8 @@ pub(super) struct GroundcoverConfigFile {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-// These are persisted/CLI-facing runtime toggles. Hiding them behind enums would make the Rust
-// type prettier and the TOML schema worse. That is not a trade.
+// Mirrors persisted convert options. CLI-only switches do not belong here; writing transient
+// command mode into TOML is how a config file starts lying to its owner.
 #[allow(clippy::struct_excessive_bools)]
 struct ConvertConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,9 +43,6 @@ struct ConvertConfigFile {
     dry_run: bool,
 
     #[serde(default)]
-    validate_config: bool,
-
-    #[serde(default)]
     debug: bool,
 
     #[serde(default)]
@@ -63,7 +60,6 @@ impl GroundcoverConfigFile {
                 exclude: Some(config.exclude.clone()),
                 ignored_plugins: Some(config.ignored_plugins.clone()),
                 dry_run: config.dry_run,
-                validate_config: config.validate_config,
                 debug: config.debug,
                 auto_enable: config.auto_enable,
             },
@@ -94,7 +90,7 @@ impl GroundcoverConfigFile {
                 .ignored_plugins
                 .unwrap_or_else(default::ignored_plugins),
             dry_run: convert.dry_run,
-            validate_config: convert.validate_config,
+            validate_config: false,
             debug: convert.debug,
             auto_enable: convert.auto_enable,
             include_set: RegexSet::empty(),

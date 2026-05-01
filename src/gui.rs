@@ -16,6 +16,8 @@ struct GreenmoteApp {
     settings: SettingsUiState,
     nav: NavUiState,
     pending_navigation: Option<PendingNavigation>,
+    checked_initial_config: bool,
+    config_recovery_error: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,6 +40,8 @@ impl Default for GreenmoteApp {
             settings: SettingsUiState::default(),
             nav: NavUiState::default(),
             pending_navigation: None,
+            checked_initial_config: false,
+            config_recovery_error: None,
         }
     }
 }
@@ -45,6 +49,7 @@ impl Default for GreenmoteApp {
 impl eframe::App for GreenmoteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receive_conversion_events(ctx);
+        self.check_initial_config();
 
         egui::TopBottomPanel::top("greenmote_navigation_bar")
             .resizable(false)
@@ -58,6 +63,7 @@ impl eframe::App for GreenmoteApp {
         });
 
         self.show_pending_navigation_prompt(ctx);
+        self.show_config_recovery_prompt(ctx);
     }
 }
 
@@ -83,8 +89,19 @@ impl GreenmoteApp {
 
     fn show_screen(&mut self, screen: Screen) {
         self.screen = screen;
-        if screen == Screen::Settings {
-            self.load_settings();
+        if screen == Screen::Settings && !self.load_settings() {
+            self.config_recovery_error = self.settings_error().map(str::to_owned);
+        }
+    }
+
+    fn check_initial_config(&mut self) {
+        if self.checked_initial_config {
+            return;
+        }
+
+        self.checked_initial_config = true;
+        if !self.load_settings() {
+            self.config_recovery_error = self.settings_error().map(str::to_owned);
         }
     }
 
@@ -150,6 +167,41 @@ impl GreenmoteApp {
             }
         } else if cancel {
             self.pending_navigation = None;
+        }
+    }
+
+    fn show_config_recovery_prompt(&mut self, ctx: &egui::Context) {
+        let Some(error) = self.config_recovery_error.clone() else {
+            return;
+        };
+
+        let mut regenerate = false;
+        let mut close = false;
+
+        egui::Window::new("Malformed config")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("greenmote.toml could not be loaded.");
+                ui.label("Regenerate it from defaults before continuing.");
+                ui.add_space(8.0);
+                ui.colored_label(ui.visuals().error_fg_color, error);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    regenerate = ui.button("Regenerate config and continue").clicked();
+                    close = ui.button("Close").clicked();
+                });
+            });
+
+        if regenerate {
+            if self.regenerate_settings() {
+                self.config_recovery_error = None;
+            } else {
+                self.config_recovery_error = self.settings_error().map(str::to_owned);
+            }
+        } else if close {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 }

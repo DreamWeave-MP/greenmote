@@ -70,7 +70,9 @@ impl GreenmoteApp {
             ui.label(&self.convert.status);
         }
         ui.add_space(8.0);
-        let can_start = !self.convert.running && !self.settings.is_dirty();
+        let can_start = !self.convert.running
+            && !self.settings.is_dirty()
+            && self.config_recovery_error.is_none();
         if ui
             .add_enabled(can_start, egui::Button::new("Start conversion"))
             .clicked()
@@ -79,6 +81,9 @@ impl GreenmoteApp {
         }
         if self.settings.is_dirty() {
             ui.label("Save Settings changes before converting.");
+        }
+        if self.config_recovery_error.is_some() {
+            ui.label("Regenerate Settings before converting.");
         }
         ui.separator();
 

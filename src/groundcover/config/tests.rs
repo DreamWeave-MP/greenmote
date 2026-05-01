@@ -57,11 +57,9 @@ fn missing_config_default_initializes_next_to_user_config() {
             .join(crate::groundcover::DEFAULT_CONFIG_NAME)
             .is_file()
     );
-    assert!(
-        read_to_string(dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME))
-            .unwrap()
-            .contains("[convert]")
-    );
+    let contents = read_to_string(dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME)).unwrap();
+    assert!(contents.contains("[convert]"));
+    assert!(!contents.contains("validate_config"));
 }
 
 #[test]
@@ -79,6 +77,41 @@ fn dry_run_does_not_default_initialize_config_file() {
             .join(crate::groundcover::DEFAULT_CONFIG_NAME)
             .exists()
     );
+}
+
+#[test]
+fn validate_config_is_cli_only() {
+    let dir = TempDir::new();
+    let args = GroundcoverArgs::parse_from(["convert", "--validate-config"]);
+    let default_output_directory = dir.path.join("data-local");
+
+    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory).unwrap();
+
+    assert!(config.validate_config);
+    assert!(
+        !dir.path
+            .join(crate::groundcover::DEFAULT_CONFIG_NAME)
+            .exists()
+    );
+}
+
+#[test]
+fn persisted_validate_config_is_ignored() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r"
+[convert]
+validate_config = true
+",
+    )
+    .unwrap();
+    let args = GroundcoverArgs::parse_from(["convert"]);
+
+    let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
+
+    assert!(!config.validate_config);
 }
 
 #[test]
