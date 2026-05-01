@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Write};
 
 mod app;
 mod args;
@@ -26,5 +26,20 @@ pub const LOG_NAME: &str = "greenmote.log";
 ///
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
 pub fn run(args: GroundcoverArgs) -> io::Result<()> {
-    app::run(args)
+    let mut stdout = io::stdout().lock();
+    let mut stderr = io::stderr().lock();
+    run_with_output(args, &mut stdout, &mut stderr)
+}
+
+/// Runs the groundcover conversion subcommand with explicit output streams.
+///
+/// # Errors
+///
+/// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
+pub fn run_with_output(
+    args: GroundcoverArgs,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> io::Result<()> {
+    app::run(args, stdout, stderr)
 }

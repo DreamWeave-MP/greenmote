@@ -1,4 +1,4 @@
-use std::{io, sync::mpsc, thread};
+use std::{cell::RefCell, io, rc::Rc, sync::mpsc, thread};
 
 use eframe::egui;
 
@@ -7,7 +7,6 @@ use crate::groundcover::{self, GroundcoverArgs};
 struct GreenmoteApp {
     screen: Screen,
     convert: ConvertUiState,
-    messages: MessageLog,
 }
 
 enum Screen {
@@ -18,15 +17,19 @@ enum Screen {
 struct ConvertUiState {
     running: bool,
     status: String,
+    output: String,
     result_receiver: Option<mpsc::Receiver<ConversionResult>>,
 }
 
-#[derive(Default)]
-struct MessageLog {
-    text: String,
+struct ConversionResult {
+    output: String,
+    error: Option<String>,
 }
 
-type ConversionResult = Result<(), String>;
+#[derive(Clone)]
+struct SharedOutput {
+    bytes: Rc<RefCell<Vec<u8>>>,
+}
 
 impl Default for GreenmoteApp {
     fn default() -> Self {
@@ -36,7 +39,6 @@ impl Default for GreenmoteApp {
                 status: "Ready.".to_owned(),
                 ..ConvertUiState::default()
             },
-            messages: MessageLog::default(),
         }
     }
 }
@@ -44,13 +46,6 @@ impl Default for GreenmoteApp {
 impl eframe::App for GreenmoteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receive_conversion_result();
-
-        egui::TopBottomPanel::bottom("greenmote_message_log")
-            .resizable(false)
-            .exact_height(self.messages.panel_height(ctx))
-            .show(ctx, |ui| {
-                self.messages.show(ui);
-            });
 
         egui::SidePanel::left("greenmote_convert_panel")
             .resizable(false)
@@ -86,6 +81,13 @@ impl GreenmoteApp {
     fn show_convert_screen(&self, ui: &mut egui::Ui) {
         ui.heading("Convert");
         ui.label(&self.convert.status);
+        ui.separator();
+
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                ui.monospace(self.convert.output.as_str());
+            });
     }
 
     fn start_conversion(&mut self, ctx: &egui::Context) {
@@ -95,12 +97,22 @@ impl GreenmoteApp {
         self.convert.running = true;
         self.set_status("Converting with default settings...");
         self.convert.result_receiver = Some(receiver);
-        self.messages
-            .reset("Started conversion with default settings.");
+        self.convert.output.clear();
 
         thread::spawn(move || {
-            let result =
-                groundcover::run(GroundcoverArgs::default()).map_err(|error| error.to_string());
+            let bytes = Rc::new(RefCell::new(Vec::new()));
+            let mut stdout = SharedOutput::new(bytes.clone());
+            let mut stderr = SharedOutput::new(bytes.clone());
+            let error =
+                groundcover::run_with_output(GroundcoverArgs::default(), &mut stdout, &mut stderr)
+                    .err()
+                    .map(|error| error.to_string());
+
+            let result = ConversionResult {
+                output: String::from_utf8_lossy(&bytes.borrow()).into_owned(),
+                error,
+            };
+
             let _send_result = sender.send(result);
             repaint_context.request_repaint();
         });
@@ -112,13 +124,15 @@ impl GreenmoteApp {
         };
 
         match receiver.try_recv() {
-            Ok(Ok(())) => {
+            Ok(result) => {
                 self.convert.running = false;
-                self.set_status("Conversion finished.");
-            }
-            Ok(Err(error)) => {
-                self.convert.running = false;
-                self.set_status(format!("Conversion failed: {error}"));
+                self.convert.output = format_conversion_output(&result);
+
+                if let Some(error) = result.error {
+                    self.set_status(format!("Conversion failed: {error}"));
+                } else {
+                    self.set_status("Conversion finished.");
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.convert.result_receiver = Some(receiver);
@@ -132,38 +146,39 @@ impl GreenmoteApp {
 
     fn set_status(&mut self, status: impl Into<String>) {
         self.convert.status = status.into();
-        self.messages.reset(self.convert.status.as_str());
     }
 }
 
-impl MessageLog {
-    const LINE_HEIGHT: f32 = 18.0;
-    const VERTICAL_PADDING: f32 = 12.0;
-    const MIN_HEIGHT: f32 = 28.0;
-    const MAX_WINDOW_FRACTION: f32 = 0.1;
+impl SharedOutput {
+    fn new(bytes: Rc<RefCell<Vec<u8>>>) -> Self {
+        Self { bytes }
+    }
+}
 
-    fn reset(&mut self, message: &str) {
-        self.text.clear();
-        self.text.push_str(message);
+impl io::Write for SharedOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.bytes.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
     }
 
-    fn panel_height(&self, ctx: &egui::Context) -> f32 {
-        let line_count = u16::try_from(self.text.lines().count().max(1)).unwrap_or(u16::MAX);
-        let line_count = f32::from(line_count);
-        let content_height = line_count.mul_add(Self::LINE_HEIGHT, Self::VERTICAL_PADDING);
-        let max_height = ctx.viewport_rect().height() * Self::MAX_WINDOW_FRACTION;
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
-        content_height.min(max_height).max(Self::MIN_HEIGHT)
+fn format_conversion_output(result: &ConversionResult) -> String {
+    let mut output = result.output.clone();
+
+    if let Some(error) = &result.error {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str("error:\n");
+        output.push_str(error);
+        output.push('\n');
     }
 
-    fn show(&self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-        egui::ScrollArea::vertical()
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                ui.label(self.text.as_str());
-            });
-    }
+    output
 }
 
 /// Runs the `greenmote` graphical user interface.

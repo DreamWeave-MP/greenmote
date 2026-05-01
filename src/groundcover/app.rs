@@ -1,11 +1,15 @@
-use std::{collections::HashSet, fs::File, io, path::Path};
+use std::{collections::HashSet, fs::File, io, io::Write, path::Path};
 
 use crate::groundcover::{
     GroundcoverArgs, GroundcoverConfig, LOG_NAME, auto_enable, load, openmw, output,
     plan::{build_static_conversion_plan, scan_cells_parallel},
 };
 
-pub fn run(args: GroundcoverArgs) -> io::Result<()> {
+pub fn run(
+    args: GroundcoverArgs,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> io::Result<()> {
     let mut openmw_config = openmw::load_config(&args)?;
     let greenmote_config_path = openmw::greenmote_config_path(&args, &openmw_config);
     let default_output_directory = openmw::default_output_directory(&openmw_config);
@@ -16,7 +20,11 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     )?;
 
     if config.validate_config {
-        println!("Validated {} successfully", greenmote_config_path.display());
+        writeln!(
+            stdout,
+            "Validated {} successfully",
+            greenmote_config_path.display()
+        )?;
         return Ok(());
     }
 
@@ -59,11 +67,11 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     };
 
     if config.debug {
-        output::write_summary(io::stderr(), &summary, &plan, &config)?;
+        output::write_summary(&mut *stderr, &summary, &plan, &config)?;
     }
 
     if config.dry_run {
-        output::write_summary(io::stdout(), &summary, &plan, &config)?;
+        output::write_summary(&mut *stdout, &summary, &plan, &config)?;
         return Ok(());
     }
 
@@ -74,17 +82,18 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
 
     if config.auto_enable {
         let backup = auto_enable::outputs(&mut openmw_config, &config)?;
-        eprintln!(
+        writeln!(
+            stdout,
             "Updated OpenMW config; backup saved at {}",
             backup.display()
-        );
+        )?;
     }
 
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
     let mut log = File::create(&log_path)?;
     output::write_summary(&mut log, &summary, &plan, &config)?;
 
-    print_success(&config, &log_path, mesh_jobs.len());
+    print_success(stdout, &config, &log_path, mesh_jobs.len())?;
 
     Ok(())
 }
@@ -117,19 +126,28 @@ fn ensure_static_sources_loaded_for_cell_scanning(
     }
 }
 
-fn print_success(config: &GroundcoverConfig, log_path: &Path, copied_meshes: usize) {
-    println!(
+fn print_success(
+    writer: &mut dyn Write,
+    config: &GroundcoverConfig,
+    log_path: &Path,
+    copied_meshes: usize,
+) -> io::Result<()> {
+    writeln!(
+        writer,
         "Generated {} and {} in {}",
         config.groundcover_output,
         config.deleted_output,
         config.output_directory.display()
-    );
-    println!("Copied {copied_meshes} meshes under Meshes/grass");
-    println!("Wrote log to {}", log_path.display());
+    )?;
+    writeln!(writer, "Copied {copied_meshes} meshes under Meshes/grass")?;
+    writeln!(writer, "Wrote log to {}", log_path.display())?;
     if !config.auto_enable {
-        println!(
+        writeln!(
+            writer,
             "Add {} as groundcover= and {} as content= in openmw.cfg.",
             config.groundcover_output, config.deleted_output
-        );
+        )?;
     }
+
+    Ok(())
 }
