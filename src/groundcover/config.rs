@@ -56,8 +56,14 @@ pub struct GroundcoverConfig {
 
 impl Default for GroundcoverConfig {
     fn default() -> Self {
+        Self::with_output_directory(default::output_directory())
+    }
+}
+
+impl GroundcoverConfig {
+    fn with_output_directory(output_directory: PathBuf) -> Self {
         Self {
-            output_directory: default::output_directory(),
+            output_directory,
             groundcover_output: default::groundcover_output(),
             deleted_output: default::deleted_output(),
             grass_ids: default::grass_ids(),
@@ -81,17 +87,21 @@ impl GroundcoverConfig {
     ///
     /// Returns filesystem errors for config IO, TOML parse errors as invalid data, or regex
     /// compilation errors as invalid input.
-    pub fn get(args: GroundcoverArgs, user_config_path: &Path) -> io::Result<Self> {
+    pub fn get(
+        args: GroundcoverArgs,
+        user_config_path: &Path,
+        default_output_directory: PathBuf,
+    ) -> io::Result<Self> {
         let config_path = args
             .config
             .clone()
             .unwrap_or_else(|| user_config_path.join(crate::groundcover::DEFAULT_CONFIG_NAME));
         let config_missing = !config_path.is_file();
         let mut config = if config_missing {
-            Self::default()
+            Self::with_output_directory(default_output_directory)
         } else {
             let contents = read_to_string(&config_path)?;
-            toml::from_str(&contents).map_err(to_io_error)?
+            GroundcoverConfigFile::from_toml(&contents, default_output_directory)?
         };
 
         config.apply_args(args);
@@ -158,6 +168,66 @@ impl GroundcoverConfig {
     }
 }
 
+#[derive(Debug, Deserialize)]
+// Mirrors the public TOML schema so we can distinguish an omitted output directory from one the
+// user intentionally set. Same persisted toggle problem as `GroundcoverConfig`.
+#[allow(clippy::struct_excessive_bools)]
+struct GroundcoverConfigFile {
+    output_directory: Option<PathBuf>,
+
+    #[serde(default = "default::groundcover_output")]
+    groundcover_output: String,
+
+    #[serde(default = "default::deleted_output")]
+    deleted_output: String,
+
+    #[serde(default = "default::grass_ids")]
+    grass_ids: Vec<String>,
+
+    #[serde(default = "default::exclude")]
+    exclude: Vec<String>,
+
+    #[serde(default = "default::ignored_plugins")]
+    ignored_plugins: Vec<String>,
+
+    #[serde(default)]
+    dry_run: bool,
+
+    #[serde(default)]
+    validate_config: bool,
+
+    #[serde(default)]
+    debug: bool,
+
+    #[serde(default)]
+    auto_enable: bool,
+}
+
+impl GroundcoverConfigFile {
+    fn from_toml(
+        contents: &str,
+        default_output_directory: PathBuf,
+    ) -> io::Result<GroundcoverConfig> {
+        let file = toml::from_str::<Self>(contents).map_err(to_io_error)?;
+
+        Ok(GroundcoverConfig {
+            output_directory: file.output_directory.unwrap_or(default_output_directory),
+            groundcover_output: file.groundcover_output,
+            deleted_output: file.deleted_output,
+            grass_ids: file.grass_ids,
+            exclude: file.exclude,
+            ignored_plugins: file.ignored_plugins,
+            dry_run: file.dry_run,
+            validate_config: file.validate_config,
+            debug: file.debug,
+            auto_enable: file.auto_enable,
+            include_set: RegexSet::empty(),
+            exclude_set: RegexSet::empty(),
+            ignored_plugin_set: RegexSet::empty(),
+        })
+    }
+}
+
 fn to_io_error<E: std::fmt::Display>(err: E) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, err.to_string())
 }
@@ -211,9 +281,12 @@ mod tests {
     fn missing_config_default_initializes_next_to_user_config() {
         let dir = TempDir::new();
         let args = GroundcoverArgs::parse_from(["convert"]);
+        let default_output_directory = dir.path.join("data-local");
 
-        let config = GroundcoverConfig::get(args, &dir.path).unwrap();
+        let config =
+            GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
 
+        assert_eq!(config.output_directory, default_output_directory);
         assert!(config.matches_static_id("flora_grass_01"));
         assert!(!config.matches_static_id("ab_furn_impplantergrass"));
         assert!(
@@ -221,16 +294,24 @@ mod tests {
                 .join(crate::groundcover::DEFAULT_CONFIG_NAME)
                 .is_file()
         );
+        assert!(
+            read_to_string(dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME))
+                .unwrap()
+                .contains("data-local")
+        );
     }
 
     #[test]
     fn dry_run_does_not_default_initialize_config_file() {
         let dir = TempDir::new();
         let args = GroundcoverArgs::parse_from(["convert", "--dry-run"]);
+        let default_output_directory = dir.path.join("data-local");
 
-        let config = GroundcoverConfig::get(args, &dir.path).unwrap();
+        let config =
+            GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
 
         assert!(config.dry_run);
+        assert_eq!(config.output_directory, default_output_directory);
         assert!(
             !dir.path
                 .join(crate::groundcover::DEFAULT_CONFIG_NAME)
@@ -259,8 +340,9 @@ dry_run = false
             "--output",
             "out",
         ]);
+        let default_output_directory = dir.path.join("data-local");
 
-        let config = GroundcoverConfig::get(args, &dir.path).unwrap();
+        let config = GroundcoverConfig::get(args, &dir.path, default_output_directory).unwrap();
 
         assert_eq!(config.groundcover_output, "gc.omwaddon");
         assert_eq!(config.output_directory, PathBuf::from("out"));
@@ -268,6 +350,26 @@ dry_run = false
         assert!(config.is_ignored_plugin_name("Generated.omwaddon"));
         assert!(config.is_ignored_plugin_name("OtherGenerated.omwaddon"));
         assert!(read_to_string(config_path).unwrap().contains("gc.omwaddon"));
+    }
+
+    #[test]
+    fn missing_toml_output_directory_uses_effective_data_local() {
+        let dir = TempDir::new();
+        let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+        std::fs::write(
+            &config_path,
+            r#"
+groundcover_output = "gc.omwaddon"
+"#,
+        )
+        .unwrap();
+        let args = GroundcoverArgs::parse_from(["convert"]);
+        let default_output_directory = dir.path.join("profile-data-local");
+
+        let config =
+            GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
+
+        assert_eq!(config.output_directory, default_output_directory);
     }
 
     #[test]

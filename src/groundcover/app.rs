@@ -19,7 +19,12 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
 
     let selected_config_file = selected_config_file_path(&args);
     let mut openmw_config = load_openmw_config(&args)?;
-    let config = GroundcoverConfig::get(args, &openmw_config.user_config_path())?;
+    let default_output_directory = default_output_directory(&openmw_config);
+    let config = GroundcoverConfig::get(
+        args,
+        &openmw_config.user_config_path(),
+        default_output_directory,
+    )?;
 
     if config.validate_config {
         println!(
@@ -149,6 +154,14 @@ fn content_files(config: &OpenMWConfiguration) -> io::Result<Vec<String>> {
     } else {
         Ok(content_files)
     }
+}
+
+fn default_output_directory(config: &OpenMWConfiguration) -> PathBuf {
+    config
+        .data_local()
+        .map_or_else(openmw_config::default_data_local_path, |data_local| {
+            data_local.parsed().to_owned()
+        })
 }
 
 fn backup_openmw_cfg(selected_config_file: &Path) -> io::Result<PathBuf> {

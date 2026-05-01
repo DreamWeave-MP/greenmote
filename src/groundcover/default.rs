@@ -4,7 +4,7 @@ use crate::groundcover::{DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME};
 
 #[must_use]
 pub fn output_directory() -> PathBuf {
-    PathBuf::from(".")
+    openmw_config::default_data_local_path()
 }
 
 #[must_use]
