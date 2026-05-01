@@ -10,6 +10,13 @@ use tes3::esp::{Cell, Header, Plugin, Static};
 
 use crate::groundcover::{GroundcoverConfig, mesh, records};
 
+const GENERATED_STATIC_ID_PREFIX: &str = "greenmote_";
+
+#[must_use]
+pub fn generated_static_id(source_id: &str) -> String {
+    format!("{GENERATED_STATIC_ID_PREFIX}{source_id}")
+}
+
 pub struct LoadedPlugin {
     pub load_index: usize,
     pub plugin_name: String,
@@ -87,6 +94,7 @@ impl StaticPlan {
     /// Returns invalid input if the source mesh path cannot be safely rooted under `grass\`.
     pub fn output_static(&self) -> io::Result<Static> {
         let mut output_static = self.source_static.clone();
+        output_static.id = generated_static_id(&self.id_key());
         output_static.mesh = mesh::grass_prefixed_mesh(&output_static.mesh)?;
 
         Ok(output_static)
@@ -420,6 +428,10 @@ mod tests {
         assert_eq!(plan.static_plans.len(), 1);
         assert_eq!(plan.static_plans[0].source_load_index, 1);
         assert_eq!(
+            plan.static_plans[0].output_static().unwrap().id,
+            "greenmote_flora_grass_01"
+        );
+        assert_eq!(
             plan.static_plans[0].output_static().unwrap().mesh,
             "grass\\flora\\planter.nif"
         );
@@ -443,6 +455,10 @@ mod tests {
         assert_eq!(mesh_paths.len(), 1);
         assert_eq!(mesh_path.source, "grass\\sky_flora_gs_01_01.nif");
         assert_eq!(mesh_path.target, "sky_flora_gs_01_01.nif");
+        assert_eq!(
+            plan.static_plans[0].output_static().unwrap().id,
+            "greenmote_flora_grass_01"
+        );
         assert_eq!(
             plan.static_plans[0].output_static().unwrap().mesh,
             "Grass\\Sky_Flora_GS_01_01.nif"

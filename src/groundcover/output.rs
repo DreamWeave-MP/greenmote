@@ -11,7 +11,7 @@ use vfstool_lib::{VFS, VfsFile};
 
 use crate::groundcover::{
     GroundcoverConfig, mesh,
-    plan::{ConversionPlan, MasterSpec, PluginCellPlan},
+    plan::{ConversionPlan, MasterSpec, PluginCellPlan, generated_static_id},
 };
 
 #[derive(Debug)]
@@ -63,14 +63,20 @@ pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
         }
 
         for cell in &cell_plan.groundcover_cells {
-            groundcover_plugin
-                .objects
-                .push(remap_cell(cell, cell_plan, &groundcover_master_indices)?.into());
+            groundcover_plugin.objects.push(
+                remap_cell(
+                    cell,
+                    cell_plan,
+                    &groundcover_master_indices,
+                    RefIdMode::Generated,
+                )?
+                .into(),
+            );
         }
         for cell in &cell_plan.deleted_cells {
-            deleted_plugin
-                .objects
-                .push(remap_cell(cell, cell_plan, &deleted_master_indices)?.into());
+            deleted_plugin.objects.push(
+                remap_cell(cell, cell_plan, &deleted_master_indices, RefIdMode::Source)?.into(),
+            );
         }
     }
 
@@ -220,6 +226,7 @@ fn remap_cell(
     cell: &tes3::esp::Cell,
     cell_plan: &PluginCellPlan,
     master_indices: &BTreeMap<MasterSpec, u32>,
+    ref_id_mode: RefIdMode,
 ) -> io::Result<tes3::esp::Cell> {
     let mut remapped = cell.clone();
     remapped.references.clear();
@@ -227,6 +234,10 @@ fn remap_cell(
     for (key, reference) in &cell.references {
         let remapped_key_mast = remap_source_mast_index(key.0, cell_plan, master_indices)?;
         let mut remapped_reference = reference.clone();
+        if ref_id_mode == RefIdMode::Generated {
+            remapped_reference.id =
+                generated_static_id(&remapped_reference.id.to_ascii_lowercase());
+        }
         remapped_reference.mast_index =
             remap_source_mast_index(remapped_reference.mast_index, cell_plan, master_indices)?;
         remapped
@@ -235,6 +246,12 @@ fn remap_cell(
     }
 
     Ok(remapped)
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RefIdMode {
+    Source,
+    Generated,
 }
 
 fn remap_source_mast_index(
@@ -595,8 +612,18 @@ mod tests {
         };
 
         let built = build_plugins(&plan).unwrap();
+        let generated_static = built
+            .groundcover_plugin
+            .objects_of_type::<Static>()
+            .next()
+            .unwrap();
         let generated_cell = built
             .groundcover_plugin
+            .objects_of_type::<Cell>()
+            .next()
+            .unwrap();
+        let deleted_cell = built
+            .deleted_plugin
             .objects_of_type::<Cell>()
             .next()
             .unwrap();
@@ -605,8 +632,14 @@ mod tests {
             built.groundcover_header.masters,
             vec![("Source.esp".to_owned(), 42)]
         );
+        assert_eq!(generated_static.id, "greenmote_flora_grass_01");
         assert!(generated_cell.references.contains_key(&(1, 7)));
         assert_eq!(generated_cell.references[&(1, 7)].mast_index, 1);
+        assert_eq!(
+            generated_cell.references[&(1, 7)].id,
+            "greenmote_flora_grass_01"
+        );
+        assert_eq!(deleted_cell.references[&(1, 7)].id, "flora_grass_01");
     }
 
     #[test]
