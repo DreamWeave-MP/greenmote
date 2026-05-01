@@ -130,11 +130,11 @@ impl eframe::App for GreenmoteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.receive_conversion_events(ctx);
 
-        egui::SidePanel::left("greenmote_convert_panel")
+        egui::TopBottomPanel::top("greenmote_navigation_bar")
             .resizable(false)
-            .exact_width(ctx.viewport_rect().width() / 3.0)
+            .exact_height(42.0)
             .show(ctx, |ui| {
-                self.show_sidebar(ui);
+                self.show_navigation_bar(ui);
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -146,18 +146,32 @@ impl eframe::App for GreenmoteApp {
 }
 
 impl GreenmoteApp {
-    fn show_sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
-        ui.vertical_centered_justified(|ui| {
+    fn show_navigation_bar(&mut self, ui: &mut egui::Ui) {
+        const NAV_BUTTON_SIZE: egui::Vec2 = egui::vec2(96.0, 24.0);
+        const NAV_BUTTON_COUNT: f32 = 2.0;
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let nav_width = NAV_BUTTON_SIZE
+                .x
+                .mul_add(NAV_BUTTON_COUNT, ui.spacing().item_spacing.x);
+            ui.add_space((ui.available_width() - nav_width).max(0.0) / 2.0);
+
             if ui
-                .add(egui::Button::new("Convert").selected(self.screen == Screen::Convert))
+                .add_sized(
+                    NAV_BUTTON_SIZE,
+                    egui::Button::new("Convert").selected(self.screen == Screen::Convert),
+                )
                 .clicked()
             {
                 self.request_screen(Screen::Convert);
             }
 
             if ui
-                .add(egui::Button::new("Settings").selected(self.screen == Screen::Settings))
+                .add_sized(
+                    NAV_BUTTON_SIZE,
+                    egui::Button::new("Settings").selected(self.screen == Screen::Settings),
+                )
                 .clicked()
             {
                 self.request_screen(Screen::Settings);
