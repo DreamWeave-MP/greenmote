@@ -415,14 +415,46 @@ fn deleted_header() -> Header {
 mod tests {
     use std::{
         collections::{BTreeSet, HashSet},
-        path::PathBuf,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
     };
 
     use tes3::esp::{Cell, Reference, Static};
 
-    use crate::groundcover::plan::{PluginCellPlan, StaticPlan};
+    use crate::groundcover::{
+        mesh::MeshCopyPath,
+        plan::{PluginCellPlan, StaticPlan},
+    };
 
     use super::*;
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "greenmote-output-test-{name}-{}-{}",
+                std::process::id(),
+                NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     #[test]
     fn mesh_output_path_preserves_subdirectories_under_meshes_grass() {
@@ -435,6 +467,48 @@ mod tests {
                 .join("tree")
                 .join("grass.nif")
         );
+    }
+
+    #[test]
+    fn mesh_jobs_use_source_for_lookup_and_target_for_output() {
+        let data_dir = TempDir::new("mesh-source-target-data");
+        let output_dir = TempDir::new("mesh-source-target-output");
+        let mesh_dir = data_dir.path().join("Meshes").join("grass");
+        std::fs::create_dir_all(&mesh_dir).unwrap();
+        std::fs::write(mesh_dir.join("sky_flora.nif"), b"mesh bytes").unwrap();
+        let vfs = VFS::from_directories([data_dir.path()], None);
+        let mesh_paths = BTreeSet::from([MeshCopyPath {
+            source: "grass\\sky_flora.nif".to_owned(),
+            target: "sky_flora.nif".to_owned(),
+        }]);
+
+        let jobs = resolve_mesh_copy_jobs(&vfs, &mesh_paths, output_dir.path()).unwrap();
+
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(
+            jobs[0].target_path,
+            output_dir
+                .path()
+                .join("Meshes")
+                .join("grass")
+                .join("sky_flora.nif")
+        );
+    }
+
+    #[test]
+    fn missing_mesh_jobs_are_fatal() {
+        let data_dir = TempDir::new("missing-mesh-data");
+        let output_dir = TempDir::new("missing-mesh-output");
+        let vfs = VFS::from_directories([data_dir.path()], None);
+        let mesh_paths = BTreeSet::from([MeshCopyPath {
+            source: "flora\\missing.nif".to_owned(),
+            target: "flora\\missing.nif".to_owned(),
+        }]);
+
+        let error = resolve_mesh_copy_jobs(&vfs, &mesh_paths, output_dir.path()).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(error.to_string().contains("Meshes\\flora\\missing.nif"));
     }
 
     #[test]
