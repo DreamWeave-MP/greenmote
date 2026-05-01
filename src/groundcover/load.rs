@@ -17,6 +17,18 @@ pub struct SourcePlugin {
     pub plugin_path: PathBuf,
 }
 
+pub struct PluginLoadResult {
+    pub plugins: Vec<LoadedPlugin>,
+    pub warnings: Vec<PluginLoadWarning>,
+}
+
+#[derive(Debug)]
+pub struct PluginLoadWarning {
+    pub load_index: usize,
+    pub plugin_path: PathBuf,
+    pub error: io::Error,
+}
+
 #[must_use]
 pub fn is_supported_plugin(path: &Path) -> bool {
     metadata(path).is_ok()
@@ -57,11 +69,11 @@ pub fn resolve_source_plugins(
         .collect()
 }
 
-pub fn load_plugins_for_cell_scanning(sources: Vec<SourcePlugin>) -> Vec<LoadedPlugin> {
+pub fn load_plugins_for_cell_scanning(sources: Vec<SourcePlugin>) -> PluginLoadResult {
     load_plugins_matching(sources, PluginLoadMode::Cells)
 }
 
-pub fn load_plugins_for_static_planning(sources: Vec<SourcePlugin>) -> Vec<LoadedPlugin> {
+pub fn load_plugins_for_static_planning(sources: Vec<SourcePlugin>) -> PluginLoadResult {
     load_plugins_matching(sources, PluginLoadMode::Statics)
 }
 
@@ -71,28 +83,35 @@ enum PluginLoadMode {
     Cells,
 }
 
-fn load_plugins_matching(sources: Vec<SourcePlugin>, mode: PluginLoadMode) -> Vec<LoadedPlugin> {
+fn load_plugins_matching(sources: Vec<SourcePlugin>, mode: PluginLoadMode) -> PluginLoadResult {
     let mut loaded = sources
         .into_par_iter()
-        .filter_map(|source| match load_one_plugin(&source, mode) {
-            Ok(plugin) => Some(LoadedPlugin {
+        .map(|source| match load_one_plugin(&source, mode) {
+            Ok(plugin) => Ok(LoadedPlugin {
                 load_index: source.load_index,
                 plugin_name: source.plugin_name,
                 plugin_path: source.plugin_path,
                 plugin,
             }),
-            Err(error) => {
-                eprintln!(
-                    "[ WARNING ]: Plugin {} could not be loaded: {error}. Continuing.",
-                    source.plugin_path.display()
-                );
-                None
-            }
+            Err(error) => Err(PluginLoadWarning {
+                load_index: source.load_index,
+                plugin_path: source.plugin_path,
+                error,
+            }),
         })
         .collect::<Vec<_>>();
 
-    loaded.sort_by_key(|plugin| plugin.load_index);
-    loaded
+    loaded.sort_by_key(|result| match result {
+        Ok(plugin) => plugin.load_index,
+        Err(warning) => warning.load_index,
+    });
+
+    let (plugins, warnings): (Vec<_>, Vec<_>) = loaded.into_iter().partition(Result::is_ok);
+
+    PluginLoadResult {
+        plugins: plugins.into_iter().filter_map(Result::ok).collect(),
+        warnings: warnings.into_iter().filter_map(Result::err).collect(),
+    }
 }
 
 fn load_one_plugin(source: &SourcePlugin, mode: PluginLoadMode) -> io::Result<Plugin> {
