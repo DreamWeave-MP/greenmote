@@ -20,11 +20,7 @@ pub fn run() -> io::Result<()> {
         return Ok(());
     }
 
-    match cli.command {
-        Some(Command::Convert(args)) => groundcover::run(args),
-        None => {
-            <Cli as clap::CommandFactory>::command().print_help()?;
-            Ok(())
-        }
+    match cli.command_or_default() {
+        Command::Convert(args) => groundcover::run(args),
     }
 }

@@ -25,6 +25,12 @@ pub enum Command {
 }
 
 impl Cli {
+    #[must_use]
+    pub fn command_or_default(self) -> Command {
+        self.command
+            .unwrap_or_else(|| Command::Convert(GroundcoverArgs::default()))
+    }
+
     /// Writes generated top-level CLI output when requested.
     ///
     /// # Errors
@@ -69,5 +75,21 @@ mod tests {
             Cli::command().try_get_matches_from(["greenmote", "convert", "--generate-manpage"]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn no_subcommand_defaults_to_convert() {
+        let cli = Cli::parse_from(["greenmote"]);
+
+        let Command::Convert(args) = cli.command_or_default();
+
+        assert!(args.openmw_cfg.is_none());
+        assert!(args.config.is_none());
+        assert!(args.output.is_none());
+        assert!(args.ignored_plugins.is_empty());
+        assert_eq!(args.dry_run, None);
+        assert_eq!(args.validate_config, None);
+        assert!(!args.auto_enable);
+        assert!(!args.debug);
     }
 }
