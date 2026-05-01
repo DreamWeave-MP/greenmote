@@ -23,6 +23,7 @@ pub use progress::{ConversionEvent, ConversionPhase};
 pub const DEFAULT_CONFIG_NAME: &str = "greenmote.toml";
 pub const DELETED_PLUGIN_NAME: &str = "deleted_groundcover.omwaddon";
 pub(crate) const GENERATED_PLUGIN_AUTHOR: &str = "greenmote";
+pub(crate) const GENERATED_PLUGIN_DESCRIPTION: &str = "Generated groundcover plugin created by greenmote convert.\nThis is a generated plugin.\nWhy are you reading this?\nBuy me coffee for moar tools.\nhttps://ko-fi.com/magicaldave";
 pub const GROUNDCOVER_PLUGIN_NAME: &str = "groundcover.omwaddon";
 pub const LOG_NAME: &str = "greenmote.log";
 

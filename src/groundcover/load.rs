@@ -9,7 +9,9 @@ use rayon::prelude::*;
 use tes3::esp::{Cell, Header, Plugin, Static};
 use vfstool_lib::VFS;
 
-use crate::groundcover::{GENERATED_PLUGIN_AUTHOR, GroundcoverConfig, plan::LoadedPlugin};
+use crate::groundcover::{
+    GENERATED_PLUGIN_AUTHOR, GENERATED_PLUGIN_DESCRIPTION, GroundcoverConfig, plan::LoadedPlugin,
+};
 
 #[derive(Clone, Debug)]
 pub struct SourcePlugin {
@@ -20,7 +22,14 @@ pub struct SourcePlugin {
 
 pub struct PluginLoadResult {
     pub plugins: Vec<LoadedPlugin>,
+    pub skipped_generated: Vec<SkippedGeneratedPlugin>,
     pub warnings: Vec<PluginLoadWarning>,
+}
+
+#[derive(Debug)]
+pub struct SkippedGeneratedPlugin {
+    pub plugin_name: String,
+    pub plugin_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -101,13 +110,20 @@ fn load_plugins_matching(
         .into_par_iter()
         .map(|source| {
             let result = match load_one_plugin(&source, mode) {
-                Ok(Some(plugin)) => Ok(Some(LoadedPlugin {
-                    load_index: source.load_index,
-                    plugin_name: source.plugin_name,
-                    plugin_path: source.plugin_path,
-                    plugin,
-                })),
-                Ok(None) => Ok(None),
+                Ok(RawPluginLoadOutcome::Loaded(plugin)) => {
+                    Ok(PluginLoadOutcome::Loaded(LoadedPlugin {
+                        load_index: source.load_index,
+                        plugin_name: source.plugin_name,
+                        plugin_path: source.plugin_path,
+                        plugin,
+                    }))
+                }
+                Ok(RawPluginLoadOutcome::SkippedGenerated) => Ok(
+                    PluginLoadOutcome::SkippedGenerated(SkippedGeneratedPlugin {
+                        plugin_name: source.plugin_name,
+                        plugin_path: source.plugin_path,
+                    }),
+                ),
                 Err(error) => Err(PluginLoadWarning {
                     plugin_path: source.plugin_path,
                     error,
@@ -123,24 +139,41 @@ fn load_plugins_matching(
 
     loaded.sort_by_key(|(load_index, _result)| *load_index);
 
-    let (plugins, warnings): (Vec<_>, Vec<_>) = loaded
-        .into_iter()
-        .map(|(_load_index, result)| result)
-        .partition(Result::is_ok);
+    let mut plugins = Vec::new();
+    let mut skipped_generated = Vec::new();
+    let mut warnings = Vec::new();
+
+    for (_load_index, result) in loaded {
+        match result {
+            Ok(PluginLoadOutcome::Loaded(plugin)) => plugins.push(plugin),
+            Ok(PluginLoadOutcome::SkippedGenerated(skipped)) => skipped_generated.push(skipped),
+            Err(warning) => warnings.push(warning),
+        }
+    }
 
     PluginLoadResult {
-        plugins: plugins
-            .into_iter()
-            .filter_map(Result::ok)
-            .flatten()
-            .collect(),
-        warnings: warnings.into_iter().filter_map(Result::err).collect(),
+        plugins,
+        skipped_generated,
+        warnings,
     }
 }
 
-fn load_one_plugin(source: &SourcePlugin, mode: PluginLoadMode) -> io::Result<Option<Plugin>> {
+enum PluginLoadOutcome {
+    Loaded(LoadedPlugin),
+    SkippedGenerated(SkippedGeneratedPlugin),
+}
+
+enum RawPluginLoadOutcome {
+    Loaded(Plugin),
+    SkippedGenerated,
+}
+
+fn load_one_plugin(
+    source: &SourcePlugin,
+    mode: PluginLoadMode,
+) -> io::Result<RawPluginLoadOutcome> {
     if is_greenmote_generated_plugin(&source.plugin_path)? {
-        return Ok(None);
+        return Ok(RawPluginLoadOutcome::SkippedGenerated);
     }
 
     Plugin::from_path_filtered(&source.plugin_path, |tag| {
@@ -153,7 +186,7 @@ fn load_one_plugin(source: &SourcePlugin, mode: PluginLoadMode) -> io::Result<Op
             PluginLoadMode::Cells => &tag == Cell::TAG,
         }
     })
-    .map(Some)
+    .map(RawPluginLoadOutcome::Loaded)
 }
 
 fn is_greenmote_generated_plugin(path: &Path) -> io::Result<bool> {
@@ -171,6 +204,16 @@ fn is_greenmote_header(header: &Header) -> bool {
         .0
         .trim()
         .eq_ignore_ascii_case(GENERATED_PLUGIN_AUTHOR)
+        && is_greenmote_description(&header.description.0)
+}
+
+fn is_greenmote_description(description: &str) -> bool {
+    matches!(
+        description.trim(),
+        GENERATED_PLUGIN_DESCRIPTION
+            | "Generated groundcover plugin from vanilla-style static refs"
+            | "Generated deleted groundcover plugin"
+    )
 }
 
 #[cfg(test)]
@@ -242,12 +285,13 @@ mod tests {
     }
 
     #[test]
-    fn greenmote_authored_plugins_are_skipped_without_warning() {
+    fn greenmote_generated_plugins_are_skipped_without_warning() {
         let generated = TempFile::new("generated.omwaddon");
         let source = TempFile::new("source.esp");
-        write_plugin(
+        write_plugin_with_description(
             generated.as_path(),
             GENERATED_PLUGIN_AUTHOR,
+            GENERATED_PLUGIN_DESCRIPTION,
             "generated_grass",
         );
         write_plugin(source.as_path(), "someone else", "source_grass");
@@ -261,6 +305,11 @@ mod tests {
         );
 
         assert!(result.warnings.is_empty());
+        assert_eq!(result.skipped_generated.len(), 1);
+        assert_eq!(
+            result.skipped_generated[0].plugin_name,
+            "generated.omwaddon"
+        );
         assert_eq!(result.plugins.len(), 1);
         assert_eq!(result.plugins[0].plugin_name, "source.esp");
         assert_eq!(
@@ -274,6 +323,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn greenmote_author_alone_does_not_skip_plugin() {
+        let source = TempFile::new("source.esp");
+        write_plugin(source.as_path(), GENERATED_PLUGIN_AUTHOR, "source_grass");
+
+        let result = load_plugins_for_static_planning(
+            vec![source_plugin(0, "source.esp", source.as_path())],
+            &|_, _| {},
+        );
+
+        assert!(result.warnings.is_empty());
+        assert!(result.skipped_generated.is_empty());
+        assert_eq!(result.plugins.len(), 1);
+    }
+
     fn source_plugin(load_index: usize, plugin_name: &str, path: &Path) -> SourcePlugin {
         SourcePlugin {
             load_index,
@@ -283,10 +347,20 @@ mod tests {
     }
 
     fn write_plugin(path: &Path, author: &str, static_id: &str) {
+        write_plugin_with_description(path, author, "", static_id);
+    }
+
+    fn write_plugin_with_description(
+        path: &Path,
+        author: &str,
+        description: &str,
+        static_id: &str,
+    ) {
         let mut plugin = Plugin {
             objects: vec![
                 TES3Object::Header(Header {
                     author: FixedString(author.to_owned()),
+                    description: FixedString(description.to_owned()),
                     num_objects: 1,
                     ..Header::default()
                 }),

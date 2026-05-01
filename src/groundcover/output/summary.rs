@@ -6,6 +6,7 @@ use crate::groundcover::{GroundcoverConfig, mesh, plan::ConversionPlan};
 pub struct RunSummary {
     pub content_files: usize,
     pub loaded_plugins: usize,
+    pub skipped_generated_plugins: Vec<String>,
     pub matched_statics: usize,
     pub used_statics: usize,
     pub changed_cells: usize,
@@ -43,11 +44,20 @@ pub fn write_summary(
     )?;
     writeln!(writer, "# content files: {}", summary.content_files)?;
     writeln!(writer, "# loaded plugins: {}", summary.loaded_plugins)?;
+    writeln!(
+        writer,
+        "# skipped generated plugins: {}",
+        summary.skipped_generated_plugins.len()
+    )?;
     writeln!(writer, "# matched statics: {}", summary.matched_statics)?;
     writeln!(writer, "# used statics: {}", summary.used_statics)?;
     writeln!(writer, "# changed cells: {}", summary.changed_cells)?;
     writeln!(writer, "# touched refs: {}", summary.touched_refs)?;
     writeln!(writer, "# meshes to copy: {}", summary.meshes_to_copy)?;
+
+    for plugin in &summary.skipped_generated_plugins {
+        writeln!(writer, "SKIP generated plugin {plugin:?}")?;
+    }
 
     for static_plan in plan.used_static_plans() {
         let output_static = static_plan.output_static()?;

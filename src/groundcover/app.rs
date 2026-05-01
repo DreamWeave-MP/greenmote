@@ -48,6 +48,11 @@ pub fn run(
         );
     });
     write_load_warnings(stderr, &static_load.warnings)?;
+    let skipped_generated_plugins = static_load
+        .skipped_generated
+        .iter()
+        .map(|plugin| format!("{} at {}", plugin.plugin_name, plugin.plugin_path.display()))
+        .collect::<Vec<_>>();
     let static_plugins = static_load.plugins;
     progress::emit_phase(events, ConversionPhase::PlanningStatics);
     let static_plan = build_static_conversion_plan(&static_plugins, &config);
@@ -74,7 +79,13 @@ pub fn run(
     let plan = static_plan.with_cell_plans(cell_plans);
     progress::emit_phase(events, ConversionPhase::ResolvingMeshes);
     let mesh_paths = plan.used_mesh_paths()?;
-    let summary = build_run_summary(content_files.len(), loaded_plugins, &plan, mesh_paths.len());
+    let summary = build_run_summary(
+        content_files.len(),
+        loaded_plugins,
+        skipped_generated_plugins,
+        &plan,
+        mesh_paths.len(),
+    );
 
     if config.debug {
         output::write_summary(&mut *stderr, &summary, &plan, &config)?;
@@ -117,12 +128,14 @@ pub fn run(
 fn build_run_summary(
     content_files: usize,
     loaded_plugins: usize,
+    skipped_generated_plugins: Vec<String>,
     plan: &crate::groundcover::plan::ConversionPlan,
     meshes_to_copy: usize,
 ) -> output::RunSummary {
     output::RunSummary {
         content_files,
         loaded_plugins,
+        skipped_generated_plugins,
         matched_statics: plan.static_plans.len(),
         used_statics: plan.used_static_ids.len(),
         changed_cells: plan

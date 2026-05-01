@@ -2,7 +2,9 @@ use std::io;
 
 use tes3::esp::{FixedString, Header, ObjectFlags, Plugin, types::FileType};
 
-use crate::groundcover::{GENERATED_PLUGIN_AUTHOR, plan::ConversionPlan};
+use crate::groundcover::{
+    GENERATED_PLUGIN_AUTHOR, GENERATED_PLUGIN_DESCRIPTION, plan::ConversionPlan,
+};
 
 use super::{
     masters,
@@ -87,9 +89,7 @@ fn groundcover_header() -> Header {
     Header {
         version: 1.3,
         author: FixedString(GENERATED_PLUGIN_AUTHOR.to_owned()),
-        description: FixedString(
-            "Generated groundcover plugin from vanilla-style static refs".to_owned(),
-        ),
+        description: FixedString(GENERATED_PLUGIN_DESCRIPTION.to_owned()),
         file_type: FileType::Esp,
         flags: ObjectFlags::default(),
         num_objects: 0,
@@ -101,7 +101,7 @@ fn deleted_header() -> Header {
     Header {
         version: 1.3,
         author: FixedString(GENERATED_PLUGIN_AUTHOR.to_owned()),
-        description: FixedString("Generated deleted groundcover plugin".to_owned()),
+        description: FixedString(GENERATED_PLUGIN_DESCRIPTION.to_owned()),
         file_type: FileType::Esp,
         flags: ObjectFlags::default(),
         num_objects: 0,
