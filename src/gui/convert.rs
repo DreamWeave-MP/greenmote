@@ -431,9 +431,7 @@ impl GreenmoteApp {
     }
 
     fn handle_progress_event(&mut self, event: ConversionEvent) {
-        if let ConversionEvent::PhaseStarted(phase) = event {
-            self.convert.phase_reached = Some(phase);
-        }
+        self.record_reached_phase(event_phase(event));
 
         if self.convert.cancelling {
             return;
@@ -459,6 +457,15 @@ impl GreenmoteApp {
                 });
                 self.set_status(phase.label());
             }
+        }
+    }
+
+    fn record_reached_phase(&mut self, phase: ConversionPhase) {
+        if match self.convert.phase_reached {
+            Some(reached) => phase_order(phase) >= phase_order(reached),
+            None => true,
+        } {
+            self.convert.phase_reached = Some(phase);
         }
     }
 
@@ -657,6 +664,26 @@ fn append_notice(output: &mut String, notice: &str) {
     }
     output.push_str(notice);
     output.push('\n');
+}
+
+const fn event_phase(event: ConversionEvent) -> ConversionPhase {
+    match event {
+        ConversionEvent::PhaseStarted(phase) | ConversionEvent::Progress { phase, .. } => phase,
+    }
+}
+
+const fn phase_order(phase: ConversionPhase) -> u8 {
+    match phase {
+        ConversionPhase::LoadingStaticPlugins => 0,
+        ConversionPhase::PlanningStatics => 1,
+        ConversionPhase::LoadingCellPlugins => 2,
+        ConversionPhase::ScanningCells => 3,
+        ConversionPhase::ResolvingMeshes => 4,
+        ConversionPhase::WritingPlugins => 5,
+        ConversionPhase::CopyingMeshes => 6,
+        ConversionPhase::AutoEnabling => 7,
+        ConversionPhase::WritingLog => 8,
+    }
 }
 
 fn progress_fraction(current: usize, total: usize) -> f32 {
