@@ -17,8 +17,9 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
         return Ok(());
     }
 
-    let selected_config_file = selected_config_file_path(&args);
+    let selected_config_file = selected_config_file_path(&args)?;
     let mut openmw_config = load_openmw_config(&args)?;
+    let greenmote_config_path = greenmote_config_path(&args, &openmw_config);
     let default_output_directory = default_output_directory(&openmw_config);
     let config = GroundcoverConfig::get(
         args,
@@ -27,13 +28,7 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     )?;
 
     if config.validate_config {
-        println!(
-            "Validated {} successfully",
-            openmw_config
-                .user_config_path()
-                .join(crate::groundcover::DEFAULT_CONFIG_NAME)
-                .display()
-        );
+        println!("Validated {} successfully", greenmote_config_path.display());
         return Ok(());
     }
 
@@ -96,17 +91,17 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
     Ok(())
 }
 
-fn selected_config_file_path(args: &GroundcoverArgs) -> PathBuf {
-    let config_path = get_config_path(args);
+fn selected_config_file_path(args: &GroundcoverArgs) -> io::Result<PathBuf> {
+    let config_path = get_config_path(args)?;
 
-    if config_path.is_dir() {
+    Ok(if config_path.is_dir() {
         config_path.join("openmw.cfg")
     } else {
         config_path
-    }
+    })
 }
 
-fn get_config_path(args: &GroundcoverArgs) -> PathBuf {
+fn get_config_path(args: &GroundcoverArgs) -> io::Result<PathBuf> {
     if let Some(path) = &args.openmw_cfg {
         let absolute_path = if path.is_relative() {
             path.canonicalize().unwrap_or_else(|_| path.to_owned())
@@ -117,31 +112,41 @@ fn get_config_path(args: &GroundcoverArgs) -> PathBuf {
         if absolute_path.is_file()
             || (absolute_path.is_dir() && absolute_path.join("openmw.cfg").is_file())
         {
-            return absolute_path;
+            return Ok(absolute_path);
         }
 
-        panic!(
-            "explicit --openmw-cfg path is neither a file nor a directory containing openmw.cfg"
-        );
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "explicit --openmw-cfg path {} is neither a file nor a directory containing openmw.cfg",
+                path.display()
+            ),
+        ));
     }
 
     let cwd_cfg = std::env::current_dir()
         .expect("failed to get current directory")
         .join("openmw.cfg");
     if cwd_cfg.is_file() {
-        return cwd_cfg;
+        return Ok(cwd_cfg);
     }
 
-    openmw_config::default_config_path()
+    Ok(openmw_config::default_config_path())
 }
 
 fn load_openmw_config(args: &GroundcoverArgs) -> io::Result<OpenMWConfiguration> {
-    OpenMWConfiguration::new(Some(get_config_path(args))).map_err(|error| {
+    OpenMWConfiguration::new(Some(get_config_path(args)?)).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("failed to read OpenMW configuration: {error}"),
         )
     })
+}
+
+fn greenmote_config_path(args: &GroundcoverArgs, config: &OpenMWConfiguration) -> PathBuf {
+    args.config
+        .clone()
+        .unwrap_or_else(|| config.user_config_path().join(crate::groundcover::DEFAULT_CONFIG_NAME))
 }
 
 fn content_files(config: &OpenMWConfiguration) -> io::Result<Vec<String>> {
