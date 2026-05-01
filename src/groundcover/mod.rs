@@ -136,11 +136,11 @@ fn replace_config_with_backup(config_path: &Path, temp_path: &Path) -> io::Resul
 }
 
 fn back_up_existing_config(config_path: &Path) -> io::Result<Option<PathBuf>> {
-    if !config_path.exists() {
-        return Ok(None);
-    }
-
-    let metadata = fs::symlink_metadata(config_path)?;
+    let metadata = match fs::symlink_metadata(config_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     if !metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -177,7 +177,7 @@ fn next_temp_config_path(config_path: &Path) -> PathBuf {
             format!("toml.tmp.{index}")
         };
         let temp_path = config_path.with_extension(extension);
-        if !temp_path.exists() {
+        if !path_entry_exists(&temp_path) {
             return temp_path;
         }
     }
@@ -187,18 +187,22 @@ fn next_temp_config_path(config_path: &Path) -> PathBuf {
 
 fn next_backup_path(config_path: &Path) -> PathBuf {
     let first_backup_path = config_path.with_extension("toml.bak");
-    if !first_backup_path.exists() {
+    if !path_entry_exists(&first_backup_path) {
         return first_backup_path;
     }
 
     for index in 1.. {
         let backup_path = config_path.with_extension(format!("toml.bak.{index}"));
-        if !backup_path.exists() {
+        if !path_entry_exists(&backup_path) {
             return backup_path;
         }
     }
 
     unreachable!("unbounded backup suffix search should always find a candidate")
+}
+
+fn path_entry_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
 }
 
 /// Saves editable GUI settings through the same TOML schema used by the CLI.

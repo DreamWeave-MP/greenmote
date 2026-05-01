@@ -295,3 +295,48 @@ fn replacing_config_rejects_directory_as_backup_source() {
     assert!(config_path.is_dir());
     assert!(temp_path.is_file());
 }
+
+#[cfg(unix)]
+#[test]
+fn replacing_config_rejects_dangling_config_symlink() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    let temp_path = config_path.with_extension("toml.tmp");
+    std::os::unix::fs::symlink(dir.path.join("missing.toml"), &config_path).unwrap();
+    std::fs::write(&temp_path, "[convert]\n").unwrap();
+
+    let result = crate::groundcover::replace_config_with_backup(&config_path, &temp_path);
+
+    assert!(result.is_err());
+    assert!(
+        std::fs::symlink_metadata(&config_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(temp_path.is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn backup_selection_skips_dangling_symlink() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    let backup_path = config_path.with_extension("toml.bak");
+    let next_backup_path = config_path.with_extension("toml.bak.1");
+    std::fs::write(&config_path, "definitely not toml").unwrap();
+    std::os::unix::fs::symlink(dir.path.join("missing-backup.toml"), &backup_path).unwrap();
+
+    crate::groundcover::back_up_existing_config(&config_path).unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(&backup_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        read_to_string(next_backup_path).unwrap(),
+        "definitely not toml"
+    );
+}
