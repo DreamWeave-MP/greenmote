@@ -77,9 +77,9 @@ fn validate_config_is_cli_only() {
     let args = GroundcoverArgs::parse_from(["convert", "--validate-config"]);
     let default_output_directory = dir.path.join("data-local");
 
-    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory).unwrap();
+    let result = GroundcoverConfig::get(args, &dir.path, default_output_directory);
 
-    assert!(config.validate_config);
+    assert!(result.is_err());
     assert!(
         !dir.path
             .join(crate::groundcover::DEFAULT_CONFIG_NAME)
@@ -271,7 +271,7 @@ fn replacing_config_backs_up_existing_file() {
     let temp_path = config_path.with_extension("toml.tmp");
     let config = GroundcoverConfig::with_output_directory(dir.path.join("data-local"));
 
-    config.save_for_edit(&temp_path).unwrap();
+    config.save_for_edit_new(&temp_path).unwrap();
     crate::groundcover::replace_config_with_backup(&config_path, &temp_path).unwrap();
 
     assert_eq!(

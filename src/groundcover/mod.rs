@@ -96,7 +96,15 @@ pub(crate) fn regenerate_config_for_edit(
     let default_output_directory = openmw::default_output_directory(&openmw_config);
     let config = GroundcoverConfig::with_output_directory(default_output_directory);
     let temp_path = next_temp_config_path(&config_path);
-    let config = config.save_for_edit(&temp_path)?;
+    let config = config.save_for_edit_new(&temp_path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to write temporary config {}: {error}",
+                temp_path.display()
+            ),
+        )
+    })?;
     replace_config_with_backup(&config_path, &temp_path)?;
 
     Ok((config_path, config))
@@ -108,8 +116,18 @@ fn replace_config_with_backup(config_path: &Path, temp_path: &Path) -> io::Resul
     match rename_with_context(temp_path, config_path) {
         Ok(()) => Ok(()),
         Err(error) => {
-            if let Some(backup_path) = backup_path {
-                let _ = fs::rename(&backup_path, config_path);
+            if let Some(backup_path) = backup_path
+                && let Err(restore_error) = fs::rename(&backup_path, config_path)
+            {
+                let _ = fs::remove_file(temp_path);
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "{error}; additionally failed to restore backup {} to {}: {restore_error}",
+                        backup_path.display(),
+                        config_path.display()
+                    ),
+                ));
             }
             let _ = fs::remove_file(temp_path);
             Err(error)

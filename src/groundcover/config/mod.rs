@@ -4,7 +4,7 @@ mod file;
 mod tests;
 
 use std::{
-    fs::{File, read_to_string},
+    fs::{File, OpenOptions, read_to_string},
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -122,6 +122,13 @@ impl GroundcoverConfig {
         Ok(normalized)
     }
 
+    pub(crate) fn save_for_edit_new(&self, path: &Path) -> io::Result<Self> {
+        let mut normalized = self.clone();
+        normalized.compile_regex_sets()?;
+        normalized.save_to_new(path)?;
+        Ok(normalized)
+    }
+
     /// Loads, merges, validates, and optionally initializes `greenmote.toml`.
     ///
     /// # Errors
@@ -138,6 +145,12 @@ impl GroundcoverConfig {
             .clone()
             .unwrap_or_else(|| user_config_path.join(crate::groundcover::DEFAULT_CONFIG_NAME));
         let config_missing = !config_path.is_file();
+        if config_missing && args.validate_config == Some(true) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("config file {} does not exist", config_path.display()),
+            ));
+        }
         let mut config = if config_missing {
             Self::with_output_directory(default_output_directory)
         } else {
@@ -183,6 +196,13 @@ impl GroundcoverConfig {
         let contents = toml::to_string_pretty(&file::GroundcoverConfigFile::from_runtime(self))
             .map_err(to_io_error)?;
         let mut file = File::create(path)?;
+        file.write_all(contents.as_bytes())
+    }
+
+    fn save_to_new(&self, path: &Path) -> io::Result<()> {
+        let contents = toml::to_string_pretty(&file::GroundcoverConfigFile::from_runtime(self))
+            .map_err(to_io_error)?;
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
         file.write_all(contents.as_bytes())
     }
 
