@@ -25,7 +25,12 @@ pub fn grass_prefixed_mesh(mesh: &str) -> String {
     }
 }
 
-#[must_use]
+/// Builds the output path for a normalized mesh under `Meshes/grass`.
+///
+/// # Errors
+///
+/// Returns invalid input if the mesh path contains empty, current-directory, parent-directory,
+/// or drive-prefixed components.
 pub fn mesh_output_path(output_directory: &Path, normalized_mesh: &str) -> io::Result<PathBuf> {
     let mut path = output_directory.join("Meshes").join("grass");
 

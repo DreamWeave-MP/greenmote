@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeSet, HashSet},
+    hash::BuildHasher,
     path::PathBuf,
 };
 
@@ -204,9 +205,9 @@ fn collect_winning_statics(
 }
 
 #[must_use]
-pub fn scan_cells_parallel(
+pub fn scan_cells_parallel<S: BuildHasher + Sync>(
     loaded_plugins: &[LoadedPlugin],
-    matched_static_ids: &HashSet<String>,
+    matched_static_ids: &HashSet<String, S>,
 ) -> Vec<PluginCellPlan> {
     loaded_plugins
         .par_iter()
