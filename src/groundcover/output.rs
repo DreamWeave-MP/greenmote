@@ -38,6 +38,8 @@ pub struct RunSummary {
     pub meshes_to_copy: usize,
 }
 
+const MAX_GENERATED_MASTERS: usize = 255;
+
 pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
     let mut groundcover_plugin = Plugin::new();
     let mut deleted_plugin = Plugin::new();
@@ -45,6 +47,8 @@ pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
     let mut deleted_header = deleted_header();
     let groundcover_master_indices = groundcover_master_indices(plan);
     let deleted_master_indices = deleted_master_indices(plan);
+    validate_master_count("groundcover", &groundcover_master_indices)?;
+    validate_master_count("deleted groundcover", &deleted_master_indices)?;
 
     for static_plan in &plan.static_plans {
         groundcover_plugin
@@ -90,10 +94,6 @@ pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
 fn groundcover_master_indices(plan: &ConversionPlan) -> BTreeMap<MasterSpec, u32> {
     let mut masters = MasterIndexBuilder::default();
 
-    for static_plan in &plan.static_plans {
-        masters.insert(static_plan.source_master.clone());
-    }
-
     for cell_plan in plan
         .cell_plans
         .iter()
@@ -121,6 +121,23 @@ fn deleted_master_indices(plan: &ConversionPlan) -> BTreeMap<MasterSpec, u32> {
     }
 
     masters.into_map()
+}
+
+fn validate_master_count(
+    output_name: &str,
+    master_indices: &BTreeMap<MasterSpec, u32>,
+) -> io::Result<()> {
+    if master_indices.len() > MAX_GENERATED_MASTERS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{output_name} output needs {} masters, but TES3 reference indices only support {MAX_GENERATED_MASTERS}",
+                master_indices.len()
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 #[derive(Default)]
@@ -478,5 +495,72 @@ mod tests {
         );
         assert!(generated_cell.references.contains_key(&(1, 7)));
         assert_eq!(generated_cell.references[&(1, 7)].mast_index, 1);
+    }
+
+    #[test]
+    fn static_only_source_plugins_do_not_become_masters() {
+        let plan = ConversionPlan {
+            static_plans: vec![StaticPlan {
+                source_load_index: 0,
+                source_plugin_name: "StaticOnly.esp".to_owned(),
+                source_plugin_path: PathBuf::from("StaticOnly.esp"),
+                source_master: MasterSpec {
+                    name: "StaticOnly.esp".to_owned(),
+                    size: 5,
+                },
+                output_static: Static::default(),
+            }],
+            cell_plans: Vec::new(),
+            matched_static_ids: HashSet::new(),
+            mesh_paths: BTreeSet::new(),
+        };
+
+        let built = build_plugins(&plan).unwrap();
+
+        assert_eq!(built.groundcover_plugin.objects.len(), 1);
+        assert!(built.groundcover_header.masters.is_empty());
+        assert!(built.deleted_header.masters.is_empty());
+    }
+
+    #[test]
+    fn generated_master_count_over_esp_reference_limit_fails() {
+        let cell_plans = (0..=MAX_GENERATED_MASTERS)
+            .map(|index| {
+                let mut cell = Cell::default();
+                cell.references.insert(
+                    (0, u32::try_from(index).unwrap()),
+                    Reference {
+                        id: format!("flora_grass_{index}"),
+                        mast_index: 0,
+                        ..Reference::default()
+                    },
+                );
+
+                PluginCellPlan {
+                    load_index: index,
+                    plugin_name: format!("Source{index}.esp"),
+                    plugin_path: PathBuf::from(format!("Source{index}.esp")),
+                    source_master: MasterSpec {
+                        name: format!("Source{index}.esp"),
+                        size: u64::try_from(index).unwrap(),
+                    },
+                    header_masters: Vec::new(),
+                    groundcover_cells: vec![cell.clone()],
+                    deleted_cells: vec![cell],
+                    touched_refs: 1,
+                }
+            })
+            .collect();
+        let plan = ConversionPlan {
+            static_plans: Vec::new(),
+            cell_plans,
+            matched_static_ids: HashSet::new(),
+            mesh_paths: BTreeSet::new(),
+        };
+
+        let error = build_plugins(&plan).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("only support 255"));
     }
 }
