@@ -222,7 +222,10 @@ impl GroundcoverConfigFile {
         let file = toml::from_str::<Self>(contents).map_err(to_io_error)?;
 
         Ok(GroundcoverConfig {
-            output_directory: file.output_directory.unwrap_or(default_output_directory),
+            output_directory: resolved_output_directory(
+                file.output_directory,
+                default_output_directory,
+            ),
             groundcover_output: file.groundcover_output,
             deleted_output: file.deleted_output,
             grass_ids: file.grass_ids,
@@ -237,6 +240,34 @@ impl GroundcoverConfigFile {
             ignored_plugin_set: RegexSet::empty(),
         })
     }
+}
+
+fn resolved_output_directory(
+    configured_output_directory: Option<PathBuf>,
+    default_output_directory: PathBuf,
+) -> PathBuf {
+    let Some(configured_output_directory) = configured_output_directory else {
+        return default_output_directory;
+    };
+
+    // Early versions of greenmote wrote the platform default data-local path into generated TOML.
+    // Treat that exact value as a generated default, not a user override, so profile-specific
+    // `data-local=` keeps owning the output directory.
+    if paths_equal(
+        &configured_output_directory,
+        &openmw_config::default_data_local_path(),
+    ) && !paths_equal(&configured_output_directory, &default_output_directory)
+    {
+        default_output_directory
+    } else {
+        configured_output_directory
+    }
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
 }
 
 fn to_io_error<E: std::fmt::Display>(err: E) -> io::Error {
@@ -381,6 +412,49 @@ groundcover_output = "gc.omwaddon"
             GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
 
         assert_eq!(config.output_directory, default_output_directory);
+    }
+
+    #[test]
+    fn stale_generated_platform_data_local_yields_to_effective_data_local() {
+        let dir = TempDir::new();
+        let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+        std::fs::write(
+            &config_path,
+            format!(
+                "output_directory = {:?}\n",
+                openmw_config::default_data_local_path()
+                    .display()
+                    .to_string()
+            ),
+        )
+        .unwrap();
+        let args = GroundcoverArgs::parse_from(["convert"]);
+        let effective_data_local = dir.path.join("Morrowind").join("overwrite");
+
+        let config = GroundcoverConfig::get(args, &dir.path, effective_data_local.clone()).unwrap();
+
+        assert_eq!(config.output_directory, effective_data_local);
+    }
+
+    #[test]
+    fn non_default_toml_output_directory_remains_user_override() {
+        let dir = TempDir::new();
+        let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+        let custom_output = dir.path.join("custom-output");
+        std::fs::write(
+            &config_path,
+            format!(
+                "output_directory = {:?}\n",
+                custom_output.display().to_string()
+            ),
+        )
+        .unwrap();
+        let args = GroundcoverArgs::parse_from(["convert"]);
+        let effective_data_local = dir.path.join("Morrowind").join("overwrite");
+
+        let config = GroundcoverConfig::get(args, &dir.path, effective_data_local).unwrap();
+
+        assert_eq!(config.output_directory, custom_output);
     }
 
     #[test]
