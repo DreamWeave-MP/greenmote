@@ -11,6 +11,7 @@ use crate::groundcover::{self, ConversionEvent, ConversionPhase, GroundcoverArgs
 use super::GreenmoteApp;
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
+const MIN_WIDGET_SIZE: f32 = 1.0;
 
 #[derive(Default)]
 pub(super) struct ConvertUiState {
@@ -87,11 +88,30 @@ impl GreenmoteApp {
         }
         ui.separator();
 
-        egui::ScrollArea::vertical()
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                ui.monospace(self.convert.output.as_str());
-            });
+        let output_size = finite_widget_size(ui.available_size());
+        ui.allocate_ui_with_layout(
+            output_size,
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                let output_width = finite_widget_extent(ui.available_width());
+                let output_height = finite_widget_extent(ui.available_height());
+                egui::ScrollArea::vertical()
+                    .max_width(output_width)
+                    .max_height(output_height)
+                    .stick_to_bottom(true)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_width(output_width);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(self.convert.output.as_str()).monospace(),
+                            )
+                            .wrap_mode(egui::TextWrapMode::Wrap)
+                            .selectable(false),
+                        );
+                    });
+            },
+        );
     }
 
     fn start_conversion(&mut self, ctx: &egui::Context) {
@@ -240,7 +260,7 @@ impl GreenmoteApp {
         };
 
         ui.label(progress.label());
-        ui.add(progress.progress_bar());
+        ui.add(progress.progress_bar(finite_widget_extent(ui.available_width())));
     }
 
     fn set_status(&mut self, status: impl Into<String>) {
@@ -321,15 +341,15 @@ impl ProgressState {
         }
     }
 
-    fn progress_bar(&self) -> egui::ProgressBar {
+    fn progress_bar(&self, width: f32) -> egui::ProgressBar {
         match self.progress {
             ProgressKind::Indeterminate => egui::ProgressBar::new(0.0)
                 .animate(true)
-                .desired_width(f32::INFINITY),
+                .desired_width(width),
             ProgressKind::Counted { current, total } => {
                 egui::ProgressBar::new(progress_fraction(current, total))
                     .show_percentage()
-                    .desired_width(f32::INFINITY)
+                    .desired_width(width)
             }
         }
     }
@@ -354,4 +374,16 @@ fn progress_fraction(current: usize, total: usize) -> f32 {
     let basis_points = u16::try_from((current * 10_000) / total).unwrap_or(10_000);
 
     f32::from(basis_points) / 10_000.0
+}
+
+fn finite_widget_size(size: egui::Vec2) -> egui::Vec2 {
+    egui::vec2(finite_widget_extent(size.x), finite_widget_extent(size.y))
+}
+
+fn finite_widget_extent(extent: f32) -> f32 {
+    if extent.is_finite() {
+        extent.max(MIN_WIDGET_SIZE)
+    } else {
+        MIN_WIDGET_SIZE
+    }
 }
