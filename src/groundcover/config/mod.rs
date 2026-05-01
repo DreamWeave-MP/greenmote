@@ -97,12 +97,14 @@ impl GroundcoverConfig {
         config_path: &Path,
         default_output_directory: PathBuf,
     ) -> io::Result<Self> {
-        let config = if config_path.is_file() {
+        let mut config = if config_path.is_file() {
             let contents = read_to_string(config_path)?;
             file::GroundcoverConfigFile::from_toml(&contents, default_output_directory)?
         } else {
             Self::with_output_directory(default_output_directory)
         };
+
+        config.compile_regex_sets()?;
 
         Ok(config)
     }

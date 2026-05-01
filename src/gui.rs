@@ -184,12 +184,13 @@ impl GreenmoteApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.label("greenmote.toml could not be loaded.");
-                ui.label("Regenerate it from defaults before continuing.");
+                ui.label("Replace it with defaults before continuing.");
+                ui.label("The current file will be moved aside as a .bak file first.");
                 ui.add_space(8.0);
                 ui.colored_label(ui.visuals().error_fg_color, error);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    regenerate = ui.button("Regenerate config and continue").clicked();
+                    regenerate = ui.button("Back up, regenerate, and continue").clicked();
                     close = ui.button("Close").clicked();
                 });
             });

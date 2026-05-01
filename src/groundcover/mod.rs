@@ -1,6 +1,7 @@
 use std::{
+    fs,
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 mod app;
@@ -81,7 +82,8 @@ pub(crate) fn load_config_for_edit(
     Ok((config_path, config))
 }
 
-/// Replaces the editable `greenmote.toml` with a validated generated default config.
+/// Moves aside the editable `greenmote.toml` and replaces it with a validated generated default
+/// config.
 ///
 /// # Errors
 ///
@@ -93,9 +95,35 @@ pub(crate) fn regenerate_config_for_edit(
     let config_path = openmw::greenmote_config_path(args, &openmw_config);
     let default_output_directory = openmw::default_output_directory(&openmw_config);
     let config = GroundcoverConfig::with_output_directory(default_output_directory);
+    back_up_existing_config(&config_path)?;
     let config = config.save_for_edit(&config_path)?;
 
     Ok((config_path, config))
+}
+
+fn back_up_existing_config(config_path: &Path) -> io::Result<()> {
+    if !config_path.exists() {
+        return Ok(());
+    }
+
+    let backup_path = next_backup_path(config_path);
+    fs::rename(config_path, backup_path)
+}
+
+fn next_backup_path(config_path: &Path) -> PathBuf {
+    let first_backup_path = config_path.with_extension("toml.bak");
+    if !first_backup_path.exists() {
+        return first_backup_path;
+    }
+
+    for index in 1.. {
+        let backup_path = config_path.with_extension(format!("toml.bak.{index}"));
+        if !backup_path.exists() {
+            return backup_path;
+        }
+    }
+
+    unreachable!("unbounded backup suffix search should always find a candidate")
 }
 
 /// Saves editable GUI settings through the same TOML schema used by the CLI.

@@ -252,3 +252,38 @@ fn invalid_regex_fails_validation() {
 
     assert!(config.compile_regex_sets().is_err());
 }
+
+#[test]
+fn load_for_edit_validates_regexes() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[convert]
+grass_ids = ["["]
+"#,
+    )
+    .unwrap();
+
+    let result = GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local"));
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn regenerating_config_backs_up_existing_file() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(&config_path, "definitely not toml").unwrap();
+    let config = GroundcoverConfig::with_output_directory(dir.path.join("data-local"));
+
+    crate::groundcover::back_up_existing_config(&config_path).unwrap();
+    config.save_for_edit(&config_path).unwrap();
+
+    assert_eq!(
+        read_to_string(config_path.with_extension("toml.bak")).unwrap(),
+        "definitely not toml"
+    );
+    assert!(read_to_string(config_path).unwrap().contains("[convert]"));
+}
