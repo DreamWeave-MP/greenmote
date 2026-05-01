@@ -14,9 +14,9 @@ const MAX_EVENTS_PER_FRAME: usize = 256;
 
 #[derive(Default)]
 pub(super) struct ConvertUiState {
-    pub(super) running: bool,
-    pub(super) status: String,
-    pub(super) output: String,
+    running: bool,
+    status: String,
+    output: String,
     progress: Option<ProgressState>,
     event_receiver: Option<mpsc::Receiver<GuiEvent>>,
 }
@@ -70,14 +70,14 @@ impl GreenmoteApp {
             ui.label(&self.convert.status);
         }
         ui.add_space(8.0);
-        let can_start = !self.convert.running && !self.settings.dirty;
+        let can_start = !self.convert.running && !self.settings.is_dirty();
         if ui
             .add_enabled(can_start, egui::Button::new("Start conversion"))
             .clicked()
         {
             self.start_conversion(ctx);
         }
-        if self.settings.dirty {
+        if self.settings.is_dirty() {
             ui.label("Save Settings changes before converting.");
         }
         ui.separator();

@@ -8,19 +8,26 @@ mod settings;
 
 use convert::ConvertUiState;
 use nav::{NavUiState, nav_bar_height};
-use settings::{PendingSettingsAction, SettingsUiState};
+use settings::{SettingsTab, SettingsUiState};
 
 struct GreenmoteApp {
     screen: Screen,
     convert: ConvertUiState,
     settings: SettingsUiState,
     nav: NavUiState,
+    pending_navigation: Option<PendingNavigation>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Convert,
     Settings,
+}
+
+#[derive(Clone, Copy)]
+enum PendingNavigation {
+    ShowScreen(Screen),
+    SelectSettingsTab(SettingsTab),
 }
 
 impl Default for GreenmoteApp {
@@ -30,6 +37,7 @@ impl Default for GreenmoteApp {
             convert: ConvertUiState::ready(),
             settings: SettingsUiState::default(),
             nav: NavUiState::default(),
+            pending_navigation: None,
         }
     }
 }
@@ -49,7 +57,7 @@ impl eframe::App for GreenmoteApp {
             self.show_active_screen(ui, ctx);
         });
 
-        self.show_pending_settings_prompt(ctx);
+        self.show_pending_navigation_prompt(ctx);
     }
 }
 
@@ -66,8 +74,8 @@ impl GreenmoteApp {
             return;
         }
 
-        if self.settings.dirty {
-            self.settings.pending_action = Some(PendingSettingsAction::ShowScreen(screen));
+        if self.settings.is_dirty() {
+            self.queue_pending_navigation(PendingNavigation::ShowScreen(screen));
         } else {
             self.show_screen(screen);
         }
@@ -77,6 +85,58 @@ impl GreenmoteApp {
         self.screen = screen;
         if screen == Screen::Settings {
             self.load_settings();
+        }
+    }
+
+    fn queue_pending_navigation(&mut self, navigation: PendingNavigation) {
+        self.pending_navigation = Some(navigation);
+    }
+
+    fn perform_pending_navigation(&mut self) {
+        let Some(navigation) = self.pending_navigation.take() else {
+            return;
+        };
+
+        match navigation {
+            PendingNavigation::ShowScreen(screen) => self.show_screen(screen),
+            PendingNavigation::SelectSettingsTab(tab) => self.settings.select_tab(tab),
+        }
+    }
+
+    fn show_pending_navigation_prompt(&mut self, ctx: &egui::Context) {
+        if self.pending_navigation.is_none() {
+            return;
+        }
+
+        let mut save = false;
+        let mut discard = false;
+        let mut cancel = false;
+
+        egui::Window::new("Unsaved settings")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Settings have unsaved changes.");
+                ui.label("Save them before switching views?");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    save = ui.button("Save").clicked();
+                    discard = ui.button("Discard").clicked();
+                    cancel = ui.button("Cancel").clicked();
+                });
+            });
+
+        if save {
+            if self.save_settings() {
+                self.perform_pending_navigation();
+            }
+        } else if discard {
+            if self.discard_settings() {
+                self.perform_pending_navigation();
+            }
+        } else if cancel {
+            self.pending_navigation = None;
         }
     }
 }

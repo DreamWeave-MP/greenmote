@@ -4,7 +4,7 @@ use eframe::egui;
 
 use crate::groundcover::{self, GroundcoverArgs, GroundcoverConfig};
 
-use super::{GreenmoteApp, Screen};
+use super::{GreenmoteApp, PendingNavigation};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsTab {
@@ -13,20 +13,13 @@ pub(super) enum SettingsTab {
 }
 
 pub(super) struct SettingsUiState {
-    pub(super) selected_tab: SettingsTab,
-    pub(super) draft: SettingsDraft,
-    pub(super) config_path: Option<PathBuf>,
-    pub(super) pending_action: Option<PendingSettingsAction>,
-    pub(super) loaded: bool,
-    pub(super) dirty: bool,
-    pub(super) status: String,
-    pub(super) error: Option<String>,
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum PendingSettingsAction {
-    ShowScreen(Screen),
-    SelectTab(SettingsTab),
+    selected_tab: SettingsTab,
+    draft: SettingsDraft,
+    config_path: Option<PathBuf>,
+    loaded: bool,
+    dirty: bool,
+    status: String,
+    error: Option<String>,
 }
 
 #[derive(Default)]
@@ -50,12 +43,21 @@ impl Default for SettingsUiState {
             selected_tab: SettingsTab::General,
             draft: SettingsDraft::from_config(&GroundcoverConfig::default()),
             config_path: None,
-            pending_action: None,
             loaded: false,
             dirty: false,
             status: String::new(),
             error: None,
         }
+    }
+}
+
+impl SettingsUiState {
+    pub(super) fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub(super) fn select_tab(&mut self, tab: SettingsTab) {
+        self.selected_tab = tab;
     }
 }
 
@@ -211,7 +213,7 @@ impl GreenmoteApp {
         self.load_settings_from_disk("Loaded")
     }
 
-    fn discard_settings(&mut self) -> bool {
+    pub(super) fn discard_settings(&mut self) -> bool {
         self.load_settings_from_disk("Discarded changes and reloaded")
     }
 
@@ -235,7 +237,7 @@ impl GreenmoteApp {
         }
     }
 
-    fn save_settings(&mut self) -> bool {
+    pub(super) fn save_settings(&mut self) -> bool {
         let Some(path) = self.settings.config_path.clone() else {
             self.settings.error = Some("No greenmote.toml path is available.".to_owned());
             return false;
@@ -264,57 +266,9 @@ impl GreenmoteApp {
         }
 
         if self.settings.dirty {
-            self.settings.pending_action = Some(PendingSettingsAction::SelectTab(tab));
+            self.queue_pending_navigation(PendingNavigation::SelectSettingsTab(tab));
         } else {
-            self.settings.selected_tab = tab;
-        }
-    }
-
-    pub(super) fn perform_pending_settings_action(&mut self) {
-        let Some(action) = self.settings.pending_action.take() else {
-            return;
-        };
-
-        match action {
-            PendingSettingsAction::ShowScreen(screen) => self.show_screen(screen),
-            PendingSettingsAction::SelectTab(tab) => self.settings.selected_tab = tab,
-        }
-    }
-
-    pub(super) fn show_pending_settings_prompt(&mut self, ctx: &egui::Context) {
-        if self.settings.pending_action.is_none() {
-            return;
-        }
-
-        let mut save = false;
-        let mut discard = false;
-        let mut cancel = false;
-
-        egui::Window::new("Unsaved settings")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.label("Settings have unsaved changes.");
-                ui.label("Save them before switching views?");
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    save = ui.button("Save").clicked();
-                    discard = ui.button("Discard").clicked();
-                    cancel = ui.button("Cancel").clicked();
-                });
-            });
-
-        if save {
-            if self.save_settings() {
-                self.perform_pending_settings_action();
-            }
-        } else if discard {
-            if self.discard_settings() {
-                self.perform_pending_settings_action();
-            }
-        } else if cancel {
-            self.settings.pending_action = None;
+            self.settings.select_tab(tab);
         }
     }
 }
