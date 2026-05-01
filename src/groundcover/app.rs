@@ -46,7 +46,7 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
 
     let sources = load::resolve_source_plugins(&content_files, &config, &vfs);
     let static_plugins = load::load_plugins_for_static_planning(sources.clone());
-    let static_plan = build_static_conversion_plan(&static_plugins, &config)?;
+    let static_plan = build_static_conversion_plan(&static_plugins, &config);
     let (loaded_plugins, cell_plans) = if static_plan.matched_static_ids.is_empty() {
         (static_plugins.len(), Vec::new())
     } else {
@@ -56,10 +56,12 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
         (cell_plugins.len(), cell_plans)
     };
     let plan = static_plan.with_cell_plans(cell_plans);
+    let mesh_paths = plan.used_mesh_paths()?;
     let summary = output::RunSummary {
         content_files: content_files.len(),
         loaded_plugins,
         matched_statics: plan.static_plans.len(),
+        used_statics: plan.used_static_ids.len(),
         changed_cells: plan
             .cell_plans
             .iter()
@@ -70,7 +72,7 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
             .iter()
             .map(|cell_plan| cell_plan.touched_refs)
             .sum(),
-        meshes_to_copy: plan.mesh_paths.len(),
+        meshes_to_copy: mesh_paths.len(),
     };
 
     if config.debug {
@@ -82,8 +84,7 @@ pub fn run(args: GroundcoverArgs) -> io::Result<()> {
         return Ok(());
     }
 
-    let mesh_jobs =
-        output::resolve_mesh_copy_jobs(&vfs, &plan.mesh_paths, &config.output_directory)?;
+    let mesh_jobs = output::resolve_mesh_copy_jobs(&vfs, &mesh_paths, &config.output_directory)?;
     let built = output::build_plugins(&plan)?;
     output::save_plugins(built, &config)?;
     output::copy_meshes(&mesh_jobs)?;

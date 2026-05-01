@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     hash::BuildHasher,
     io,
     path::PathBuf,
@@ -71,7 +71,35 @@ pub struct StaticPlan {
     pub source_plugin_name: String,
     pub source_plugin_path: PathBuf,
     pub source_master: MasterSpec,
-    pub output_static: Static,
+    pub source_static: Static,
+}
+
+impl StaticPlan {
+    #[must_use]
+    pub fn id_key(&self) -> String {
+        self.source_static.id.to_ascii_lowercase()
+    }
+
+    /// Builds the generated static record for a used source static.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid input if the source mesh path cannot be safely rooted under `grass\`.
+    pub fn output_static(&self) -> io::Result<Static> {
+        let mut output_static = self.source_static.clone();
+        output_static.mesh = mesh::grass_prefixed_mesh(&output_static.mesh)?;
+
+        Ok(output_static)
+    }
+
+    /// Builds the VFS lookup/output path pair for a used source static mesh.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid input if the source mesh path contains unsafe components.
+    pub fn mesh_copy_path(&self) -> io::Result<mesh::MeshCopyPath> {
+        mesh::normalize_mesh_for_copy(&self.source_static.mesh)
+    }
 }
 
 #[derive(Debug)]
@@ -84,6 +112,7 @@ pub struct PluginCellPlan {
     pub groundcover_cells: Vec<Cell>,
     pub deleted_cells: Vec<Cell>,
     pub touched_refs: usize,
+    pub used_static_ids: BTreeSet<String>,
 }
 
 impl PluginCellPlan {
@@ -126,80 +155,104 @@ pub struct ConversionPlan {
     pub static_plans: Vec<StaticPlan>,
     pub cell_plans: Vec<PluginCellPlan>,
     pub matched_static_ids: HashSet<String>,
-    pub mesh_paths: BTreeSet<mesh::MeshCopyPath>,
+    pub used_static_ids: BTreeSet<String>,
+}
+
+impl ConversionPlan {
+    #[must_use]
+    pub fn used_static_plans(&self) -> Vec<&StaticPlan> {
+        let static_plans_by_id = self
+            .static_plans
+            .iter()
+            .map(|static_plan| (static_plan.id_key(), static_plan))
+            .collect::<BTreeMap<_, _>>();
+
+        self.used_static_ids
+            .iter()
+            .filter_map(|id| static_plans_by_id.get(id).copied())
+            .collect()
+    }
+
+    /// Builds the mesh copy set for generated static records.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid input if a used static contains an unsafe mesh path.
+    pub fn used_mesh_paths(&self) -> io::Result<BTreeSet<mesh::MeshCopyPath>> {
+        self.used_static_plans()
+            .into_iter()
+            .map(StaticPlan::mesh_copy_path)
+            .collect()
+    }
 }
 
 #[derive(Debug)]
 pub struct StaticConversionPlan {
     pub static_plans: Vec<StaticPlan>,
     pub matched_static_ids: HashSet<String>,
-    pub mesh_paths: BTreeSet<mesh::MeshCopyPath>,
 }
 
 impl StaticConversionPlan {
     #[must_use]
     pub fn with_cell_plans(self, mut cell_plans: Vec<PluginCellPlan>) -> ConversionPlan {
         cell_plans.sort_by(|left, right| right.load_index.cmp(&left.load_index));
+        let used_static_ids = cell_plans
+            .iter()
+            .flat_map(|cell_plan| cell_plan.used_static_ids.iter().cloned())
+            .collect();
 
         ConversionPlan {
             static_plans: self.static_plans,
             cell_plans,
             matched_static_ids: self.matched_static_ids,
-            mesh_paths: self.mesh_paths,
+            used_static_ids,
         }
     }
 }
 
 /// Builds the full conversion plan from already-loaded plugins.
 ///
-/// # Errors
-///
-/// Returns invalid input if a matched static uses an unsafe mesh path.
+/// Mesh path validation is deferred until output work is derived from used statics, so unused
+/// matching statics do not fail or pay mesh-copy costs.
+#[must_use]
 pub fn build_conversion_plan(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,
-) -> io::Result<ConversionPlan> {
-    let static_plan = build_static_conversion_plan(loaded_plugins, config)?;
+) -> ConversionPlan {
+    let static_plan = build_static_conversion_plan(loaded_plugins, config);
     let cell_plans = if static_plan.matched_static_ids.is_empty() {
         Vec::new()
     } else {
         scan_cells_parallel(loaded_plugins, &static_plan.matched_static_ids)
     };
 
-    Ok(static_plan.with_cell_plans(cell_plans))
+    static_plan.with_cell_plans(cell_plans)
 }
 
 /// Builds the conversion plan portion that only needs `Header | Static` records.
 ///
-/// # Errors
-///
-/// Returns invalid input if a matched static uses an unsafe mesh path.
+/// This phase records winning static definitions only. Mesh validation is deliberately deferred
+/// until a static is actually used by a converted exterior reference.
+#[must_use]
 pub fn build_static_conversion_plan(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,
-) -> io::Result<StaticConversionPlan> {
-    let (static_plans, matched_static_ids, mesh_paths) =
-        collect_winning_statics(loaded_plugins, config)?;
+) -> StaticConversionPlan {
+    let (static_plans, matched_static_ids) = collect_winning_statics(loaded_plugins, config);
 
-    Ok(StaticConversionPlan {
+    StaticConversionPlan {
         static_plans,
         matched_static_ids,
-        mesh_paths,
-    })
+    }
 }
 
 fn collect_winning_statics(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,
-) -> io::Result<(
-    Vec<StaticPlan>,
-    HashSet<String>,
-    BTreeSet<mesh::MeshCopyPath>,
-)> {
+) -> (Vec<StaticPlan>, HashSet<String>) {
     let mut seen_static_ids = HashSet::new();
     let mut matched_static_ids = HashSet::new();
     let mut static_plans = Vec::new();
-    let mut mesh_paths = BTreeSet::new();
 
     let mut plugins_in_reverse_load_order = loaded_plugins.iter().collect::<Vec<_>>();
     plugins_in_reverse_load_order.sort_by(|left, right| right.load_index.cmp(&left.load_index));
@@ -213,22 +266,17 @@ fn collect_winning_statics(
 
             matched_static_ids.insert(lower_id);
 
-            mesh_paths.insert(mesh::normalize_mesh_for_copy(&static_record.mesh)?);
-
-            let mut output_static = static_record.clone();
-            output_static.mesh = mesh::grass_prefixed_mesh(&output_static.mesh)?;
-
             static_plans.push(StaticPlan {
                 source_load_index: loaded.load_index,
                 source_plugin_name: loaded.plugin_name.clone(),
                 source_plugin_path: loaded.plugin_path.clone(),
                 source_master: loaded.source_master(),
-                output_static,
+                source_static: static_record.clone(),
             });
         }
     }
 
-    Ok((static_plans, matched_static_ids, mesh_paths))
+    (static_plans, matched_static_ids)
 }
 
 #[must_use]
@@ -239,7 +287,7 @@ pub fn scan_cells_parallel<S: BuildHasher + Sync>(
     loaded_plugins
         .par_iter()
         .map(|loaded| {
-            let (groundcover_cells, deleted_cells, touched_refs) =
+            let (groundcover_cells, deleted_cells, touched_refs, used_static_ids) =
                 records::process_exterior_cells(&loaded.plugin, matched_static_ids);
 
             PluginCellPlan {
@@ -251,6 +299,7 @@ pub fn scan_cells_parallel<S: BuildHasher + Sync>(
                 groundcover_cells,
                 deleted_cells,
                 touched_refs,
+                used_static_ids,
             }
         })
         .collect()
@@ -341,6 +390,7 @@ mod tests {
             groundcover_cells: Vec::new(),
             deleted_cells: Vec::new(),
             touched_refs: 0,
+            used_static_ids: BTreeSet::new(),
         };
 
         let chain = cell_plan.master_chain_for_source_index(0).unwrap();
@@ -360,6 +410,7 @@ mod tests {
             groundcover_cells: Vec::new(),
             deleted_cells: Vec::new(),
             touched_refs: 0,
+            used_static_ids: BTreeSet::new(),
         };
 
         let chain = cell_plan.master_chain_for_source_index(2).unwrap();
@@ -383,34 +434,63 @@ mod tests {
             ),
         ];
 
-        let plan = build_conversion_plan(&plugins, &config()).unwrap();
+        let plan = build_conversion_plan(&plugins, &config());
 
         assert_eq!(plan.static_plans.len(), 1);
         assert_eq!(plan.static_plans[0].source_load_index, 1);
         assert_eq!(
-            plan.static_plans[0].output_static.mesh,
+            plan.static_plans[0].output_static().unwrap().mesh,
             "grass\\flora\\planter.nif"
         );
         assert!(plan.matched_static_ids.contains("flora_grass_01"));
     }
 
     #[test]
-    fn existing_grass_meshes_are_still_planned_for_copy() {
+    fn existing_grass_meshes_are_planned_for_copy_when_used() {
         let plugins = vec![loaded(
             0,
-            vec![static_record("flora_grass_01", "Grass\\Sky_Flora_GS_01_01.nif").into()],
+            vec![
+                static_record("flora_grass_01", "Grass\\Sky_Flora_GS_01_01.nif").into(),
+                exterior_cell("", [((0, 1), reference("flora_grass_01"))]).into(),
+            ],
         )];
 
-        let plan = build_conversion_plan(&plugins, &config()).unwrap();
-        let mesh_path = plan.mesh_paths.iter().next().unwrap();
+        let plan = build_conversion_plan(&plugins, &config());
+        let mesh_paths = plan.used_mesh_paths().unwrap();
+        let mesh_path = mesh_paths.iter().next().unwrap();
 
-        assert_eq!(plan.mesh_paths.len(), 1);
+        assert_eq!(mesh_paths.len(), 1);
         assert_eq!(mesh_path.source, "grass\\sky_flora_gs_01_01.nif");
         assert_eq!(mesh_path.target, "sky_flora_gs_01_01.nif");
         assert_eq!(
-            plan.static_plans[0].output_static.mesh,
+            plan.static_plans[0].output_static().unwrap().mesh,
             "Grass\\Sky_Flora_GS_01_01.nif"
         );
+    }
+
+    #[test]
+    fn unused_matched_static_meshes_are_not_planned_for_copy() {
+        let plugins = vec![loaded(
+            0,
+            vec![
+                static_record("flora_grass_used", "flora\\used.nif").into(),
+                static_record("flora_grass_unused", "..\\unsafe-missing.nif").into(),
+                exterior_cell("", [((0, 1), reference("flora_grass_used"))]).into(),
+            ],
+        )];
+
+        let plan = build_conversion_plan(&plugins, &config());
+        let used_static_plans = plan.used_static_plans();
+        let mesh_paths = plan.used_mesh_paths().unwrap();
+
+        assert_eq!(plan.static_plans.len(), 2);
+        assert_eq!(used_static_plans.len(), 1);
+        assert_eq!(used_static_plans[0].source_static.id, "flora_grass_used");
+        assert_eq!(mesh_paths.len(), 1);
+        assert!(mesh_paths.contains(&mesh::MeshCopyPath {
+            source: "flora\\used.nif".to_owned(),
+            target: "flora\\used.nif".to_owned(),
+        }));
     }
 
     #[test]
@@ -423,14 +503,18 @@ mod tests {
             ],
         )];
 
-        let plan = build_conversion_plan(&plugins, &config()).unwrap();
+        let plan = build_conversion_plan(&plugins, &config());
 
         assert_eq!(plan.static_plans.len(), 1);
         assert_eq!(
-            plan.static_plans[0].output_static.mesh,
+            plan.static_plans[0].output_static().unwrap().mesh,
             "grass\\flora\\grass.nif"
         );
         assert_eq!(plan.cell_plans[0].touched_refs, 1);
+        assert_eq!(
+            plan.used_static_ids,
+            BTreeSet::from(["flora_grass_01".to_owned()])
+        );
         assert_eq!(plan.cell_plans[0].groundcover_cells.len(), 1);
         assert_eq!(plan.cell_plans[0].deleted_cells.len(), 1);
         let deleted_ref = plan.cell_plans[0].deleted_cells[0]
@@ -454,7 +538,7 @@ mod tests {
             ],
         )];
 
-        let plan = build_conversion_plan(&plugins, &config()).unwrap();
+        let plan = build_conversion_plan(&plugins, &config());
 
         assert_eq!(plan.static_plans.len(), 1);
         assert_eq!(plan.cell_plans[0].touched_refs, 0);

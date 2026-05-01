@@ -1,4 +1,7 @@
-use std::{collections::HashSet, hash::BuildHasher};
+use std::{
+    collections::{BTreeSet, HashSet},
+    hash::BuildHasher,
+};
 
 use tes3::esp::{Cell, Plugin, Reference};
 
@@ -6,10 +9,11 @@ use tes3::esp::{Cell, Plugin, Reference};
 pub fn process_exterior_cells<S: BuildHasher>(
     plugin: &Plugin,
     matched_static_ids: &HashSet<String, S>,
-) -> (Vec<Cell>, Vec<Cell>, usize) {
+) -> (Vec<Cell>, Vec<Cell>, usize, BTreeSet<String>) {
     let mut groundcover_cells = Vec::new();
     let mut deleted_cells = Vec::new();
     let mut touched_refs = 0;
+    let mut used_static_ids = BTreeSet::new();
 
     for cell in plugin
         .objects_of_type::<Cell>()
@@ -31,6 +35,7 @@ pub fn process_exterior_cells<S: BuildHasher>(
         let mut deleted_cell = minimal_cell_shell(cell);
 
         for (key, reference) in matching_refs {
+            used_static_ids.insert(reference.id.to_ascii_lowercase());
             groundcover_cell.references.insert(*key, reference.clone());
 
             let mut deleted_reference = reference.clone();
@@ -43,7 +48,12 @@ pub fn process_exterior_cells<S: BuildHasher>(
         deleted_cells.push(deleted_cell);
     }
 
-    (groundcover_cells, deleted_cells, touched_refs)
+    (
+        groundcover_cells,
+        deleted_cells,
+        touched_refs,
+        used_static_ids,
+    )
 }
 
 fn minimal_cell_shell(source: &Cell) -> Cell {
@@ -111,10 +121,14 @@ mod tests {
         };
         let matched_static_ids = HashSet::from(["flora_grass_01".to_owned()]);
 
-        let (groundcover_cells, deleted_cells, touched_refs) =
+        let (groundcover_cells, deleted_cells, touched_refs, used_static_ids) =
             process_exterior_cells(&plugin, &matched_static_ids);
 
         assert_eq!(touched_refs, 1);
+        assert_eq!(
+            used_static_ids,
+            BTreeSet::from(["flora_grass_01".to_owned()])
+        );
         assert_eq!(groundcover_cells.len(), 1);
         assert_eq!(groundcover_cells[0].name, "Ascadian Isles Region");
         assert_eq!(groundcover_cells[0].data.grid, (3, -4));
@@ -130,10 +144,11 @@ mod tests {
         };
         let matched_static_ids = HashSet::from(["flora_grass_01".to_owned()]);
 
-        let (groundcover_cells, deleted_cells, touched_refs) =
+        let (groundcover_cells, deleted_cells, touched_refs, used_static_ids) =
             process_exterior_cells(&plugin, &matched_static_ids);
 
         assert_eq!(touched_refs, 0);
+        assert!(used_static_ids.is_empty());
         assert!(groundcover_cells.is_empty());
         assert!(deleted_cells.is_empty());
     }
@@ -145,10 +160,14 @@ mod tests {
         };
         let matched_static_ids = HashSet::from(["flora_grass_01".to_owned()]);
 
-        let (groundcover_cells, _, touched_refs) =
+        let (groundcover_cells, _, touched_refs, used_static_ids) =
             process_exterior_cells(&plugin, &matched_static_ids);
 
         assert_eq!(touched_refs, 1);
+        assert_eq!(
+            used_static_ids,
+            BTreeSet::from(["flora_grass_01".to_owned()])
+        );
         assert!(groundcover_cells[0].references.contains_key(&(0, 1)));
     }
 }

@@ -33,6 +33,7 @@ pub struct RunSummary {
     pub content_files: usize,
     pub loaded_plugins: usize,
     pub matched_statics: usize,
+    pub used_statics: usize,
     pub changed_cells: usize,
     pub touched_refs: usize,
     pub meshes_to_copy: usize,
@@ -50,10 +51,10 @@ pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
     validate_master_count("groundcover", &groundcover_master_indices)?;
     validate_master_count("deleted groundcover", &deleted_master_indices)?;
 
-    for static_plan in &plan.static_plans {
+    for static_plan in plan.used_static_plans() {
         groundcover_plugin
             .objects
-            .push(static_plan.output_static.clone().into());
+            .push(static_plan.output_static()?.into());
     }
 
     for cell_plan in &plan.cell_plans {
@@ -349,17 +350,17 @@ pub fn write_summary(
     writeln!(writer, "# content files: {}", summary.content_files)?;
     writeln!(writer, "# loaded plugins: {}", summary.loaded_plugins)?;
     writeln!(writer, "# matched statics: {}", summary.matched_statics)?;
+    writeln!(writer, "# used statics: {}", summary.used_statics)?;
     writeln!(writer, "# changed cells: {}", summary.changed_cells)?;
     writeln!(writer, "# touched refs: {}", summary.touched_refs)?;
     writeln!(writer, "# meshes to copy: {}", summary.meshes_to_copy)?;
 
-    for static_plan in &plan.static_plans {
+    for static_plan in plan.used_static_plans() {
+        let output_static = static_plan.output_static()?;
         writeln!(
             writer,
             "STAT {:?} from {:?}: mesh -> {:?}",
-            static_plan.output_static.id,
-            static_plan.source_plugin_name,
-            static_plan.output_static.mesh
+            output_static.id, static_plan.source_plugin_name, output_static.mesh
         )?;
     }
 
@@ -373,7 +374,7 @@ pub fn write_summary(
         )?;
     }
 
-    for mesh_path in &plan.mesh_paths {
+    for mesh_path in &plan.used_mesh_paths()? {
         writeln!(
             writer,
             "MESH {:?} -> {}",
@@ -517,7 +518,7 @@ mod tests {
             static_plans: Vec::new(),
             cell_plans: Vec::new(),
             matched_static_ids: HashSet::new(),
-            mesh_paths: BTreeSet::new(),
+            used_static_ids: BTreeSet::new(),
         };
 
         let built = build_plugins(&plan).unwrap();
@@ -549,7 +550,11 @@ mod tests {
                 source_plugin_name: "Source.esp".to_owned(),
                 source_plugin_path: PathBuf::from("Source.esp"),
                 source_master: source_master.clone(),
-                output_static: Static::default(),
+                source_static: Static {
+                    id: "flora_grass_01".to_owned(),
+                    mesh: "flora\\grass.nif".to_owned(),
+                    ..Static::default()
+                },
             }],
             cell_plans: vec![PluginCellPlan {
                 load_index: 0,
@@ -560,9 +565,10 @@ mod tests {
                 groundcover_cells: vec![cell.clone()],
                 deleted_cells: vec![cell],
                 touched_refs: 1,
+                used_static_ids: BTreeSet::from(["flora_grass_01".to_owned()]),
             }],
             matched_static_ids: HashSet::from(["flora_grass_01".to_owned()]),
-            mesh_paths: BTreeSet::new(),
+            used_static_ids: BTreeSet::from(["flora_grass_01".to_owned()]),
         };
 
         let built = build_plugins(&plan).unwrap();
@@ -610,9 +616,10 @@ mod tests {
                 groundcover_cells: vec![cell.clone()],
                 deleted_cells: vec![cell],
                 touched_refs: 1,
+                used_static_ids: BTreeSet::from(["flora_grass_01".to_owned()]),
             }],
             matched_static_ids: HashSet::new(),
-            mesh_paths: BTreeSet::new(),
+            used_static_ids: BTreeSet::from(["flora_grass_01".to_owned()]),
         };
 
         let built = build_plugins(&plan).unwrap();
@@ -666,9 +673,10 @@ mod tests {
                 groundcover_cells: vec![cell.clone()],
                 deleted_cells: vec![cell],
                 touched_refs: 1,
+                used_static_ids: BTreeSet::from(["flora_grass_01".to_owned()]),
             }],
             matched_static_ids: HashSet::new(),
-            mesh_paths: BTreeSet::new(),
+            used_static_ids: BTreeSet::from(["flora_grass_01".to_owned()]),
         };
 
         let built = build_plugins(&plan).unwrap();
@@ -690,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn static_only_source_plugins_do_not_become_masters() {
+    fn unused_static_only_source_plugins_do_not_emit_records_or_become_masters() {
         let plan = ConversionPlan {
             static_plans: vec![StaticPlan {
                 source_load_index: 0,
@@ -700,16 +708,19 @@ mod tests {
                     name: "StaticOnly.esp".to_owned(),
                     size: 5,
                 },
-                output_static: Static::default(),
+                source_static: Static {
+                    id: "flora_grass_unused".to_owned(),
+                    ..Static::default()
+                },
             }],
             cell_plans: Vec::new(),
             matched_static_ids: HashSet::new(),
-            mesh_paths: BTreeSet::new(),
+            used_static_ids: BTreeSet::new(),
         };
 
         let built = build_plugins(&plan).unwrap();
 
-        assert_eq!(built.groundcover_plugin.objects.len(), 1);
+        assert!(built.groundcover_plugin.objects.is_empty());
         assert!(built.groundcover_header.masters.is_empty());
         assert!(built.deleted_header.masters.is_empty());
     }
@@ -740,6 +751,7 @@ mod tests {
                     groundcover_cells: vec![cell.clone()],
                     deleted_cells: vec![cell],
                     touched_refs: 1,
+                    used_static_ids: BTreeSet::from([format!("flora_grass_{index}")]),
                 }
             })
             .collect();
@@ -747,7 +759,7 @@ mod tests {
             static_plans: Vec::new(),
             cell_plans,
             matched_static_ids: HashSet::new(),
-            mesh_paths: BTreeSet::new(),
+            used_static_ids: BTreeSet::new(),
         };
 
         let error = build_plugins(&plan).unwrap_err();

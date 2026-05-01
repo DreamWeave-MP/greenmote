@@ -80,6 +80,13 @@ fn convert_minimal_fixture_writes_plugins_and_copied_meshes() {
     let generated_static = groundcover.objects_of_type::<Static>().next().unwrap();
     assert_eq!(generated_static.id, "flora_grass_01");
     assert_eq!(generated_static.mesh, "grass\\flora\\grass.nif");
+    assert_eq!(groundcover.objects_of_type::<Static>().count(), 1);
+    assert!(
+        !output_dir
+            .path()
+            .join("Meshes/grass/flora/missing-unused.nif")
+            .exists()
+    );
 
     let groundcover_cell = groundcover.objects_of_type::<Cell>().next().unwrap();
     assert_eq!(groundcover_cell.data.grid, (1, 2));
@@ -170,10 +177,11 @@ fn write_source_plugin(data_dir: &Path) {
     let mut plugin = Plugin {
         objects: vec![
             TES3Object::Header(Header {
-                num_objects: 3,
+                num_objects: 4,
                 ..Header::default()
             }),
             static_record("flora_grass_01", "flora/grass.nif").into(),
+            static_record("flora_grass_unused", "flora/missing-unused.nif").into(),
             exterior_cell([
                 ((0, 7), reference("Flora_Grass_01")),
                 ((0, 8), reference("crate_01")),
