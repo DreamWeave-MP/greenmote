@@ -150,7 +150,8 @@ impl GroundcoverConfig {
     }
 
     fn save_to(&self, path: &Path) -> io::Result<()> {
-        let contents = toml::to_string_pretty(self).map_err(to_io_error)?;
+        let contents = toml::to_string_pretty(&GroundcoverConfigFile::from_runtime(self))
+            .map_err(to_io_error)?;
         let mut file = File::create(path)?;
         file.write_all(contents.as_bytes())
     }
@@ -179,27 +180,37 @@ impl GroundcoverConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-// Mirrors the public TOML schema so we can distinguish an omitted output directory from one the
-// user intentionally set. Same persisted toggle problem as `GroundcoverConfig`.
-#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Deserialize, Serialize)]
+// Mirrors the public TOML schema so we can distinguish an omitted output directory from one the user
+// intentionally set. Convert-specific knobs live under `[convert]`; root-level command knobs are
+// not supported because this tool is still wet paint, not a museum.
 struct GroundcoverConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     output_directory: Option<PathBuf>,
 
-    #[serde(default = "default::groundcover_output")]
-    groundcover_output: String,
+    #[serde(default)]
+    convert: ConvertConfigFile,
+}
 
-    #[serde(default = "default::deleted_output")]
-    deleted_output: String,
+#[derive(Debug, Default, Deserialize, Serialize)]
+// These are persisted/CLI-facing runtime toggles. Hiding them behind enums would make the Rust
+// type prettier and the TOML schema worse. That is not a trade.
+#[allow(clippy::struct_excessive_bools)]
+struct ConvertConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    groundcover_output: Option<String>,
 
-    #[serde(default = "default::grass_ids")]
-    grass_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deleted_output: Option<String>,
 
-    #[serde(default = "default::exclude")]
-    exclude: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    grass_ids: Option<Vec<String>>,
 
-    #[serde(default = "default::ignored_plugins")]
-    ignored_plugins: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ignored_plugins: Option<Vec<String>>,
 
     #[serde(default)]
     dry_run: bool,
@@ -215,26 +226,50 @@ struct GroundcoverConfigFile {
 }
 
 impl GroundcoverConfigFile {
+    fn from_runtime(config: &GroundcoverConfig) -> Self {
+        Self {
+            output_directory: Some(config.output_directory.clone()),
+            convert: ConvertConfigFile {
+                groundcover_output: Some(config.groundcover_output.clone()),
+                deleted_output: Some(config.deleted_output.clone()),
+                grass_ids: Some(config.grass_ids.clone()),
+                exclude: Some(config.exclude.clone()),
+                ignored_plugins: Some(config.ignored_plugins.clone()),
+                dry_run: config.dry_run,
+                validate_config: config.validate_config,
+                debug: config.debug,
+                auto_enable: config.auto_enable,
+            },
+        }
+    }
+
     fn from_toml(
         contents: &str,
         default_output_directory: PathBuf,
     ) -> io::Result<GroundcoverConfig> {
         let file = toml::from_str::<Self>(contents).map_err(to_io_error)?;
+        let convert = file.convert;
 
         Ok(GroundcoverConfig {
             output_directory: resolved_output_directory(
                 file.output_directory,
                 default_output_directory,
             ),
-            groundcover_output: file.groundcover_output,
-            deleted_output: file.deleted_output,
-            grass_ids: file.grass_ids,
-            exclude: file.exclude,
-            ignored_plugins: file.ignored_plugins,
-            dry_run: file.dry_run,
-            validate_config: file.validate_config,
-            debug: file.debug,
-            auto_enable: file.auto_enable,
+            groundcover_output: convert
+                .groundcover_output
+                .unwrap_or_else(default::groundcover_output),
+            deleted_output: convert
+                .deleted_output
+                .unwrap_or_else(default::deleted_output),
+            grass_ids: convert.grass_ids.unwrap_or_else(default::grass_ids),
+            exclude: convert.exclude.unwrap_or_else(default::exclude),
+            ignored_plugins: convert
+                .ignored_plugins
+                .unwrap_or_else(default::ignored_plugins),
+            dry_run: convert.dry_run,
+            validate_config: convert.validate_config,
+            debug: convert.debug,
+            auto_enable: convert.auto_enable,
             include_set: RegexSet::empty(),
             exclude_set: RegexSet::empty(),
             ignored_plugin_set: RegexSet::empty(),
@@ -339,7 +374,7 @@ mod tests {
         assert!(
             read_to_string(dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME))
                 .unwrap()
-                .contains("data-local")
+                .contains("[convert]")
         );
     }
 
@@ -368,6 +403,7 @@ mod tests {
         std::fs::write(
             &config_path,
             r#"
+[convert]
 groundcover_output = "gc.omwaddon"
 ignored_plugins = ["Generated"]
 dry_run = false
@@ -401,6 +437,7 @@ dry_run = false
         std::fs::write(
             &config_path,
             r#"
+[convert]
 groundcover_output = "gc.omwaddon"
 "#,
         )
@@ -464,6 +501,7 @@ groundcover_output = "gc.omwaddon"
         std::fs::write(
             &config_path,
             r#"
+[convert]
 deleted_output = "my_deleted_groundcover.omwaddon"
 "#,
         )
@@ -473,6 +511,28 @@ deleted_output = "my_deleted_groundcover.omwaddon"
         let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
 
         assert!(config.is_ignored_plugin_name("my_deleted_groundcover.omwaddon"));
+    }
+
+    #[test]
+    fn root_convert_keys_are_not_part_of_the_schema() {
+        let dir = TempDir::new();
+        let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+        std::fs::write(
+            &config_path,
+            r#"
+groundcover_output = "legacy_gc.omwaddon"
+ignored_plugins = ["LegacyGenerated"]
+dry_run = true
+"#,
+        )
+        .unwrap();
+        let args = GroundcoverArgs::parse_from(["convert"]);
+
+        let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
+
+        assert_eq!(config.groundcover_output, default::groundcover_output());
+        assert!(!config.dry_run);
+        assert!(!config.is_ignored_plugin_name("LegacyGenerated.omwaddon"));
     }
 
     #[test]

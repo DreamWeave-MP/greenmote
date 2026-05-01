@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use clap_complete::Shell;
 
 #[derive(Parser, Clone, Debug)]
 #[command(
@@ -52,12 +51,4 @@ pub struct GroundcoverArgs {
     /// Print extra conversion diagnostics.
     #[arg(short = 'd', long = "debug")]
     pub debug: bool,
-
-    /// Generate shell completion script to stdout.
-    #[arg(long, value_name = "SHELL", conflicts_with = "generate_manpage")]
-    pub generate_completion: Option<Shell>,
-
-    /// Generate roff manpage to stdout.
-    #[arg(long, conflicts_with = "generate_completion")]
-    pub generate_manpage: bool,
 }

@@ -151,8 +151,6 @@ fn args_for(config_dir: &Path) -> GroundcoverArgs {
         validate_config: None,
         auto_enable: false,
         debug: false,
-        generate_completion: None,
-        generate_manpage: false,
     }
 }
 

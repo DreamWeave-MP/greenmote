@@ -16,7 +16,15 @@ pub use cli::{Cli, Command};
 pub fn run() -> io::Result<()> {
     let cli = Cli::parse();
 
+    if cli.handle_generated_output(&mut io::stdout())? {
+        return Ok(());
+    }
+
     match cli.command {
-        Command::Convert(args) => groundcover::run(args),
+        Some(Command::Convert(args)) => groundcover::run(args),
+        None => {
+            <Cli as clap::CommandFactory>::command().print_help()?;
+            Ok(())
+        }
     }
 }

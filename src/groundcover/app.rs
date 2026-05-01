@@ -9,15 +9,11 @@ use openmw_config::OpenMWConfiguration;
 use vfstool_lib::VFS;
 
 use crate::groundcover::{
-    GroundcoverArgs, GroundcoverConfig, LOG_NAME, handle_generated_output, load, output,
+    GroundcoverArgs, GroundcoverConfig, LOG_NAME, load, output,
     plan::{build_static_conversion_plan, scan_cells_parallel},
 };
 
 pub fn run(args: GroundcoverArgs) -> io::Result<()> {
-    if handle_generated_output(&args, &mut io::stdout())? {
-        return Ok(());
-    }
-
     let mut openmw_config = load_openmw_config(&args)?;
     let greenmote_config_path = greenmote_config_path(&args, &openmw_config);
     let default_output_directory = default_output_directory(&openmw_config);
