@@ -186,6 +186,31 @@ fn manual_guidance_reports_only_missing_deleted_output() {
 }
 
 #[test]
+fn manual_guidance_reports_only_missing_groundcover_output() {
+    let config_dir = TempDir::new("manual-groundcover-config");
+    let data_dir = TempDir::new("manual-groundcover-data");
+    let output_dir = TempDir::new("manual-groundcover-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        false,
+        true,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(args_for(config_dir.path()), &mut stdout, &mut stderr)
+        .unwrap();
+
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert!(stdout.contains("Add groundcover.omwaddon as groundcover= in openmw.cfg."));
+    assert!(!stdout.contains("deleted_groundcover.omwaddon as content="));
+}
+
+#[test]
 fn auto_enable_does_not_rewrite_when_outputs_are_already_enabled() {
     let config_dir = TempDir::new("auto-enabled-config");
     let data_dir = TempDir::new("auto-enabled-data");
@@ -247,6 +272,41 @@ fn auto_enable_adds_only_missing_deleted_output() {
     assert!(openmw_cfg.contains("content=deleted_groundcover.omwaddon"));
     assert!(stdout.contains("Updated OpenMW config with deleted_groundcover.omwaddon as content="));
     assert!(!stdout.contains("groundcover.omwaddon as groundcover= and"));
+}
+
+#[test]
+fn auto_enable_adds_only_missing_groundcover_output() {
+    let config_dir = TempDir::new("auto-groundcover-config");
+    let data_dir = TempDir::new("auto-groundcover-data");
+    let output_dir = TempDir::new("auto-groundcover-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        false,
+        true,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let mut args = args_for(config_dir.path());
+    args.auto_enable = true;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr).unwrap();
+
+    let openmw_cfg = std::fs::read_to_string(config_dir.path().join("openmw.cfg")).unwrap();
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert!(config_dir.path().join("openmw.cfg.greenmote.bak").exists());
+    assert!(openmw_cfg.contains("groundcover=groundcover.omwaddon"));
+    assert_eq!(
+        openmw_cfg
+            .matches("content=deleted_groundcover.omwaddon")
+            .count(),
+        1
+    );
+    assert!(stdout.contains("Updated OpenMW config with groundcover.omwaddon as groundcover="));
+    assert!(!stdout.contains("deleted_groundcover.omwaddon as content=;"));
 }
 
 #[test]
