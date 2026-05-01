@@ -107,6 +107,19 @@ mod tests {
     }
 
     #[test]
+    fn mesh_output_path_preserves_subdirectories_under_meshes_grass() {
+        assert_eq!(
+            mesh_output_path(Path::new("out"), "flora\\tree\\grass.nif").unwrap(),
+            PathBuf::from("out")
+                .join("Meshes")
+                .join("grass")
+                .join("flora")
+                .join("tree")
+                .join("grass.nif")
+        );
+    }
+
+    #[test]
     fn mesh_copy_normalization_lowercases_non_grass_meshes() {
         assert_eq!(
             normalize_mesh_for_copy("Flora/Foo.NIF").unwrap(),
