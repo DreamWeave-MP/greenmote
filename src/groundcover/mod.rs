@@ -1,9 +1,14 @@
 use std::io;
 
+use clap::CommandFactory;
+
 mod args;
+mod app;
 mod config;
 pub mod default;
+mod load;
 pub mod mesh;
+mod output;
 pub mod plan;
 pub mod records;
 
@@ -16,9 +21,20 @@ pub const GROUNDCOVER_PLUGIN_NAME: &str = "groundcover.omwaddon";
 pub const LOG_NAME: &str = "groundcoverify.log";
 
 pub fn run(args: GroundcoverArgs) -> io::Result<()> {
-    if args.debug {
-        eprintln!("greenmote convert scaffold is wired; implementation follows.");
+    app::run(args)
+}
+
+fn handle_generated_output(args: &GroundcoverArgs, stdout: &mut dyn io::Write) -> io::Result<bool> {
+    if let Some(shell) = args.generate_completion {
+        let mut command = GroundcoverArgs::command();
+        clap_complete::generate(shell, &mut command, "greenmote-convert", stdout);
+        return Ok(true);
     }
 
-    Ok(())
+    if args.generate_manpage {
+        clap_mangen::Man::new(GroundcoverArgs::command()).render(stdout)?;
+        return Ok(true);
+    }
+
+    Ok(false)
 }

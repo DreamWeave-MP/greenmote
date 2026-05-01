@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use clap_complete::Shell;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[command(
     name = "convert",
     about = "Convert vanilla-style static exterior refs into OpenMW groundcover."
