@@ -105,7 +105,10 @@ pub(crate) fn regenerate_config_for_edit(
             ),
         )
     })?;
-    replace_config_with_backup(&config_path, &temp_path)?;
+    if let Err(error) = replace_config_with_backup(&config_path, &temp_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
 
     Ok((config_path, config))
 }
@@ -141,7 +144,7 @@ fn back_up_existing_config(config_path: &Path) -> io::Result<Option<PathBuf>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    if !metadata.is_file() {
+    if !metadata.is_file() && !metadata.file_type().is_symlink() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(

@@ -107,6 +107,18 @@ validate_config = true
 }
 
 #[test]
+fn root_validate_config_is_rejected() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(&config_path, "validate_config = true\n").unwrap();
+    let args = GroundcoverArgs::parse_from(["convert"]);
+
+    let result = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local"));
+
+    assert!(result.is_err());
+}
+
+#[test]
 fn cli_values_merge_over_toml() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
@@ -282,7 +294,7 @@ fn replacing_config_backs_up_existing_file() {
 }
 
 #[test]
-fn replacing_config_rejects_directory_as_backup_source() {
+fn replacing_config_rejects_directory_as_backup_source_and_keeps_temp() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     let temp_path = config_path.with_extension("toml.tmp");
@@ -298,7 +310,7 @@ fn replacing_config_rejects_directory_as_backup_source() {
 
 #[cfg(unix)]
 #[test]
-fn replacing_config_rejects_dangling_config_symlink() {
+fn replacing_config_backs_up_dangling_config_symlink() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     let temp_path = config_path.with_extension("toml.tmp");
@@ -307,14 +319,14 @@ fn replacing_config_rejects_dangling_config_symlink() {
 
     let result = crate::groundcover::replace_config_with_backup(&config_path, &temp_path);
 
-    assert!(result.is_err());
+    assert!(result.is_ok());
+    assert!(read_to_string(&config_path).unwrap().contains("[convert]"));
     assert!(
-        std::fs::symlink_metadata(&config_path)
+        std::fs::symlink_metadata(config_path.with_extension("toml.bak"))
             .unwrap()
             .file_type()
             .is_symlink()
     );
-    assert!(temp_path.is_file());
 }
 
 #[cfg(unix)]

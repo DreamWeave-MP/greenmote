@@ -15,6 +15,9 @@ pub(super) struct GroundcoverConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     output_directory: Option<PathBuf>,
 
+    #[serde(default, skip_serializing)]
+    validate_config: Option<bool>,
+
     #[serde(default)]
     convert: ConvertConfigFile,
 }
@@ -54,6 +57,7 @@ impl GroundcoverConfigFile {
     pub(super) fn from_runtime(config: &GroundcoverConfig) -> Self {
         Self {
             output_directory: Some(config.output_directory.clone()),
+            validate_config: None,
             convert: ConvertConfigFile {
                 groundcover_output: Some(config.groundcover_output.clone()),
                 deleted_output: Some(config.deleted_output.clone()),
@@ -72,6 +76,9 @@ impl GroundcoverConfigFile {
         default_output_directory: PathBuf,
     ) -> std::io::Result<GroundcoverConfig> {
         let file = toml::from_str::<Self>(contents).map_err(to_io_error)?;
+        if file.validate_config.is_some() {
+            return Err(to_io_error("validate_config is a CLI-only option"));
+        }
         let convert = file.convert;
 
         Ok(GroundcoverConfig {

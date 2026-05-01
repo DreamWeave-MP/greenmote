@@ -97,11 +97,15 @@ impl GroundcoverConfig {
         config_path: &Path,
         default_output_directory: PathBuf,
     ) -> io::Result<Self> {
-        let mut config = if config_path.is_file() {
-            let contents = read_to_string(config_path)?;
-            file::GroundcoverConfigFile::from_toml(&contents, default_output_directory)?
-        } else {
-            Self::with_output_directory(default_output_directory)
+        let mut config = match std::fs::symlink_metadata(config_path) {
+            Ok(_) => {
+                let contents = read_to_string(config_path)?;
+                file::GroundcoverConfigFile::from_toml(&contents, default_output_directory)?
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Self::with_output_directory(default_output_directory)
+            }
+            Err(error) => return Err(error),
         };
 
         config.compile_regex_sets()?;
