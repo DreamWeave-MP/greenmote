@@ -136,7 +136,7 @@ fn write_text_summary(
     context: &UnclipReportContext,
 ) -> io::Result<()> {
     let inspection = count_target_refs(plugin, terrain, static_index, mesh_contacts);
-    write_summary_text(stdout, context, &inspection)
+    write_summary_text(stdout, context, &inspection, true)
 }
 
 fn write_instance_text(
@@ -159,12 +159,16 @@ fn write_instance_text(
         }
     }
     writeln!(stdout)?;
-    let inspection =
-        inspect_target_refs(plugin, terrain, static_index, mesh_contacts, |reference| {
-            write_reference_text(stdout, reference)
-        })?;
+    let inspection = inspect_target_refs(
+        plugin,
+        terrain,
+        static_index,
+        mesh_contacts,
+        context.write.as_ref(),
+        |reference| write_reference_text(stdout, reference),
+    )?;
     writeln!(stdout)?;
-    write_summary_text(stdout, context, &inspection)
+    write_summary_text(stdout, context, &inspection, false)
 }
 
 fn write_structured_summary(
@@ -217,15 +221,21 @@ fn write_structured_instances(
         }
     }
 
-    let inspection =
-        inspect_target_refs(plugin, terrain, static_index, mesh_contacts, |reference| {
+    let inspection = inspect_target_refs(
+        plugin,
+        terrain,
+        static_index,
+        mesh_contacts,
+        context.write.as_ref(),
+        |reference| {
             let record = StructuredReferenceRecord {
                 r#type: "ref",
                 reference,
             };
             write_json(stdout, &record)?;
             writeln!(stdout)
-        })?;
+        },
+    )?;
 
     let summary = StructuredSummaryRecord {
         r#type: "summary",
@@ -249,11 +259,12 @@ fn write_summary_text(
     stdout: &mut dyn Write,
     context: &UnclipReportContext,
     inspection: &TerrainInspectionReport,
+    include_adjustments: bool,
 ) -> io::Result<()> {
     let summary = context.summary(inspection);
     writeln!(stdout, "Unclip inspection summary")?;
     writeln!(stdout, "Target plugin: {}", context.target_plugin)?;
-    write_write_summary_text(stdout, context.write.as_ref())?;
+    write_write_summary_text(stdout, context.write.as_ref(), include_adjustments)?;
     writeln!(stdout)?;
     write_terrain_summary_text(stdout, &summary)?;
     writeln!(stdout)?;
@@ -264,7 +275,11 @@ fn write_summary_text(
     write_threshold_summary_text(stdout, &summary)
 }
 
-fn write_write_summary_text(stdout: &mut dyn Write, write: Option<&WriteReport>) -> io::Result<()> {
+fn write_write_summary_text(
+    stdout: &mut dyn Write,
+    write: Option<&WriteReport>,
+    include_adjustments: bool,
+) -> io::Result<()> {
     if let Some(write) = write {
         if write.written {
             writeln!(stdout, "Written plugin: {}", write.destination_plugin)?;
@@ -279,6 +294,11 @@ fn write_write_summary_text(stdout: &mut dyn Write, write: Option<&WriteReport>)
             )?;
         }
         writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
+        if include_adjustments {
+            for adjustment in &write.adjustments {
+                write_adjustment_text(stdout, adjustment)?;
+            }
+        }
     }
     Ok(())
 }
@@ -1017,6 +1037,12 @@ impl WriteReport {
             adjusted_refs: self.adjusted_refs,
         }
     }
+
+    fn is_adjusted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
+        self.adjustments.iter().any(|adjustment| {
+            adjustment.cell == [cell.0, cell.1] && adjustment.reference_key == [key.0, key.1]
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -1128,6 +1154,7 @@ fn inspect_target_refs(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
+    write: Option<&WriteReport>,
     mut reference_sink: impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<TerrainInspectionReport> {
     let mut report = TerrainInspectionReport::default();
@@ -1154,6 +1181,7 @@ fn inspect_target_refs(
                 cell.data.grid,
                 *key,
                 reference,
+                write,
                 &mut reference_sink,
             )?;
         }
@@ -1211,6 +1239,7 @@ fn inspect_reference(
     cell: CellCoord,
     key: (u32, u32),
     reference: &tes3::esp::Reference,
+    write: Option<&WriteReport>,
     reference_sink: &mut impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<()> {
     report.refs += 1;
@@ -1239,6 +1268,7 @@ fn inspect_reference(
         &origin,
         &mesh_contact,
         contact_details.as_ref(),
+        write.is_some_and(|write| write.is_adjusted(cell, key)),
     );
     reference_sink(&inspection)
 }
@@ -1299,6 +1329,7 @@ fn reference_inspection(
     origin: &OriginDetails,
     mesh_resolution: &MeshContactResolution<'_>,
     contact_details: Option<&ContactDetails>,
+    was_adjusted: bool,
 ) -> ReferenceInspection {
     ReferenceInspection {
         cell: [cell.0, cell.1],
@@ -1313,7 +1344,7 @@ fn reference_inspection(
         static_resolution: mesh_resolution.static_resolution_label(),
         mesh_contact_status: mesh_resolution.mesh_contact_status_label(contact_details),
         deleted: reference.deleted == Some(true),
-        write_status: write_status_label(reference, mesh_resolution, contact_details),
+        write_status: write_status_label(reference, mesh_resolution, contact_details, was_adjusted),
         static_mesh: mesh_resolution.static_mesh().map(static_mesh_inspection),
         mesh_contact_error: mesh_resolution.mesh_contact_error().map(str::to_owned),
         mesh_contact: contact_details.map(|contact| MeshContactInspection {
@@ -1339,7 +1370,11 @@ fn write_status_label(
     reference: &tes3::esp::Reference,
     mesh_resolution: &MeshContactResolution<'_>,
     contact_details: Option<&ContactDetails>,
+    was_adjusted: bool,
 ) -> &'static str {
+    if was_adjusted {
+        return "adjusted";
+    }
     if reference.deleted == Some(true) {
         return "skipped_deleted_ref";
     }
@@ -1553,8 +1588,9 @@ mod tests {
     use tes3::esp::Reference;
 
     use super::{
-        apply_contact_adjustment, next_numbered_backup_path, prepare_plugin_backup,
-        replace_with_temp,
+        MeshContactResolution, WriteAdjustment, WriteReport, apply_contact_adjustment,
+        next_numbered_backup_path, prepare_plugin_backup, replace_with_temp, write_status_label,
+        write_write_summary_text,
     };
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
@@ -1701,11 +1737,60 @@ mod tests {
         assert_close(reference.translation[2], 10.0);
     }
 
+    #[test]
+    fn write_summary_prints_adjustments_only_when_requested() {
+        let report = WriteReport {
+            written: false,
+            destination_plugin: "plugin.omwaddon".to_owned(),
+            backup_plugin: None,
+            adjusted_refs: 1,
+            adjustments: vec![write_adjustment()],
+        };
+        let mut with_adjustments = Vec::new();
+        let mut without_adjustments = Vec::new();
+
+        write_write_summary_text(&mut with_adjustments, Some(&report), true).unwrap();
+        write_write_summary_text(&mut without_adjustments, Some(&report), false).unwrap();
+
+        let with_adjustments = String::from_utf8(with_adjustments).unwrap();
+        let without_adjustments = String::from_utf8(without_adjustments).unwrap();
+        assert!(with_adjustments.contains("WRITE CELL"));
+        assert!(!without_adjustments.contains("WRITE CELL"));
+    }
+
+    #[test]
+    fn write_status_prefers_adjusted_plan_evidence() {
+        let reference = reference_at_z(10.0);
+
+        assert_eq!(
+            write_status_label(
+                &reference,
+                &MeshContactResolution::UnresolvedStatic,
+                None,
+                true
+            ),
+            "adjusted"
+        );
+    }
+
     fn reference_at_z(z: f32) -> Reference {
         Reference {
             id: "grass".to_owned(),
             translation: [0.0, 0.0, z],
             ..Reference::default()
+        }
+    }
+
+    fn write_adjustment() -> WriteAdjustment {
+        WriteAdjustment {
+            cell: [1, 2],
+            reference_key: [3, 4],
+            id: "grass".to_owned(),
+            old_z: 10.0,
+            new_z: 12.0,
+            applied_delta: 2.0,
+            contact_position: [0.0, 0.0, 7.0],
+            terrain_z: 9.0,
         }
     }
 
