@@ -41,6 +41,10 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     writeln!(stdout, "# loaded terrain cells total: {}", terrain.len())?;
     writeln!(
         stdout,
+        "# origin terrain classification epsilon: {ORIGIN_TERRAIN_EPSILON:.3}"
+    )?;
+    writeln!(
+        stdout,
         "# active terrain cells loaded: {}",
         active_cells.len() - missing_active_terrain_cells.len()
     )?;
@@ -58,12 +62,12 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     )?;
     writeln!(
         stdout,
-        "# refs above terrain: {}",
+        "# refs origin above terrain beyond epsilon: {}",
         report.refs_above_terrain
     )?;
     writeln!(
         stdout,
-        "# refs below terrain: {}",
+        "# refs origin below terrain beyond epsilon: {}",
         report.refs_below_terrain
     )?;
 
@@ -208,7 +212,7 @@ fn inspect_target_refs(
             if include_details {
                 let _ = writeln!(
                     report.details,
-                    "CELL {:?} REF {:?} {} origin_z={z:.3} terrain_z={terrain_z:.3} origin_delta={delta:.3} classification={}",
+                    "CELL {:?} REF {:?} {} origin_z={z:.3} terrain_z={terrain_z:.3} origin_delta={delta:.3} epsilon={ORIGIN_TERRAIN_EPSILON:.3} classification={}",
                     cell.data.grid,
                     key,
                     reference.id,

@@ -77,29 +77,21 @@ fn sample_height(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> f32 {
     let y1 = (y0 + 1).min(LAND_VERTEX_MAX);
     let tx = grid_x - x0 as f32;
     let ty = grid_y - y0 as f32;
+    let h00 = heights[y0][x0];
+    let h10 = heights[y0][x1];
+    let h01 = heights[y1][x0];
+    let h11 = heights[y1][x1];
 
     if ((x0 ^ y0) & 1) == 0 {
-        if tx + ty <= 1.0 {
-            interpolate_triangle(heights[y0][x0], heights[y1][x0], heights[y0][x1], tx, ty)
+        if tx <= ty {
+            h00 + (h01 - h00) * (ty - tx) + (h11 - h00) * tx
         } else {
-            interpolate_triangle(
-                heights[y1][x1],
-                heights[y0][x1],
-                heights[y1][x0],
-                1.0 - tx,
-                1.0 - ty,
-            )
+            h00 + (h11 - h00) * ty + (h10 - h00) * (tx - ty)
         }
     } else if tx + ty <= 1.0 {
-        interpolate_triangle(heights[y0][x0], heights[y1][x0], heights[y0][x1], tx, ty)
+        interpolate_triangle(h00, h01, h10, tx, ty)
     } else {
-        interpolate_triangle(
-            heights[y1][x1],
-            heights[y0][x1],
-            heights[y1][x0],
-            1.0 - tx,
-            1.0 - ty,
-        )
+        interpolate_triangle(h11, h10, h01, 1.0 - tx, 1.0 - ty)
     }
 }
 
@@ -126,10 +118,10 @@ mod tests {
         heights[0][0] = 0.0;
         heights[0][1] = 10.0;
         heights[1][0] = 20.0;
-        heights[1][1] = 30.0;
+        heights[1][1] = 100.0;
 
-        assert!((sample_height(&heights, 64.0, 64.0) - 15.0).abs() < f32::EPSILON);
-        assert!((sample_height(&heights, 96.0, 96.0) - 22.5).abs() < f32::EPSILON);
+        assert!((sample_height(&heights, 32.0, 96.0) - 35.0).abs() < f32::EPSILON);
+        assert!((sample_height(&heights, 96.0, 32.0) - 30.0).abs() < f32::EPSILON);
     }
 
     #[test]
