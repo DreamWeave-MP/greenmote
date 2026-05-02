@@ -16,7 +16,7 @@ pub struct UnclipArgs {
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
     pub plugin: PathBuf,
 
-    /// Print per-reference terrain snap diagnostics.
+    /// Print per-reference terrain and mesh-contact inspection diagnostics.
     #[arg(long = "verbose")]
     pub verbose: bool,
 }

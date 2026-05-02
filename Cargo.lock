@@ -1146,6 +1146,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "eframe",
+ "glam",
  "openmw-config",
  "rayon",
  "regex",

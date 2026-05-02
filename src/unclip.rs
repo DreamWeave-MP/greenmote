@@ -3,6 +3,7 @@ use std::{io, io::Write};
 mod app;
 mod args;
 mod cells;
+mod mesh;
 mod terrain;
 
 pub use args::UnclipArgs;
