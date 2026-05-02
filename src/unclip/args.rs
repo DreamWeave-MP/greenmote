@@ -23,4 +23,8 @@ pub struct UnclipArgs {
     /// Emit machine-readable compact JSON. With --instances, emits newline-delimited JSON records.
     #[arg(long = "structured")]
     pub structured: bool,
+
+    /// Back up and replace the target plugin with adjusted reference Z positions.
+    #[arg(long = "write")]
+    pub write: bool,
 }

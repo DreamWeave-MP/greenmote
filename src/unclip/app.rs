@@ -1,7 +1,7 @@
-use std::{collections::BTreeSet, io, io::Write, path::PathBuf};
+use std::{collections::BTreeSet, fs, io, io::Write, path::PathBuf};
 
 use serde::Serialize;
-use tes3::esp::{Cell, Landscape, Plugin, Static};
+use tes3::esp::{Cell, Landscape, Plugin, Static, TES3Object};
 
 use crate::groundcover::openmw;
 
@@ -18,39 +18,56 @@ const CONTACT_TERRAIN_EPSILON: f32 = 0.5;
 pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     let openmw_config = openmw::load_config_from_path(args.openmw_cfg.as_deref())?;
     let vfs = openmw::build_vfs(&openmw_config);
-    let target_plugin_path = resolve_target_plugin(&args.plugin, &vfs)?;
-    let target_plugin = load_target_plugin(&target_plugin_path)?;
+    let target_plugin = resolve_target_plugin(&args.plugin, &openmw_config, &vfs)?;
+    let mut target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
     let content_files = openmw::content_files(&openmw_config)?;
     let terrain_plugin_paths = resolve_content_plugin_paths(&content_files, &vfs)?;
     let terrain_plugins = load_terrain_plugins(&terrain_plugin_paths)?;
-    let target_is_active = path_matches_any(&target_plugin_path, &terrain_plugin_paths);
+    let target_is_active = path_matches_any(&target_plugin.source_path, &terrain_plugin_paths);
     let static_index = build_static_index(
         &terrain_plugins,
-        (!target_is_active).then_some(&target_plugin),
+        (!target_is_active).then_some(&target_plugin_data),
     );
     let terrain = TerrainIndex::from_landscapes(
         terrain_plugins
             .iter()
             .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
     );
-    let target_cells = target_exterior_cells(&target_plugin);
+    let target_cells = target_exterior_cells(&target_plugin_data);
     let active_cells = active_cells(&target_cells)?;
     let missing_active_terrain_cells = active_cells
         .iter()
         .copied()
         .filter(|cell| !terrain.has_cell(*cell))
         .collect::<Vec<_>>();
-    let report_context = UnclipReportContext::new(
-        &target_plugin_path,
+    let mut report_context = UnclipReportContext::new(
+        &target_plugin.source_path,
         target_cells.len(),
         active_cells.len(),
         terrain.len(),
         missing_active_terrain_cells,
     );
+    if args.write {
+        let mut mesh_contacts = MeshContactCache::new(&vfs);
+        let adjusted_refs = apply_unclip_adjustments(
+            &mut target_plugin_data,
+            &terrain,
+            &static_index,
+            &mut mesh_contacts,
+        );
+        let write_report = save_plugin_with_backup(
+            &mut target_plugin_data,
+            &target_plugin.source_path,
+            &target_plugin.destination_path,
+            adjusted_refs,
+        )?;
+        report_context.write = Some(write_report);
+    }
+
     let mut mesh_contacts = MeshContactCache::new(&vfs);
     write_output(
         stdout,
-        &target_plugin,
+        &target_plugin_data,
         &terrain,
         &static_index,
         &mut mesh_contacts,
@@ -149,6 +166,7 @@ fn write_structured_summary(
     let report = StructuredSummaryReport {
         kind: "greenmote_unclip_terrain_inspection",
         target_plugin: &context.target_plugin,
+        write: context.write.as_ref(),
         missing_active_terrain_cells: context.missing_active_terrain_cells(),
         summary: context.summary(&inspection),
     };
@@ -168,6 +186,7 @@ fn write_structured_instances(
         r#type: "header",
         kind: "greenmote_unclip_terrain_inspection",
         target_plugin: &context.target_plugin,
+        write: context.write.as_ref(),
         missing_active_terrain_cells: context.missing_active_terrain_cells(),
     };
     write_json(stdout, &header)?;
@@ -209,6 +228,13 @@ fn write_summary_text(
     let summary = context.summary(inspection);
     writeln!(stdout, "Unclip inspection summary")?;
     writeln!(stdout, "Target plugin: {}", context.target_plugin)?;
+    if let Some(write) = &context.write {
+        writeln!(stdout, "Written plugin: {}", write.destination_plugin)?;
+        if let Some(backup) = &write.backup_plugin {
+            writeln!(stdout, "Backup plugin: {backup}")?;
+        }
+        writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
+    }
     writeln!(stdout)?;
     writeln!(stdout, "Terrain cells:")?;
     writeln!(
@@ -352,13 +378,27 @@ fn resolve_content_plugin_paths(
         .collect()
 }
 
-fn resolve_target_plugin(plugin: &std::path::Path, vfs: &vfstool_lib::VFS) -> io::Result<PathBuf> {
+struct TargetPluginPath {
+    source_path: PathBuf,
+    destination_path: PathBuf,
+}
+
+fn resolve_target_plugin(
+    plugin: &std::path::Path,
+    openmw_config: &openmw_config::OpenMWConfiguration,
+    vfs: &vfstool_lib::VFS,
+) -> io::Result<TargetPluginPath> {
     if plugin.is_file() {
-        return Ok(plugin.to_path_buf());
+        let path = plugin.to_path_buf();
+        return Ok(TargetPluginPath {
+            source_path: path.clone(),
+            destination_path: path,
+        });
     }
 
     let plugin_name = plugin.to_string_lossy();
-    vfs.get_file(plugin_name.as_ref())
+    let source_path = vfs
+        .get_file(plugin_name.as_ref())
         .map(|file| file.path().to_path_buf())
         .ok_or_else(|| {
             io::Error::new(
@@ -368,18 +408,249 @@ fn resolve_target_plugin(plugin: &std::path::Path, vfs: &vfstool_lib::VFS) -> io
                     plugin.display()
                 ),
             )
-        })
+        })?;
+    let destination_path = vfs_target_destination(plugin, &source_path, openmw_config)?;
+
+    Ok(TargetPluginPath {
+        source_path,
+        destination_path,
+    })
+}
+
+fn vfs_target_destination(
+    plugin: &std::path::Path,
+    source_path: &std::path::Path,
+    openmw_config: &openmw_config::OpenMWConfiguration,
+) -> io::Result<PathBuf> {
+    let file_name = plugin.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("target plugin {} has no filename", plugin.display()),
+        )
+    })?;
+    let directory = openmw_config.data_local().map_or_else(
+        || {
+            source_path.parent().map_or_else(
+                || {
+                    Err(io::Error::other(format!(
+                        "target plugin {} has no parent directory",
+                        source_path.display()
+                    )))
+                },
+                |parent| Ok(parent.to_path_buf()),
+            )
+        },
+        |data_local| Ok(data_local.parsed().to_path_buf()),
+    )?;
+
+    Ok(directory.join(file_name))
 }
 
 fn load_target_plugin(path: &std::path::Path) -> io::Result<Plugin> {
-    Plugin::from_path_filtered(path, |tag| &tag == Cell::TAG || &tag == Static::TAG).map_err(
-        |error| {
+    Plugin::from_path(path).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to load target plugin {}: {error}", path.display()),
+        )
+    })
+}
+
+fn apply_unclip_adjustments(
+    plugin: &mut Plugin,
+    terrain: &TerrainIndex,
+    static_index: &StaticMeshIndex,
+    mesh_contacts: &mut MeshContactCache<'_>,
+) -> usize {
+    let mut adjusted_refs = 0;
+
+    for object in &mut plugin.objects {
+        let TES3Object::Cell(cell) = object else {
+            continue;
+        };
+        if !cell.is_exterior() {
+            continue;
+        }
+
+        for reference in cell.references.values_mut() {
+            if adjust_reference_z(reference, terrain, static_index, mesh_contacts) {
+                adjusted_refs += 1;
+            }
+        }
+    }
+
+    adjusted_refs
+}
+
+fn adjust_reference_z(
+    reference: &mut tes3::esp::Reference,
+    terrain: &TerrainIndex,
+    static_index: &StaticMeshIndex,
+    mesh_contacts: &mut MeshContactCache<'_>,
+) -> bool {
+    let Some(static_mesh) = static_index.get(&reference.id) else {
+        return false;
+    };
+    let Ok(contact) = mesh_contacts.contact(&static_mesh.mesh_path) else {
+        return false;
+    };
+    let position =
+        contact.world_position(reference.translation, reference.rotation, reference.scale);
+    let Some(terrain_z) = terrain.height_at(position[0], position[1]) else {
+        return false;
+    };
+    let contact_delta = position[2] - terrain_z;
+    reference.translation[2] -= contact_delta;
+    true
+}
+
+fn save_plugin_with_backup(
+    plugin: &mut Plugin,
+    source_path: &std::path::Path,
+    destination_path: &std::path::Path,
+    adjusted_refs: usize,
+) -> io::Result<WriteReport> {
+    if let Some(parent) = destination_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let temp_path = next_temp_plugin_path(destination_path);
+    plugin.save_path(&temp_path).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to write temporary plugin {}: {error}",
+                temp_path.display()
+            ),
+        )
+    })?;
+
+    let backup = match prepare_plugin_backup(source_path, destination_path) {
+        Ok(backup) => backup,
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path);
+            return Err(error);
+        }
+    };
+
+    if let Err(error) = rename_with_context(&temp_path, destination_path) {
+        if let BackupAction::Moved { path } = &backup
+            && let Err(restore_error) = fs::rename(path, destination_path)
+        {
+            let _ = fs::remove_file(&temp_path);
+            return Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "{error}; additionally failed to restore backup {} to {}: {restore_error}",
+                    path.display(),
+                    destination_path.display()
+                ),
+            ));
+        }
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+
+    Ok(WriteReport {
+        destination_plugin: destination_path.display().to_string(),
+        backup_plugin: backup.path().map(|path| path.display().to_string()),
+        adjusted_refs,
+    })
+}
+
+enum BackupAction {
+    None,
+    Moved { path: PathBuf },
+    Copied { path: PathBuf },
+}
+
+impl BackupAction {
+    fn path(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::None => None,
+            Self::Moved { path } | Self::Copied { path } => Some(path),
+        }
+    }
+}
+
+fn prepare_plugin_backup(
+    source_path: &std::path::Path,
+    destination_path: &std::path::Path,
+) -> io::Result<BackupAction> {
+    let backup_path = next_numbered_backup_path(destination_path);
+    if path_entry_exists(destination_path) {
+        rename_with_context(destination_path, &backup_path)?;
+        return Ok(BackupAction::Moved { path: backup_path });
+    }
+
+    if !same_path(source_path, destination_path) && path_entry_exists(source_path) {
+        fs::copy(source_path, &backup_path).map_err(|error| {
             io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("failed to load target plugin {}: {error}", path.display()),
+                error.kind(),
+                format!(
+                    "failed to copy backup {} to {}: {error}",
+                    source_path.display(),
+                    backup_path.display()
+                ),
             )
-        },
-    )
+        })?;
+        return Ok(BackupAction::Copied { path: backup_path });
+    }
+
+    Ok(BackupAction::None)
+}
+
+fn rename_with_context(source: &std::path::Path, destination: &std::path::Path) -> io::Result<()> {
+    fs::rename(source, destination).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to move {} to {}: {error}",
+                source.display(),
+                destination.display()
+            ),
+        )
+    })
+}
+
+fn next_temp_plugin_path(plugin_path: &std::path::Path) -> PathBuf {
+    for index in 0.. {
+        let candidate = append_path_suffix(plugin_path, &format!(".greenmote-tmp.{index}"));
+        if !path_entry_exists(&candidate) {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded temp suffix search should always find a candidate")
+}
+
+fn next_numbered_backup_path(plugin_path: &std::path::Path) -> PathBuf {
+    for index in 1.. {
+        let candidate = append_path_suffix(plugin_path, &format!(".{index:03}"));
+        if !path_entry_exists(&candidate) {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded backup suffix search should always find a candidate")
+}
+
+fn append_path_suffix(path: &std::path::Path, suffix: &str) -> PathBuf {
+    let mut file_name = path
+        .file_name()
+        .expect("plugin path should have filename")
+        .to_os_string();
+    file_name.push(suffix);
+    path.with_file_name(file_name)
+}
+
+fn path_entry_exists(path: &std::path::Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
 }
 
 fn load_terrain_plugins(paths: &[PathBuf]) -> io::Result<Vec<Plugin>> {
@@ -447,6 +718,8 @@ fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTreeSet<CellC
 struct StructuredSummaryReport<'a> {
     kind: &'static str,
     target_plugin: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    write: Option<&'a WriteReport>,
     missing_active_terrain_cells: Vec<[i32; 2]>,
     summary: UnclipSummary,
 }
@@ -456,6 +729,8 @@ struct StructuredHeader<'a> {
     r#type: &'static str,
     kind: &'static str,
     target_plugin: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    write: Option<&'a WriteReport>,
     missing_active_terrain_cells: Vec<[i32; 2]>,
 }
 
@@ -478,6 +753,7 @@ struct UnclipReportContext {
     active_cells: usize,
     loaded_terrain_cells_total: usize,
     missing_active_terrain_cells: Vec<CellCoord>,
+    write: Option<WriteReport>,
 }
 
 impl UnclipReportContext {
@@ -494,6 +770,7 @@ impl UnclipReportContext {
             active_cells,
             loaded_terrain_cells_total,
             missing_active_terrain_cells,
+            write: None,
         }
     }
 
@@ -527,6 +804,14 @@ impl UnclipReportContext {
             mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
         }
     }
+}
+
+#[derive(Serialize)]
+struct WriteReport {
+    destination_plugin: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backup_plugin: Option<String>,
+    adjusted_refs: usize,
 }
 
 #[derive(Serialize)]
@@ -994,5 +1279,90 @@ fn classify_contact_delta(delta: f32) -> ContactTerrainClassification {
         ContactTerrainClassification::Below
     } else {
         ContactTerrainClassification::OnTerrain
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use super::{next_numbered_backup_path, prepare_plugin_backup};
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "greenmote-unclip-app-test-{name}-{}-{}",
+                std::process::id(),
+                NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn numbered_plugin_backups_append_suffix_to_full_filename() {
+        let temp = TempDir::new("numbered-backup");
+        let plugin = temp.path().join("plugin.omwaddon");
+        std::fs::write(&plugin, b"current").unwrap();
+        std::fs::write(temp.path().join("plugin.omwaddon.001"), b"old").unwrap();
+
+        assert_eq!(
+            next_numbered_backup_path(&plugin),
+            temp.path().join("plugin.omwaddon.002")
+        );
+    }
+
+    #[test]
+    fn vfs_destination_without_existing_file_gets_source_backup_copy() {
+        let temp = TempDir::new("copy-source-backup");
+        let source = temp.path().join("source").join("plugin.omwaddon");
+        let destination = temp.path().join("data-local").join("plugin.omwaddon");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"original").unwrap();
+
+        let backup = prepare_plugin_backup(&source, &destination).unwrap();
+        let backup_path = backup.path().unwrap();
+
+        assert_eq!(
+            backup_path,
+            temp.path().join("data-local/plugin.omwaddon.001")
+        );
+        assert_eq!(std::fs::read(backup_path).unwrap(), b"original");
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn existing_destination_is_moved_to_backup() {
+        let temp = TempDir::new("move-destination-backup");
+        let plugin = temp.path().join("plugin.omwaddon");
+        std::fs::write(&plugin, b"modified").unwrap();
+
+        let backup = prepare_plugin_backup(&plugin, &plugin).unwrap();
+        let backup_path = backup.path().unwrap();
+
+        assert_eq!(backup_path, temp.path().join("plugin.omwaddon.001"));
+        assert_eq!(std::fs::read(backup_path).unwrap(), b"modified");
+        assert!(!plugin.exists());
     }
 }

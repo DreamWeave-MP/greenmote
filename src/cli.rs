@@ -112,6 +112,7 @@ mod tests {
         assert!(args.openmw_cfg.is_none());
         assert!(!args.instances);
         assert!(!args.structured);
+        assert!(!args.write);
     }
 
     #[test]
@@ -146,6 +147,23 @@ mod tests {
         };
 
         assert!(args.instances);
+    }
+
+    #[test]
+    fn parser_accepts_unclip_write() {
+        let cli = Cli::parse_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--write",
+        ]);
+
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("unclip command should parse");
+        };
+
+        assert!(args.write);
     }
 
     #[test]
