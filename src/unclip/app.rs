@@ -195,11 +195,12 @@ fn write_structured_instances(
     mesh_contacts: &mut MeshContactCache<'_>,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
+    let header_write = context.write.as_ref().map(WriteReport::summary);
     let header = StructuredHeader {
         r#type: "header",
         kind: "greenmote_unclip_terrain_inspection",
         target_plugin: &context.target_plugin,
-        write: context.write.as_ref(),
+        write: header_write.as_ref(),
         missing_active_terrain_cells: context.missing_active_terrain_cells(),
     };
     write_json(stdout, &header)?;
@@ -278,9 +279,6 @@ fn write_write_summary_text(stdout: &mut dyn Write, write: Option<&WriteReport>)
             )?;
         }
         writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
-        for adjustment in &write.adjustments {
-            write_adjustment_text(stdout, adjustment)?;
-        }
     }
     Ok(())
 }
@@ -389,6 +387,8 @@ fn write_reference_text(stdout: &mut dyn Write, reference: &ReferenceInspection)
         reference.cell, reference.reference_key, reference.id
     )?;
     writeln!(stdout, "  static: {}", reference.static_resolution)?;
+    writeln!(stdout, "  deleted: {}", reference.deleted)?;
+    writeln!(stdout, "  write status: {}", reference.write_status)?;
     if let Some(static_mesh) = &reference.static_mesh {
         writeln!(stdout, "  static id: {}", static_mesh.id)?;
         writeln!(stdout, "  mesh: {}", static_mesh.mesh)?;
@@ -639,7 +639,12 @@ fn save_plugin_with_backup(
         }
     };
 
-    if let Err(error) = replace_with_temp(&temp_path, destination_path, backup.path()) {
+    let had_destination = path_entry_exists(destination_path);
+    if let Err(error) = replace_with_temp(
+        &temp_path,
+        destination_path,
+        backup.path().filter(|_| had_destination),
+    ) {
         let _ = fs::remove_file(&temp_path);
         return Err(error);
     }
@@ -671,21 +676,44 @@ fn replace_with_temp(
     }
 
     if let Err(error) = rename_with_context(temp_path, destination_path) {
-        if let Some(backup_path) = backup_path
-            && let Err(restore_error) = fs::copy(backup_path, destination_path)
-        {
-            return Err(io::Error::new(
-                error.kind(),
-                format!(
-                    "{error}; additionally failed to restore backup {} to {}: {restore_error}",
-                    backup_path.display(),
-                    destination_path.display()
-                ),
-            ));
+        if let Some(backup_path) = backup_path {
+            restore_backup_to_destination(backup_path, destination_path).map_err(|restore_error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "{error}; additionally failed to restore backup {} to {}: {restore_error}",
+                        backup_path.display(),
+                        destination_path.display()
+                    ),
+                )
+            })?;
         }
         return Err(error);
     }
 
+    Ok(())
+}
+
+fn restore_backup_to_destination(
+    backup_path: &std::path::Path,
+    destination_path: &std::path::Path,
+) -> io::Result<()> {
+    let restore_temp_path = next_restore_temp_plugin_path(destination_path);
+    if let Err(error) = fs::copy(backup_path, &restore_temp_path) {
+        let _ = fs::remove_file(&restore_temp_path);
+        return Err(io::Error::new(
+            error.kind(),
+            format!(
+                "failed to copy backup {} to restore temp {}: {error}",
+                backup_path.display(),
+                restore_temp_path.display()
+            ),
+        ));
+    }
+    if let Err(error) = rename_with_context(&restore_temp_path, destination_path) {
+        let _ = fs::remove_file(&restore_temp_path);
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -756,6 +784,17 @@ fn next_temp_plugin_path(plugin_path: &std::path::Path) -> PathBuf {
     }
 
     unreachable!("unbounded temp suffix search should always find a candidate")
+}
+
+fn next_restore_temp_plugin_path(plugin_path: &std::path::Path) -> PathBuf {
+    for index in 0.. {
+        let candidate = append_path_suffix(plugin_path, &format!(".greenmote-restore-tmp.{index}"));
+        if !path_entry_exists(&candidate) {
+            return candidate;
+        }
+    }
+
+    unreachable!("unbounded restore temp suffix search should always find a candidate")
 }
 
 fn next_numbered_backup_path(plugin_path: &std::path::Path) -> PathBuf {
@@ -865,7 +904,7 @@ struct StructuredHeader<'a> {
     kind: &'static str,
     target_plugin: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    write: Option<&'a WriteReport>,
+    write: Option<&'a WriteSummary>,
     missing_active_terrain_cells: Vec<[i32; 2]>,
 }
 
@@ -969,6 +1008,24 @@ impl WriteReport {
             adjustments: plan.adjustments,
         }
     }
+
+    fn summary(&self) -> WriteSummary {
+        WriteSummary {
+            written: self.written,
+            destination_plugin: self.destination_plugin.clone(),
+            backup_plugin: self.backup_plugin.clone(),
+            adjusted_refs: self.adjusted_refs,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct WriteSummary {
+    written: bool,
+    destination_plugin: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backup_plugin: Option<String>,
+    adjusted_refs: usize,
 }
 
 #[derive(Default)]
@@ -1018,6 +1075,8 @@ struct ReferenceInspection {
     id: String,
     static_resolution: &'static str,
     mesh_contact_status: &'static str,
+    deleted: bool,
+    write_status: &'static str,
     origin: OriginInspection,
     #[serde(skip_serializing_if = "Option::is_none")]
     static_mesh: Option<StaticMeshInspection>,
@@ -1253,6 +1312,8 @@ fn reference_inspection(
         },
         static_resolution: mesh_resolution.static_resolution_label(),
         mesh_contact_status: mesh_resolution.mesh_contact_status_label(contact_details),
+        deleted: reference.deleted == Some(true),
+        write_status: write_status_label(reference, mesh_resolution, contact_details),
         static_mesh: mesh_resolution.static_mesh().map(static_mesh_inspection),
         mesh_contact_error: mesh_resolution.mesh_contact_error().map(str::to_owned),
         mesh_contact: contact_details.map(|contact| MeshContactInspection {
@@ -1271,6 +1332,31 @@ fn static_mesh_inspection(static_mesh: &super::mesh::StaticMesh) -> StaticMeshIn
     StaticMeshInspection {
         id: static_mesh.static_id.clone(),
         mesh: static_mesh.mesh_path.clone(),
+    }
+}
+
+fn write_status_label(
+    reference: &tes3::esp::Reference,
+    mesh_resolution: &MeshContactResolution<'_>,
+    contact_details: Option<&ContactDetails>,
+) -> &'static str {
+    if reference.deleted == Some(true) {
+        return "skipped_deleted_ref";
+    }
+    match mesh_resolution {
+        MeshContactResolution::UnresolvedStatic => "skipped_unresolved_static",
+        MeshContactResolution::MissingContact { .. } => "skipped_missing_mesh_contact",
+        MeshContactResolution::Resolved { .. } => {
+            contact_details.map_or("skipped_missing_contact_terrain", |details| {
+                match details.delta {
+                    Some(delta) if delta.abs() > CONTACT_TERRAIN_EPSILON => {
+                        "adjusted_or_adjustable"
+                    }
+                    Some(_) => "skipped_within_epsilon",
+                    None => "skipped_missing_contact_terrain",
+                }
+            })
+        }
     }
 }
 
@@ -1561,6 +1647,22 @@ mod tests {
         assert_eq!(std::fs::read(&plugin).unwrap(), b"new");
         assert_eq!(std::fs::read(&backup).unwrap(), b"old");
         assert!(!temp_plugin.exists());
+    }
+
+    #[test]
+    fn failed_replacement_without_prior_destination_does_not_restore_backup() {
+        let temp = TempDir::new("replace-missing-destination-fails");
+        let plugin = temp.path().join("missing").join("plugin.omwaddon");
+        let temp_plugin = temp.path().join("plugin.omwaddon.greenmote-tmp.0");
+        let backup = temp.path().join("plugin.omwaddon.001");
+        std::fs::write(&temp_plugin, b"new").unwrap();
+        std::fs::write(&backup, b"original").unwrap();
+
+        let result = replace_with_temp(&temp_plugin, &plugin, None);
+
+        assert!(result.is_err());
+        assert!(!plugin.exists());
+        assert_eq!(std::fs::read(&backup).unwrap(), b"original");
     }
 
     #[test]
