@@ -49,18 +49,23 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     );
     if args.write {
         let mut mesh_contacts = MeshContactCache::new(&vfs);
-        let adjusted_refs = apply_unclip_adjustments(
+        let write_plan = apply_unclip_adjustments(
             &mut target_plugin_data,
             &terrain,
             &static_index,
             &mut mesh_contacts,
+            args.instances,
         );
-        let write_report = save_plugin_with_backup(
-            &mut target_plugin_data,
-            &target_plugin.source_path,
-            &target_plugin.destination_path,
-            adjusted_refs,
-        )?;
+        let write_report = if write_plan.adjusted_refs == 0 {
+            WriteReport::not_written(&target_plugin.destination_path, write_plan)
+        } else {
+            save_plugin_with_backup(
+                &mut target_plugin_data,
+                &target_plugin.source_path,
+                &target_plugin.destination_path,
+                write_plan,
+            )?
+        };
         report_context.write = Some(write_report);
     }
 
@@ -145,6 +150,15 @@ fn write_instance_text(
 ) -> io::Result<()> {
     writeln!(stdout, "Unclip reference diagnostics")?;
     writeln!(stdout, "Target plugin: {}", context.target_plugin)?;
+    if let Some(write) = &context.write
+        && !write.adjustments.is_empty()
+    {
+        writeln!(stdout)?;
+        writeln!(stdout, "Write adjustments")?;
+        for adjustment in &write.adjustments {
+            write_adjustment_text(stdout, adjustment)?;
+        }
+    }
     writeln!(stdout)?;
     let inspection =
         inspect_target_refs(plugin, terrain, static_index, mesh_contacts, |reference| {
@@ -192,6 +206,17 @@ fn write_structured_instances(
     write_json(stdout, &header)?;
     writeln!(stdout)?;
 
+    if let Some(write) = &context.write {
+        for adjustment in &write.adjustments {
+            let record = StructuredWriteAdjustmentRecord {
+                r#type: "write_adjustment",
+                adjustment,
+            };
+            write_json(stdout, &record)?;
+            writeln!(stdout)?;
+        }
+    }
+
     let inspection =
         inspect_target_refs(plugin, terrain, static_index, mesh_contacts, |reference| {
             let record = StructuredReferenceRecord {
@@ -228,14 +253,37 @@ fn write_summary_text(
     let summary = context.summary(inspection);
     writeln!(stdout, "Unclip inspection summary")?;
     writeln!(stdout, "Target plugin: {}", context.target_plugin)?;
-    if let Some(write) = &context.write {
-        writeln!(stdout, "Written plugin: {}", write.destination_plugin)?;
-        if let Some(backup) = &write.backup_plugin {
-            writeln!(stdout, "Backup plugin: {backup}")?;
+    write_write_summary_text(stdout, context.write.as_ref())?;
+    writeln!(stdout)?;
+    write_terrain_summary_text(stdout, &summary)?;
+    writeln!(stdout)?;
+    write_reference_summary_text(stdout, &summary)?;
+    writeln!(stdout)?;
+    write_mesh_contact_summary_text(stdout, &summary)?;
+    writeln!(stdout)?;
+    write_threshold_summary_text(stdout, &summary)
+}
+
+fn write_write_summary_text(stdout: &mut dyn Write, write: Option<&WriteReport>) -> io::Result<()> {
+    if let Some(write) = write {
+        if write.written {
+            writeln!(stdout, "Written plugin: {}", write.destination_plugin)?;
+            if let Some(backup) = &write.backup_plugin {
+                writeln!(stdout, "Backup plugin: {backup}")?;
+            }
+        } else {
+            writeln!(
+                stdout,
+                "No plugin written: no refs required adjustment at {}",
+                write.destination_plugin
+            )?;
         }
         writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
     }
-    writeln!(stdout)?;
+    Ok(())
+}
+
+fn write_terrain_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary) -> io::Result<()> {
     writeln!(stdout, "Terrain cells:")?;
     writeln!(
         stdout,
@@ -257,8 +305,10 @@ fn write_summary_text(
         stdout,
         "  active terrain cells missing: {}",
         summary.active_terrain_cells_missing
-    )?;
-    writeln!(stdout)?;
+    )
+}
+
+fn write_reference_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary) -> io::Result<()> {
     writeln!(stdout, "References:")?;
     writeln!(stdout, "  inspected: {}", summary.refs)?;
     writeln!(
@@ -280,8 +330,13 @@ fn write_summary_text(
         stdout,
         "  origin below terrain: {}",
         summary.refs_origin_below_terrain
-    )?;
-    writeln!(stdout)?;
+    )
+}
+
+fn write_mesh_contact_summary_text(
+    stdout: &mut dyn Write,
+    summary: &UnclipSummary,
+) -> io::Result<()> {
     writeln!(stdout, "Mesh contacts:")?;
     writeln!(stdout, "  resolved: {}", summary.refs_with_mesh_contact)?;
     writeln!(
@@ -308,8 +363,10 @@ fn write_summary_text(
         stdout,
         "  contact missing terrain: {}",
         summary.refs_mesh_contact_missing_terrain
-    )?;
-    writeln!(stdout)?;
+    )
+}
+
+fn write_threshold_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary) -> io::Result<()> {
     writeln!(stdout, "Thresholds:")?;
     writeln!(
         stdout,
@@ -357,6 +414,21 @@ fn write_reference_text(stdout: &mut dyn Write, reference: &ReferenceInspection)
         )?;
     }
     Ok(())
+}
+
+fn write_adjustment_text(stdout: &mut dyn Write, adjustment: &WriteAdjustment) -> io::Result<()> {
+    writeln!(
+        stdout,
+        "WRITE CELL {:?} REF {:?} {} old_z={:.3} new_z={:.3} applied_delta={:.3} contact={:?} terrain_z={:.3}",
+        adjustment.cell,
+        adjustment.reference_key,
+        adjustment.id,
+        adjustment.old_z,
+        adjustment.new_z,
+        adjustment.applied_delta,
+        adjustment.contact_position,
+        adjustment.terrain_z
+    )
 }
 
 fn resolve_content_plugin_paths(
@@ -460,8 +532,9 @@ fn apply_unclip_adjustments(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
-) -> usize {
-    let mut adjusted_refs = 0;
+    collect_adjustments: bool,
+) -> WritePlan {
+    let mut plan = WritePlan::default();
 
     for object in &mut plugin.objects {
         let TES3Object::Cell(cell) = object else {
@@ -471,43 +544,77 @@ fn apply_unclip_adjustments(
             continue;
         }
 
-        for reference in cell.references.values_mut() {
-            if adjust_reference_z(reference, terrain, static_index, mesh_contacts) {
-                adjusted_refs += 1;
+        for (key, reference) in &mut cell.references {
+            if let Some(adjustment) = adjust_reference_z(
+                cell.data.grid,
+                *key,
+                reference,
+                terrain,
+                static_index,
+                mesh_contacts,
+            ) {
+                plan.adjusted_refs += 1;
+                if collect_adjustments {
+                    plan.adjustments.push(adjustment);
+                }
             }
         }
     }
 
-    adjusted_refs
+    plan
 }
 
 fn adjust_reference_z(
+    cell: CellCoord,
+    key: (u32, u32),
     reference: &mut tes3::esp::Reference,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
-) -> bool {
-    let Some(static_mesh) = static_index.get(&reference.id) else {
-        return false;
-    };
+) -> Option<WriteAdjustment> {
+    if reference.deleted == Some(true) {
+        return None;
+    }
+    let static_mesh = static_index.get(&reference.id)?;
     let Ok(contact) = mesh_contacts.contact(&static_mesh.mesh_path) else {
-        return false;
+        return None;
     };
     let position =
         contact.world_position(reference.translation, reference.rotation, reference.scale);
-    let Some(terrain_z) = terrain.height_at(position[0], position[1]) else {
-        return false;
-    };
-    let contact_delta = position[2] - terrain_z;
+    let terrain_z = terrain.height_at(position[0], position[1])?;
+    apply_contact_adjustment(cell, key, reference, position, terrain_z)
+}
+
+fn apply_contact_adjustment(
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &mut tes3::esp::Reference,
+    contact_position: [f32; 3],
+    terrain_z: f32,
+) -> Option<WriteAdjustment> {
+    let contact_delta = contact_position[2] - terrain_z;
+    if contact_delta.abs() <= CONTACT_TERRAIN_EPSILON {
+        return None;
+    }
+    let old_z = reference.translation[2];
     reference.translation[2] -= contact_delta;
-    true
+    Some(WriteAdjustment {
+        cell: [cell.0, cell.1],
+        reference_key: [key.0, key.1],
+        id: reference.id.clone(),
+        old_z,
+        new_z: reference.translation[2],
+        applied_delta: -contact_delta,
+        contact_position,
+        terrain_z,
+    })
 }
 
 fn save_plugin_with_backup(
     plugin: &mut Plugin,
     source_path: &std::path::Path,
     destination_path: &std::path::Path,
-    adjusted_refs: usize,
+    plan: WritePlan,
 ) -> io::Result<WriteReport> {
     if let Some(parent) = destination_path.parent() {
         fs::create_dir_all(parent)?;
@@ -533,33 +640,21 @@ fn save_plugin_with_backup(
     };
 
     if let Err(error) = rename_with_context(&temp_path, destination_path) {
-        if let BackupAction::Moved { path } = &backup
-            && let Err(restore_error) = fs::rename(path, destination_path)
-        {
-            let _ = fs::remove_file(&temp_path);
-            return Err(io::Error::new(
-                error.kind(),
-                format!(
-                    "{error}; additionally failed to restore backup {} to {}: {restore_error}",
-                    path.display(),
-                    destination_path.display()
-                ),
-            ));
-        }
         let _ = fs::remove_file(&temp_path);
         return Err(error);
     }
 
     Ok(WriteReport {
+        written: true,
         destination_plugin: destination_path.display().to_string(),
         backup_plugin: backup.path().map(|path| path.display().to_string()),
-        adjusted_refs,
+        adjusted_refs: plan.adjusted_refs,
+        adjustments: plan.adjustments,
     })
 }
 
 enum BackupAction {
     None,
-    Moved { path: PathBuf },
     Copied { path: PathBuf },
 }
 
@@ -567,7 +662,7 @@ impl BackupAction {
     fn path(&self) -> Option<&std::path::Path> {
         match self {
             Self::None => None,
-            Self::Moved { path } | Self::Copied { path } => Some(path),
+            Self::Copied { path } => Some(path),
         }
     }
 }
@@ -578,25 +673,29 @@ fn prepare_plugin_backup(
 ) -> io::Result<BackupAction> {
     let backup_path = next_numbered_backup_path(destination_path);
     if path_entry_exists(destination_path) {
-        rename_with_context(destination_path, &backup_path)?;
-        return Ok(BackupAction::Moved { path: backup_path });
+        copy_backup(destination_path, &backup_path)?;
+        return Ok(BackupAction::Copied { path: backup_path });
     }
 
     if !same_path(source_path, destination_path) && path_entry_exists(source_path) {
-        fs::copy(source_path, &backup_path).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!(
-                    "failed to copy backup {} to {}: {error}",
-                    source_path.display(),
-                    backup_path.display()
-                ),
-            )
-        })?;
+        copy_backup(source_path, &backup_path)?;
         return Ok(BackupAction::Copied { path: backup_path });
     }
 
     Ok(BackupAction::None)
+}
+
+fn copy_backup(source: &std::path::Path, backup_path: &std::path::Path) -> io::Result<()> {
+    fs::copy(source, backup_path).map(|_| ()).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to copy backup {} to {}: {error}",
+                source.display(),
+                backup_path.display()
+            ),
+        )
+    })
 }
 
 fn rename_with_context(source: &std::path::Path, destination: &std::path::Path) -> io::Result<()> {
@@ -747,6 +846,13 @@ struct StructuredReferenceRecord<'a> {
     reference: &'a ReferenceInspection,
 }
 
+#[derive(Serialize)]
+struct StructuredWriteAdjustmentRecord<'a> {
+    r#type: &'static str,
+    #[serde(flatten)]
+    adjustment: &'a WriteAdjustment,
+}
+
 struct UnclipReportContext {
     target_plugin: String,
     target_exterior_cells: usize,
@@ -808,10 +914,43 @@ impl UnclipReportContext {
 
 #[derive(Serialize)]
 struct WriteReport {
+    written: bool,
     destination_plugin: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     backup_plugin: Option<String>,
     adjusted_refs: usize,
+    #[serde(skip)]
+    adjustments: Vec<WriteAdjustment>,
+}
+
+impl WriteReport {
+    fn not_written(destination_path: &std::path::Path, plan: WritePlan) -> Self {
+        Self {
+            written: false,
+            destination_plugin: destination_path.display().to_string(),
+            backup_plugin: None,
+            adjusted_refs: plan.adjusted_refs,
+            adjustments: plan.adjustments,
+        }
+    }
+}
+
+#[derive(Default)]
+struct WritePlan {
+    adjusted_refs: usize,
+    adjustments: Vec<WriteAdjustment>,
+}
+
+#[derive(Serialize)]
+struct WriteAdjustment {
+    cell: [i32; 2],
+    reference_key: [u32; 2],
+    id: String,
+    old_z: f32,
+    new_z: f32,
+    applied_delta: f32,
+    contact_position: [f32; 3],
+    terrain_z: f32,
 }
 
 #[derive(Serialize)]
@@ -1289,7 +1428,9 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::{next_numbered_backup_path, prepare_plugin_backup};
+    use tes3::esp::Reference;
+
+    use super::{apply_contact_adjustment, next_numbered_backup_path, prepare_plugin_backup};
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -1353,8 +1494,8 @@ mod tests {
     }
 
     #[test]
-    fn existing_destination_is_moved_to_backup() {
-        let temp = TempDir::new("move-destination-backup");
+    fn existing_destination_is_copied_to_backup() {
+        let temp = TempDir::new("copy-destination-backup");
         let plugin = temp.path().join("plugin.omwaddon");
         std::fs::write(&plugin, b"modified").unwrap();
 
@@ -1363,6 +1504,54 @@ mod tests {
 
         assert_eq!(backup_path, temp.path().join("plugin.omwaddon.001"));
         assert_eq!(std::fs::read(backup_path).unwrap(), b"modified");
-        assert!(!plugin.exists());
+        assert_eq!(std::fs::read(plugin).unwrap(), b"modified");
+    }
+
+    #[test]
+    fn contact_adjustment_moves_buried_contact_up() {
+        let mut reference = reference_at_z(10.0);
+
+        let adjustment =
+            apply_contact_adjustment((1, 2), (3, 4), &mut reference, [0.0, 0.0, 7.0], 9.0).unwrap();
+
+        assert_close(reference.translation[2], 12.0);
+        assert_close(adjustment.old_z, 10.0);
+        assert_close(adjustment.new_z, 12.0);
+        assert_close(adjustment.applied_delta, 2.0);
+    }
+
+    #[test]
+    fn contact_adjustment_moves_floating_contact_down() {
+        let mut reference = reference_at_z(10.0);
+
+        let adjustment =
+            apply_contact_adjustment((1, 2), (3, 4), &mut reference, [0.0, 0.0, 12.0], 9.0)
+                .unwrap();
+
+        assert_close(reference.translation[2], 7.0);
+        assert_close(adjustment.applied_delta, -3.0);
+    }
+
+    #[test]
+    fn contact_adjustment_skips_within_epsilon() {
+        let mut reference = reference_at_z(10.0);
+
+        let adjustment =
+            apply_contact_adjustment((1, 2), (3, 4), &mut reference, [0.0, 0.0, 9.25], 9.0);
+
+        assert!(adjustment.is_none());
+        assert_close(reference.translation[2], 10.0);
+    }
+
+    fn reference_at_z(z: f32) -> Reference {
+        Reference {
+            id: "grass".to_owned(),
+            translation: [0.0, 0.0, z],
+            ..Reference::default()
+        }
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() < f32::EPSILON);
     }
 }
