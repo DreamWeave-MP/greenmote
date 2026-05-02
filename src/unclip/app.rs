@@ -114,7 +114,7 @@ fn write_text_summary(
     mesh_contacts: &mut MeshContactCache<'_>,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
-    let inspection = inspect_target_refs(plugin, terrain, static_index, mesh_contacts, |_| Ok(()))?;
+    let inspection = count_target_refs(plugin, terrain, static_index, mesh_contacts);
     write_summary_text(stdout, context, &inspection)
 }
 
@@ -145,7 +145,7 @@ fn write_structured_summary(
     mesh_contacts: &mut MeshContactCache<'_>,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
-    let inspection = inspect_target_refs(plugin, terrain, static_index, mesh_contacts, |_| Ok(()))?;
+    let inspection = count_target_refs(plugin, terrain, static_index, mesh_contacts);
     let report = StructuredSummaryReport {
         kind: "greenmote_unclip_terrain_inspection",
         target_plugin: &context.target_plugin,
@@ -192,7 +192,13 @@ fn write_structured_instances(
 }
 
 fn write_json(stdout: &mut dyn Write, value: &impl Serialize) -> io::Result<()> {
-    serde_json::to_writer(stdout, value).map_err(io::Error::other)
+    serde_json::to_writer(stdout, value).map_err(|error| {
+        if let Some(kind) = error.io_error_kind() {
+            io::Error::new(kind, error)
+        } else {
+            io::Error::other(error.to_string())
+        }
+    })
 }
 
 fn write_summary_text(
@@ -637,6 +643,37 @@ fn inspect_target_refs(
     Ok(report)
 }
 
+fn count_target_refs(
+    plugin: &Plugin,
+    terrain: &TerrainIndex,
+    static_index: &StaticMeshIndex,
+    mesh_contacts: &mut MeshContactCache<'_>,
+) -> TerrainInspectionReport {
+    let mut report = TerrainInspectionReport::default();
+    let mut context = ReferenceInspectionContext {
+        terrain,
+        static_index,
+        mesh_contacts,
+    };
+
+    let mut cells = plugin
+        .objects_of_type::<Cell>()
+        .filter(|cell| cell.is_exterior())
+        .collect::<Vec<_>>();
+    cells.sort_by_key(|cell| cell.data.grid);
+
+    for cell in cells {
+        let mut references = cell.references.iter().collect::<Vec<_>>();
+        references.sort_by_key(|(key, _)| **key);
+
+        for (_, reference) in references {
+            count_reference(&mut report, &mut context, reference);
+        }
+    }
+
+    report
+}
+
 struct ReferenceInspectionContext<'a, 'b> {
     terrain: &'a TerrainIndex,
     static_index: &'a StaticMeshIndex,
@@ -685,6 +722,24 @@ fn inspect_reference(
         contact_details.as_ref(),
     );
     reference_sink(&inspection)
+}
+
+fn count_reference(
+    report: &mut TerrainInspectionReport,
+    context: &mut ReferenceInspectionContext<'_, '_>,
+    reference: &tes3::esp::Reference,
+) {
+    report.refs += 1;
+    let mesh_contact = resolve_ref_mesh_contact(
+        report,
+        reference,
+        context.static_index,
+        context.mesh_contacts,
+    );
+    if let MeshContactResolution::Resolved { contact, .. } = &mesh_contact {
+        let _ = classify_contact(report, context.terrain, reference, contact);
+    }
+    let _ = classify_origin(report, context.terrain, reference);
 }
 
 fn classify_origin(
