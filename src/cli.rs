@@ -1,7 +1,7 @@
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
-use crate::groundcover::GroundcoverArgs;
+use crate::{groundcover::GroundcoverArgs, unclip::UnclipArgs};
 
 #[derive(Parser, Debug)]
 #[command(name = "greenmote", author, version)]
@@ -22,6 +22,8 @@ pub struct Cli {
 pub enum Command {
     /// Convert vanilla-style static exterior refs into `OpenMW` groundcover.
     Convert(GroundcoverArgs),
+    /// Inspect a groundcover plugin against active exterior terrain.
+    Unclip(UnclipArgs),
 }
 
 impl Cli {
@@ -81,7 +83,9 @@ mod tests {
     fn parser_no_subcommand_defaults_to_convert() {
         let cli = Cli::parse_from(["greenmote"]);
 
-        let Command::Convert(args) = cli.command_or_default();
+        let Command::Convert(args) = cli.command_or_default() else {
+            panic!("no subcommand should default to convert");
+        };
 
         assert!(args.openmw_cfg.is_none());
         assert!(args.config.is_none());
@@ -91,5 +95,21 @@ mod tests {
         assert_eq!(args.validate_config, None);
         assert!(!args.auto_enable);
         assert!(!args.debug);
+    }
+
+    #[test]
+    fn parser_accepts_unclip_plugin() {
+        let cli = Cli::parse_from(["greenmote", "unclip", "--plugin", "groundcover.omwaddon"]);
+
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("unclip command should parse");
+        };
+
+        assert_eq!(
+            args.plugin,
+            std::path::PathBuf::from("groundcover.omwaddon")
+        );
+        assert!(args.openmw_cfg.is_none());
+        assert!(!args.verbose);
     }
 }

@@ -6,6 +6,7 @@ mod cli;
 pub mod groundcover;
 #[cfg(feature = "gui")]
 mod gui;
+pub mod unclip;
 
 pub use cli::{Cli, Command};
 
@@ -33,6 +34,7 @@ pub fn run() -> io::Result<()> {
 
     match cli.command_or_default() {
         Command::Convert(args) => groundcover::run(args),
+        Command::Unclip(args) => unclip::run(&args),
     }
 }
 

@@ -10,7 +10,7 @@ mod config;
 pub mod default;
 mod load;
 pub mod mesh;
-mod openmw;
+pub(crate) mod openmw;
 mod output;
 pub mod plan;
 mod progress;
