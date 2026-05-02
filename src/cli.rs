@@ -61,6 +61,8 @@ impl Cli {
 mod tests {
     use clap::{CommandFactory, Parser};
 
+    use crate::unclip::UnclipOutputFormat;
+
     use super::*;
 
     #[test]
@@ -111,5 +113,24 @@ mod tests {
         );
         assert!(args.openmw_cfg.is_none());
         assert!(!args.verbose);
+        assert_eq!(args.format, UnclipOutputFormat::Yaml);
+    }
+
+    #[test]
+    fn parser_accepts_unclip_structured_output_format() {
+        let cli = Cli::parse_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--format",
+            "json",
+        ]);
+
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("unclip command should parse");
+        };
+
+        assert_eq!(args.format, UnclipOutputFormat::Json);
     }
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Clone, Debug)]
 #[command(
@@ -16,7 +16,33 @@ pub struct UnclipArgs {
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
     pub plugin: PathBuf,
 
-    /// Print per-reference terrain and mesh-contact inspection diagnostics.
+    /// Include human-readable per-reference diagnostic strings in structured output.
     #[arg(long = "verbose")]
     pub verbose: bool,
+
+    /// Report output format.
+    #[arg(long = "format", value_enum, default_value_t = UnclipOutputFormat::Yaml)]
+    pub format: UnclipOutputFormat,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum UnclipOutputFormat {
+    /// YAML report.
+    #[default]
+    Yaml,
+    /// JSON report.
+    Json,
+    /// TOML report.
+    Toml,
+}
+
+impl UnclipOutputFormat {
+    #[must_use]
+    pub const fn serialize_type(self) -> vfstool_lib::SerializeType {
+        match self {
+            Self::Json => vfstool_lib::SerializeType::Json,
+            Self::Yaml => vfstool_lib::SerializeType::Yaml,
+            Self::Toml => vfstool_lib::SerializeType::Toml,
+        }
+    }
 }

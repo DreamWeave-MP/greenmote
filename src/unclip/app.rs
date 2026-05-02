@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet, fmt::Write as FmtWrite, io, io::Write, path::PathBuf};
 
+use serde::Serialize;
 use tes3::esp::{Cell, Landscape, Plugin, Static};
 
 use crate::groundcover::openmw;
@@ -48,107 +49,28 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         args.verbose,
     );
 
-    write_summary(
-        stdout,
+    let output = UnclipReport::new(
         &target_plugin_path,
         target_cells.len(),
         active_cells.len(),
         terrain.len(),
-        missing_active_terrain_cells.len(),
-        &report,
-    )?;
-
-    if args.verbose {
-        for cell in &missing_active_terrain_cells {
-            writeln!(stdout, "ACTIVE CELL {cell:?} missing terrain")?;
-        }
-        stdout.write_all(report.details.as_bytes())?;
-    }
+        missing_active_terrain_cells,
+        report,
+    );
+    write_output(stdout, &output, args)?;
 
     Ok(())
 }
 
-fn write_summary(
+fn write_output(
     stdout: &mut dyn Write,
-    target_plugin_path: &std::path::Path,
-    target_cell_count: usize,
-    active_cell_count: usize,
-    terrain_cell_count: usize,
-    missing_active_terrain_cell_count: usize,
-    report: &TerrainInspectionReport,
+    report: &UnclipReport,
+    args: &UnclipArgs,
 ) -> io::Result<()> {
-    writeln!(stdout, "# greenmote unclip terrain inspection")?;
-    writeln!(stdout, "# target plugin: {}", target_plugin_path.display())?;
-    writeln!(stdout, "# target exterior cells: {target_cell_count}")?;
-    writeln!(stdout, "# active 3x3 cells: {active_cell_count}")?;
-    writeln!(stdout, "# loaded terrain cells total: {terrain_cell_count}")?;
     writeln!(
         stdout,
-        "# origin terrain classification epsilon: {ORIGIN_TERRAIN_EPSILON:.3}"
-    )?;
-    writeln!(
-        stdout,
-        "# mesh contact classification epsilon: {CONTACT_TERRAIN_EPSILON:.3}"
-    )?;
-    writeln!(
-        stdout,
-        "# active terrain cells loaded: {}",
-        active_cell_count - missing_active_terrain_cell_count
-    )?;
-    writeln!(
-        stdout,
-        "# active terrain cells missing: {missing_active_terrain_cell_count}"
-    )?;
-    write_ref_summary(stdout, report)
-}
-
-fn write_ref_summary(stdout: &mut dyn Write, report: &TerrainInspectionReport) -> io::Result<()> {
-    writeln!(stdout, "# target refs: {}", report.refs)?;
-    writeln!(
-        stdout,
-        "# refs with resolved mesh contact: {}",
-        report.refs_with_mesh_contact
-    )?;
-    writeln!(
-        stdout,
-        "# refs without resolved STAT: {}",
-        report.refs_without_resolved_static
-    )?;
-    writeln!(
-        stdout,
-        "# refs missing mesh contact: {}",
-        report.refs_missing_mesh_contact
-    )?;
-    writeln!(stdout, "# refs with terrain: {}", report.refs_with_terrain)?;
-    writeln!(
-        stdout,
-        "# refs missing terrain: {}",
-        report.refs_missing_terrain
-    )?;
-    writeln!(
-        stdout,
-        "# refs origin above terrain beyond epsilon: {}",
-        report.refs_above_terrain
-    )?;
-    writeln!(
-        stdout,
-        "# refs origin below terrain beyond epsilon: {}",
-        report.refs_below_terrain
-    )?;
-    writeln!(
-        stdout,
-        "# refs mesh contact above terrain beyond epsilon: {}",
-        report.refs_contact_above_terrain
-    )?;
-    writeln!(
-        stdout,
-        "# refs mesh contact below terrain beyond epsilon: {}",
-        report.refs_contact_below_terrain
-    )?;
-    writeln!(
-        stdout,
-        "# refs mesh contact missing terrain: {}",
-        report.refs_contact_missing_terrain
+        "{}",
+        vfstool_lib::serialize_value(report, args.format.serialize_type())?
     )
 }
 
@@ -262,6 +184,116 @@ fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTreeSet<CellC
     Ok(cells)
 }
 
+#[derive(Serialize)]
+struct UnclipReport {
+    kind: &'static str,
+    target_plugin: String,
+    summary: UnclipSummary,
+    missing_active_terrain_cells: Vec<[i32; 2]>,
+    refs: Vec<ReferenceInspection>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    details: String,
+}
+
+impl UnclipReport {
+    fn new(
+        target_plugin_path: &std::path::Path,
+        target_exterior_cells: usize,
+        active_cells: usize,
+        loaded_terrain_cells_total: usize,
+        missing_active_terrain_cells: Vec<CellCoord>,
+        inspection: TerrainInspectionReport,
+    ) -> Self {
+        let active_terrain_cells_missing = missing_active_terrain_cells.len();
+        Self {
+            kind: "greenmote_unclip_terrain_inspection",
+            target_plugin: target_plugin_path.display().to_string(),
+            summary: UnclipSummary {
+                target_exterior_cells,
+                active_cells,
+                loaded_terrain_cells_total,
+                active_terrain_cells_loaded: active_cells - active_terrain_cells_missing,
+                active_terrain_cells_missing,
+                refs: inspection.refs,
+                refs_with_mesh_contact: inspection.refs_with_mesh_contact,
+                refs_without_resolved_static: inspection.refs_without_resolved_static,
+                refs_missing_mesh_contact: inspection.refs_missing_mesh_contact,
+                refs_with_terrain: inspection.refs_with_terrain,
+                refs_missing_terrain: inspection.refs_missing_terrain,
+                refs_origin_above_terrain: inspection.refs_above_terrain,
+                refs_origin_below_terrain: inspection.refs_below_terrain,
+                refs_mesh_contact_above_terrain: inspection.refs_contact_above_terrain,
+                refs_mesh_contact_below_terrain: inspection.refs_contact_below_terrain,
+                refs_mesh_contact_missing_terrain: inspection.refs_contact_missing_terrain,
+                origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
+                mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
+            },
+            missing_active_terrain_cells: missing_active_terrain_cells
+                .into_iter()
+                .map(|(x, y)| [x, y])
+                .collect(),
+            refs: inspection.reference_inspections,
+            details: inspection.details,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct UnclipSummary {
+    target_exterior_cells: usize,
+    active_cells: usize,
+    loaded_terrain_cells_total: usize,
+    active_terrain_cells_loaded: usize,
+    active_terrain_cells_missing: usize,
+    refs: usize,
+    refs_with_mesh_contact: usize,
+    refs_without_resolved_static: usize,
+    refs_missing_mesh_contact: usize,
+    refs_with_terrain: usize,
+    refs_missing_terrain: usize,
+    refs_origin_above_terrain: usize,
+    refs_origin_below_terrain: usize,
+    refs_mesh_contact_above_terrain: usize,
+    refs_mesh_contact_below_terrain: usize,
+    refs_mesh_contact_missing_terrain: usize,
+    origin_terrain_epsilon: f32,
+    mesh_contact_terrain_epsilon: f32,
+}
+
+#[derive(Serialize)]
+struct ReferenceInspection {
+    cell: [i32; 2],
+    reference_key: [u32; 2],
+    id: String,
+    origin: OriginInspection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    static_mesh: Option<StaticMeshInspection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mesh_contact: Option<MeshContactInspection>,
+}
+
+#[derive(Serialize)]
+struct OriginInspection {
+    position: [f32; 3],
+    terrain_z: Option<f32>,
+    delta: Option<f32>,
+    classification: &'static str,
+}
+
+#[derive(Serialize)]
+struct StaticMeshInspection {
+    id: String,
+    mesh: String,
+}
+
+#[derive(Serialize)]
+struct MeshContactInspection {
+    position: [f32; 3],
+    terrain_z: Option<f32>,
+    delta: Option<f32>,
+    classification: &'static str,
+}
+
 #[derive(Default)]
 struct TerrainInspectionReport {
     refs: usize,
@@ -275,6 +307,7 @@ struct TerrainInspectionReport {
     refs_contact_above_terrain: usize,
     refs_contact_below_terrain: usize,
     refs_contact_missing_terrain: usize,
+    reference_inspections: Vec<ReferenceInspection>,
     details: String,
 }
 
@@ -308,6 +341,15 @@ fn inspect_target_refs(
             });
             let Some(terrain_z) = terrain.height_at(x, y) else {
                 report.refs_missing_terrain += 1;
+                report.reference_inspections.push(reference_inspection(
+                    cell.data.grid,
+                    *key,
+                    reference,
+                    None,
+                    None,
+                    "origin_missing_terrain",
+                    contact_details.as_ref(),
+                ));
                 if include_details {
                     write_missing_origin_terrain_detail(
                         &mut report.details,
@@ -332,6 +374,15 @@ fn inspect_target_refs(
                 }
                 OriginTerrainClassification::OnTerrain => {}
             }
+            report.reference_inspections.push(reference_inspection(
+                cell.data.grid,
+                *key,
+                reference,
+                Some(terrain_z),
+                Some(delta),
+                classification.label(),
+                contact_details.as_ref(),
+            ));
 
             if include_details {
                 if let Some(contact_details) = contact_details {
@@ -370,6 +421,41 @@ fn inspect_target_refs(
     }
 
     report
+}
+
+fn reference_inspection(
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &tes3::esp::Reference,
+    origin_terrain_z: Option<f32>,
+    origin_delta: Option<f32>,
+    origin_classification: &'static str,
+    contact_details: Option<&ContactDetails<'_>>,
+) -> ReferenceInspection {
+    ReferenceInspection {
+        cell: [cell.0, cell.1],
+        reference_key: [key.0, key.1],
+        id: reference.id.clone(),
+        origin: OriginInspection {
+            position: reference.translation,
+            terrain_z: origin_terrain_z,
+            delta: origin_delta,
+            classification: origin_classification,
+        },
+        static_mesh: contact_details.map(|contact| StaticMeshInspection {
+            id: contact.static_mesh.static_id.clone(),
+            mesh: contact.static_mesh.mesh_path.clone(),
+        }),
+        mesh_contact: contact_details.map(|contact| MeshContactInspection {
+            position: contact.position,
+            terrain_z: contact.terrain_z,
+            delta: contact.delta,
+            classification: contact.classification.map_or(
+                "mesh_contact_missing_terrain",
+                ContactTerrainClassification::label,
+            ),
+        }),
+    }
 }
 
 struct ContactDetails<'a> {
