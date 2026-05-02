@@ -6,7 +6,7 @@ mod cells;
 mod mesh;
 mod terrain;
 
-pub use args::{UnclipArgs, UnclipOutputFormat};
+pub use args::UnclipArgs;
 
 /// Runs the groundcover unclipping subcommand.
 ///

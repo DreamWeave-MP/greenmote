@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 
 #[derive(Parser, Clone, Debug)]
 #[command(
@@ -16,30 +16,11 @@ pub struct UnclipArgs {
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
     pub plugin: PathBuf,
 
-    /// Include human-readable per-reference diagnostic strings in structured output.
+    /// Include per-reference diagnostics.
     #[arg(long = "verbose")]
     pub verbose: bool,
 
-    /// Report output format.
-    #[arg(long = "format", value_enum, default_value_t = UnclipOutputFormat::Yaml)]
-    pub format: UnclipOutputFormat,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub enum UnclipOutputFormat {
-    /// YAML report.
-    #[default]
-    Yaml,
-    /// JSON report.
-    Json,
-}
-
-impl UnclipOutputFormat {
-    #[must_use]
-    pub const fn serialize_type(self) -> vfstool_lib::SerializeType {
-        match self {
-            Self::Json => vfstool_lib::SerializeType::Json,
-            Self::Yaml => vfstool_lib::SerializeType::Yaml,
-        }
-    }
+    /// Emit machine-readable compact JSON. With --verbose, emits newline-delimited JSON records.
+    #[arg(long = "structured")]
+    pub structured: bool,
 }
