@@ -16,11 +16,11 @@ pub struct UnclipArgs {
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
     pub plugin: PathBuf,
 
-    /// Include per-reference diagnostics.
-    #[arg(long = "verbose")]
-    pub verbose: bool,
+    /// Include per-reference instance diagnostics.
+    #[arg(long = "instances")]
+    pub instances: bool,
 
-    /// Emit machine-readable compact JSON. With --verbose, emits newline-delimited JSON records.
+    /// Emit machine-readable compact JSON. With --instances, emits newline-delimited JSON records.
     #[arg(long = "structured")]
     pub structured: bool,
 }

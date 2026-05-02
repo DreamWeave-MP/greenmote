@@ -110,7 +110,7 @@ mod tests {
             std::path::PathBuf::from("groundcover.omwaddon")
         );
         assert!(args.openmw_cfg.is_none());
-        assert!(!args.verbose);
+        assert!(!args.instances);
         assert!(!args.structured);
     }
 
@@ -132,6 +132,23 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_unclip_instances() {
+        let cli = Cli::parse_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--instances",
+        ]);
+
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("unclip command should parse");
+        };
+
+        assert!(args.instances);
+    }
+
+    #[test]
     fn parser_rejects_unclip_output_format() {
         let result = Cli::command().try_get_matches_from([
             "greenmote",
@@ -140,6 +157,19 @@ mod tests {
             "groundcover.omwaddon",
             "--format",
             "json",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parser_rejects_unclip_verbose() {
+        let result = Cli::command().try_get_matches_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--verbose",
         ]);
 
         assert!(result.is_err());

@@ -70,7 +70,7 @@ fn write_output(
     context: &UnclipReportContext,
     args: &UnclipArgs,
 ) -> io::Result<()> {
-    match (args.structured, args.verbose) {
+    match (args.structured, args.instances) {
         (false, false) => write_text_summary(
             stdout,
             plugin,
@@ -79,7 +79,7 @@ fn write_output(
             mesh_contacts,
             context,
         ),
-        (false, true) => write_verbose_text(
+        (false, true) => write_instance_text(
             stdout,
             plugin,
             terrain,
@@ -95,7 +95,7 @@ fn write_output(
             mesh_contacts,
             context,
         ),
-        (true, true) => write_structured_verbose(
+        (true, true) => write_structured_instances(
             stdout,
             plugin,
             terrain,
@@ -118,7 +118,7 @@ fn write_text_summary(
     write_summary_text(stdout, context, &inspection)
 }
 
-fn write_verbose_text(
+fn write_instance_text(
     stdout: &mut dyn Write,
     plugin: &Plugin,
     terrain: &TerrainIndex,
@@ -156,7 +156,7 @@ fn write_structured_summary(
     writeln!(stdout)
 }
 
-fn write_structured_verbose(
+fn write_structured_instances(
     stdout: &mut dyn Write,
     plugin: &Plugin,
     terrain: &TerrainIndex,
@@ -828,7 +828,13 @@ impl<'a> MeshContactResolution<'a> {
 
     fn mesh_contact_status_label(&self, contact_details: Option<&ContactDetails>) -> &'static str {
         match self {
-            Self::Resolved { .. } => contact_details.map_or("missing_terrain", |_| "resolved"),
+            Self::Resolved { .. } => contact_details.map_or("missing_terrain", |details| {
+                if details.terrain_z.is_some() {
+                    "resolved"
+                } else {
+                    "missing_terrain"
+                }
+            }),
             Self::MissingContact { .. } => "missing_contact",
             Self::UnresolvedStatic => "unresolved_static",
         }

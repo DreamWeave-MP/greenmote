@@ -1,3 +1,6 @@
 fn main() -> std::io::Result<()> {
-    greenmote::run()
+    match greenmote::run() {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        result => result,
+    }
 }
