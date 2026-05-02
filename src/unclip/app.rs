@@ -54,7 +54,6 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
             &terrain,
             &static_index,
             &mut mesh_contacts,
-            args.instances,
         );
         let write_report = if write_plan.adjusted_refs == 0 {
             WriteReport::not_written(&target_plugin.destination_path, write_plan)
@@ -274,11 +273,14 @@ fn write_write_summary_text(stdout: &mut dyn Write, write: Option<&WriteReport>)
         } else {
             writeln!(
                 stdout,
-                "No plugin written: no refs required adjustment at {}",
+                "No plugin written: no refs were adjusted at {}",
                 write.destination_plugin
             )?;
         }
         writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
+        for adjustment in &write.adjustments {
+            write_adjustment_text(stdout, adjustment)?;
+        }
     }
     Ok(())
 }
@@ -532,7 +534,6 @@ fn apply_unclip_adjustments(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
-    collect_adjustments: bool,
 ) -> WritePlan {
     let mut plan = WritePlan::default();
 
@@ -554,9 +555,7 @@ fn apply_unclip_adjustments(
                 mesh_contacts,
             ) {
                 plan.adjusted_refs += 1;
-                if collect_adjustments {
-                    plan.adjustments.push(adjustment);
-                }
+                plan.adjustments.push(adjustment);
             }
         }
     }
@@ -621,15 +620,16 @@ fn save_plugin_with_backup(
     }
 
     let temp_path = next_temp_plugin_path(destination_path);
-    plugin.save_path(&temp_path).map_err(|error| {
-        io::Error::new(
+    if let Err(error) = plugin.save_path(&temp_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(io::Error::new(
             error.kind(),
             format!(
                 "failed to write temporary plugin {}: {error}",
                 temp_path.display()
             ),
-        )
-    })?;
+        ));
+    }
 
     let backup = match prepare_plugin_backup(source_path, destination_path) {
         Ok(backup) => backup,
@@ -639,7 +639,7 @@ fn save_plugin_with_backup(
         }
     };
 
-    if let Err(error) = rename_with_context(&temp_path, destination_path) {
+    if let Err(error) = replace_with_temp(&temp_path, destination_path, backup.path()) {
         let _ = fs::remove_file(&temp_path);
         return Err(error);
     }
@@ -651,6 +651,42 @@ fn save_plugin_with_backup(
         adjusted_refs: plan.adjusted_refs,
         adjustments: plan.adjustments,
     })
+}
+
+fn replace_with_temp(
+    temp_path: &std::path::Path,
+    destination_path: &std::path::Path,
+    backup_path: Option<&std::path::Path>,
+) -> io::Result<()> {
+    if path_entry_exists(destination_path) {
+        fs::remove_file(destination_path).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "failed to remove {} before replacement: {error}",
+                    destination_path.display()
+                ),
+            )
+        })?;
+    }
+
+    if let Err(error) = rename_with_context(temp_path, destination_path) {
+        if let Some(backup_path) = backup_path
+            && let Err(restore_error) = fs::copy(backup_path, destination_path)
+        {
+            return Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "{error}; additionally failed to restore backup {} to {}: {restore_error}",
+                    backup_path.display(),
+                    destination_path.display()
+                ),
+            ));
+        }
+        return Err(error);
+    }
+
+    Ok(())
 }
 
 enum BackupAction {
@@ -919,7 +955,7 @@ struct WriteReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     backup_plugin: Option<String>,
     adjusted_refs: usize,
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     adjustments: Vec<WriteAdjustment>,
 }
 
@@ -1430,7 +1466,10 @@ mod tests {
 
     use tes3::esp::Reference;
 
-    use super::{apply_contact_adjustment, next_numbered_backup_path, prepare_plugin_backup};
+    use super::{
+        apply_contact_adjustment, next_numbered_backup_path, prepare_plugin_backup,
+        replace_with_temp,
+    };
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -1505,6 +1544,23 @@ mod tests {
         assert_eq!(backup_path, temp.path().join("plugin.omwaddon.001"));
         assert_eq!(std::fs::read(backup_path).unwrap(), b"modified");
         assert_eq!(std::fs::read(plugin).unwrap(), b"modified");
+    }
+
+    #[test]
+    fn replacement_overwrites_existing_destination_after_backup() {
+        let temp = TempDir::new("replace-existing");
+        let plugin = temp.path().join("plugin.omwaddon");
+        let temp_plugin = temp.path().join("plugin.omwaddon.greenmote-tmp.0");
+        let backup = temp.path().join("plugin.omwaddon.001");
+        std::fs::write(&plugin, b"old").unwrap();
+        std::fs::write(&backup, b"old").unwrap();
+        std::fs::write(&temp_plugin, b"new").unwrap();
+
+        replace_with_temp(&temp_plugin, &plugin, Some(&backup)).unwrap();
+
+        assert_eq!(std::fs::read(&plugin).unwrap(), b"new");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"old");
+        assert!(!temp_plugin.exists());
     }
 
     #[test]
