@@ -10,19 +10,15 @@ use super::{
     terrain::TerrainIndex,
 };
 
+const ORIGIN_TERRAIN_EPSILON: f32 = 0.5;
+
 pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     let openmw_config = openmw::load_config_from_path(args.openmw_cfg.as_deref())?;
     let vfs = openmw::build_vfs(&openmw_config);
     let target_plugin_path = resolve_target_plugin(&args.plugin, &vfs)?;
     let target_plugin = load_target_plugin(&target_plugin_path)?;
     let content_files = openmw::content_files(&openmw_config)?;
-    let terrain_plugin_paths = content_files
-        .iter()
-        .filter_map(|plugin| {
-            vfs.get_file(plugin.as_str())
-                .map(|file| file.path().to_path_buf())
-        })
-        .collect::<Vec<_>>();
+    let terrain_plugin_paths = resolve_content_plugin_paths(&content_files, &vfs)?;
     let terrain_plugins = load_terrain_plugins(&terrain_plugin_paths)?;
     let terrain = TerrainIndex::from_landscapes(
         terrain_plugins
@@ -30,17 +26,29 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
             .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
     );
     let target_cells = target_exterior_cells(&target_plugin);
-    let active_cells = target_cells
+    let active_cells = active_cells(&target_cells)?;
+    let missing_active_terrain_cells = active_cells
         .iter()
-        .flat_map(|cell| active_grid(*cell))
-        .collect::<BTreeSet<_>>();
+        .copied()
+        .filter(|cell| !terrain.has_cell(*cell))
+        .collect::<Vec<_>>();
     let report = inspect_target_refs(&target_plugin, &terrain, args.verbose);
 
     writeln!(stdout, "# greenmote unclip terrain inspection")?;
     writeln!(stdout, "# target plugin: {}", target_plugin_path.display())?;
     writeln!(stdout, "# target exterior cells: {}", target_cells.len())?;
     writeln!(stdout, "# active 3x3 cells: {}", active_cells.len())?;
-    writeln!(stdout, "# loaded terrain cells: {}", terrain.len())?;
+    writeln!(stdout, "# loaded terrain cells total: {}", terrain.len())?;
+    writeln!(
+        stdout,
+        "# active terrain cells loaded: {}",
+        active_cells.len() - missing_active_terrain_cells.len()
+    )?;
+    writeln!(
+        stdout,
+        "# active terrain cells missing: {}",
+        missing_active_terrain_cells.len()
+    )?;
     writeln!(stdout, "# target refs: {}", report.refs)?;
     writeln!(stdout, "# refs with terrain: {}", report.refs_with_terrain)?;
     writeln!(
@@ -60,10 +68,32 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     )?;
 
     if args.verbose {
+        for cell in &missing_active_terrain_cells {
+            writeln!(stdout, "ACTIVE CELL {cell:?} missing terrain")?;
+        }
         stdout.write_all(report.details.as_bytes())?;
     }
 
     Ok(())
+}
+
+fn resolve_content_plugin_paths(
+    content_files: &[String],
+    vfs: &vfstool_lib::VFS,
+) -> io::Result<Vec<PathBuf>> {
+    content_files
+        .iter()
+        .map(|plugin| {
+            vfs.get_file(plugin.as_str())
+                .map(|file| file.path().to_path_buf())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("active content file {plugin} was not found in the VFS"),
+                    )
+                })
+        })
+        .collect()
 }
 
 fn resolve_target_plugin(plugin: &std::path::Path, vfs: &vfstool_lib::VFS) -> io::Result<PathBuf> {
@@ -116,6 +146,16 @@ fn target_exterior_cells(plugin: &Plugin) -> BTreeSet<CellCoord> {
         .collect()
 }
 
+fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTreeSet<CellCoord>> {
+    let mut cells = BTreeSet::new();
+
+    for cell in target_cells {
+        cells.extend(active_grid(*cell)?);
+    }
+
+    Ok(cells)
+}
+
 #[derive(Default)]
 struct TerrainInspectionReport {
     refs: usize,
@@ -154,28 +194,56 @@ fn inspect_target_refs(
 
             report.refs_with_terrain += 1;
             let delta = z - terrain_z;
-            if delta > 0.0 {
-                report.refs_above_terrain += 1;
-            } else if delta < 0.0 {
-                report.refs_below_terrain += 1;
+            let classification = classify_origin_delta(delta);
+            match classification {
+                OriginTerrainClassification::Above => {
+                    report.refs_above_terrain += 1;
+                }
+                OriginTerrainClassification::Below => {
+                    report.refs_below_terrain += 1;
+                }
+                OriginTerrainClassification::OnTerrain => {}
             }
 
             if include_details {
-                let action = if delta > 0.0 {
-                    "would_snap_down"
-                } else if delta < 0.0 {
-                    "would_snap_up"
-                } else {
-                    "already_on_terrain"
-                };
                 let _ = writeln!(
                     report.details,
-                    "CELL {:?} REF {:?} {} old_z={z:.2} terrain_z={terrain_z:.2} delta={delta:.2} action={action}",
-                    cell.data.grid, key, reference.id
+                    "CELL {:?} REF {:?} {} origin_z={z:.3} terrain_z={terrain_z:.3} origin_delta={delta:.3} classification={}",
+                    cell.data.grid,
+                    key,
+                    reference.id,
+                    classification.label()
                 );
             }
         }
     }
 
     report
+}
+
+#[derive(Clone, Copy)]
+enum OriginTerrainClassification {
+    Above,
+    Below,
+    OnTerrain,
+}
+
+impl OriginTerrainClassification {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Above => "origin_above_terrain",
+            Self::Below => "origin_below_terrain",
+            Self::OnTerrain => "origin_on_terrain",
+        }
+    }
+}
+
+fn classify_origin_delta(delta: f32) -> OriginTerrainClassification {
+    if delta > ORIGIN_TERRAIN_EPSILON {
+        OriginTerrainClassification::Above
+    } else if delta < -ORIGIN_TERRAIN_EPSILON {
+        OriginTerrainClassification::Below
+    } else {
+        OriginTerrainClassification::OnTerrain
+    }
 }

@@ -43,6 +43,11 @@ impl TerrainIndex {
             local_cell_coord(world_y, cell.1),
         ))
     }
+
+    #[must_use]
+    pub fn has_cell(&self, cell: CellCoord) -> bool {
+        self.lands.contains_key(&cell)
+    }
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -66,21 +71,46 @@ fn local_cell_coord(world_coord: f32, cell_coord: i32) -> f32 {
 fn sample_height(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> f32 {
     let grid_x = (local_x / LAND_VERTEX_SPACING).clamp(0.0, LAND_VERTEX_MAX as f32);
     let grid_y = (local_y / LAND_VERTEX_SPACING).clamp(0.0, LAND_VERTEX_MAX as f32);
-    let x0 = grid_x.floor() as usize;
-    let y0 = grid_y.floor() as usize;
+    let x0 = grid_x.floor().min((LAND_VERTEX_MAX - 1) as f32) as usize;
+    let y0 = grid_y.floor().min((LAND_VERTEX_MAX - 1) as f32) as usize;
     let x1 = (x0 + 1).min(LAND_VERTEX_MAX);
     let y1 = (y0 + 1).min(LAND_VERTEX_MAX);
     let tx = grid_x - x0 as f32;
     let ty = grid_y - y0 as f32;
 
-    let h00 = heights[y0][x0];
-    let h10 = heights[y0][x1];
-    let h01 = heights[y1][x0];
-    let h11 = heights[y1][x1];
-    let h0 = h00.mul_add(1.0 - tx, h10 * tx);
-    let h1 = h01.mul_add(1.0 - tx, h11 * tx);
+    if ((x0 ^ y0) & 1) == 0 {
+        if tx + ty <= 1.0 {
+            interpolate_triangle(heights[y0][x0], heights[y1][x0], heights[y0][x1], tx, ty)
+        } else {
+            interpolate_triangle(
+                heights[y1][x1],
+                heights[y0][x1],
+                heights[y1][x0],
+                1.0 - tx,
+                1.0 - ty,
+            )
+        }
+    } else if tx + ty <= 1.0 {
+        interpolate_triangle(heights[y0][x0], heights[y1][x0], heights[y0][x1], tx, ty)
+    } else {
+        interpolate_triangle(
+            heights[y1][x1],
+            heights[y0][x1],
+            heights[y1][x0],
+            1.0 - tx,
+            1.0 - ty,
+        )
+    }
+}
 
-    h0.mul_add(1.0 - ty, h1 * ty)
+fn interpolate_triangle(
+    origin: f32,
+    y_axis: f32,
+    x_axis: f32,
+    x_weight: f32,
+    y_weight: f32,
+) -> f32 {
+    origin + (x_axis - origin) * x_weight + (y_axis - origin) * y_weight
 }
 
 #[cfg(test)]
@@ -88,7 +118,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn samples_bilinear_height_inside_cell() {
+    fn samples_even_quad_triangle_height_inside_cell() {
         let mut heights: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
             .into_boxed_slice()
             .try_into()
@@ -99,5 +129,21 @@ mod tests {
         heights[1][1] = 30.0;
 
         assert!((sample_height(&heights, 64.0, 64.0) - 15.0).abs() < f32::EPSILON);
+        assert!((sample_height(&heights, 96.0, 96.0) - 22.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn samples_odd_quad_triangle_height_inside_cell() {
+        let mut heights: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        heights[0][1] = 0.0;
+        heights[0][2] = 10.0;
+        heights[1][1] = 20.0;
+        heights[1][2] = 100.0;
+
+        assert!((sample_height(&heights, 192.0, 64.0) - 15.0).abs() < f32::EPSILON);
+        assert!((sample_height(&heights, 224.0, 96.0) - 57.5).abs() < f32::EPSILON);
     }
 }
