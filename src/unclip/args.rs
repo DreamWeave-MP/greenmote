@@ -32,8 +32,6 @@ pub enum UnclipOutputFormat {
     Yaml,
     /// JSON report.
     Json,
-    /// TOML report.
-    Toml,
 }
 
 impl UnclipOutputFormat {
@@ -42,7 +40,6 @@ impl UnclipOutputFormat {
         match self {
             Self::Json => vfstool_lib::SerializeType::Json,
             Self::Yaml => vfstool_lib::SerializeType::Yaml,
-            Self::Toml => vfstool_lib::SerializeType::Toml,
         }
     }
 }

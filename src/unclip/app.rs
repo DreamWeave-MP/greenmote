@@ -265,9 +265,13 @@ struct ReferenceInspection {
     cell: [i32; 2],
     reference_key: [u32; 2],
     id: String,
+    static_resolution: &'static str,
+    mesh_contact_status: &'static str,
     origin: OriginInspection,
     #[serde(skip_serializing_if = "Option::is_none")]
     static_mesh: Option<StaticMeshInspection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mesh_contact_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mesh_contact: Option<MeshContactInspection>,
 }
@@ -319,117 +323,135 @@ fn inspect_target_refs(
     include_details: bool,
 ) -> TerrainInspectionReport {
     let mut report = TerrainInspectionReport::default();
+    let mut context = ReferenceInspectionContext {
+        terrain,
+        static_index,
+        mesh_contacts,
+        include_details,
+    };
 
-    for cell in plugin
+    let mut cells = plugin
         .objects_of_type::<Cell>()
         .filter(|cell| cell.is_exterior())
-    {
-        for (key, reference) in &cell.references {
-            report.refs += 1;
-            let [x, y, z] = reference.translation;
-            let mesh_contact = resolve_ref_mesh_contact(
-                &mut report,
-                cell.data.grid,
-                *key,
-                reference,
-                static_index,
-                mesh_contacts,
-                include_details,
-            );
-            let contact_details = mesh_contact.as_ref().map(|(static_mesh, contact)| {
-                classify_contact(&mut report, terrain, reference, static_mesh, contact)
-            });
-            let Some(terrain_z) = terrain.height_at(x, y) else {
-                report.refs_missing_terrain += 1;
-                report.reference_inspections.push(reference_inspection(
-                    cell.data.grid,
-                    *key,
-                    reference,
-                    None,
-                    None,
-                    "origin_missing_terrain",
-                    contact_details.as_ref(),
-                ));
-                if include_details {
-                    write_missing_origin_terrain_detail(
-                        &mut report.details,
-                        cell.data.grid,
-                        *key,
-                        reference,
-                        contact_details.as_ref(),
-                    );
-                }
-                continue;
-            };
+        .collect::<Vec<_>>();
+    cells.sort_by_key(|cell| cell.data.grid);
 
-            report.refs_with_terrain += 1;
-            let delta = z - terrain_z;
-            let classification = classify_origin_delta(delta);
-            match classification {
-                OriginTerrainClassification::Above => {
-                    report.refs_above_terrain += 1;
-                }
-                OriginTerrainClassification::Below => {
-                    report.refs_below_terrain += 1;
-                }
-                OriginTerrainClassification::OnTerrain => {}
-            }
-            report.reference_inspections.push(reference_inspection(
-                cell.data.grid,
-                *key,
-                reference,
-                Some(terrain_z),
-                Some(delta),
-                classification.label(),
-                contact_details.as_ref(),
-            ));
+    for cell in cells {
+        let mut references = cell.references.iter().collect::<Vec<_>>();
+        references.sort_by_key(|(key, _)| **key);
 
-            if include_details {
-                if let Some(contact_details) = contact_details {
-                    let [contact_x, contact_y, contact_z] = contact_details.position;
-                    let _ = writeln!(
-                        report.details,
-                        "CELL {:?} REF {:?} {} static={} mesh={:?} origin_z={z:.3} origin_terrain_z={terrain_z:.3} origin_delta={delta:.3} origin_epsilon={ORIGIN_TERRAIN_EPSILON:.3} origin_classification={} contact=({:.3}, {:.3}, {:.3}) contact_terrain_z={} contact_delta={} contact_epsilon={CONTACT_TERRAIN_EPSILON:.3} contact_classification={}",
-                        cell.data.grid,
-                        key,
-                        reference.id,
-                        contact_details.static_mesh.static_id,
-                        contact_details.static_mesh.mesh_path,
-                        classification.label(),
-                        contact_x,
-                        contact_y,
-                        contact_z,
-                        optional_f32(contact_details.terrain_z),
-                        optional_f32(contact_details.delta),
-                        contact_details.classification.map_or(
-                            "mesh_contact_missing_terrain",
-                            ContactTerrainClassification::label
-                        )
-                    );
-                } else {
-                    let _ = writeln!(
-                        report.details,
-                        "CELL {:?} REF {:?} {} origin_z={z:.3} terrain_z={terrain_z:.3} origin_delta={delta:.3} origin_epsilon={ORIGIN_TERRAIN_EPSILON:.3} origin_classification={} contact_classification=unresolved",
-                        cell.data.grid,
-                        key,
-                        reference.id,
-                        classification.label()
-                    );
-                }
-            }
+        for (key, reference) in references {
+            inspect_reference(&mut report, &mut context, cell.data.grid, *key, reference);
         }
     }
 
     report
 }
 
+struct ReferenceInspectionContext<'a, 'b> {
+    terrain: &'a TerrainIndex,
+    static_index: &'a StaticMeshIndex,
+    mesh_contacts: &'a mut MeshContactCache<'b>,
+    include_details: bool,
+}
+
+struct OriginDetails {
+    terrain_z: Option<f32>,
+    delta: Option<f32>,
+    classification: &'static str,
+}
+
+fn inspect_reference(
+    report: &mut TerrainInspectionReport,
+    context: &mut ReferenceInspectionContext<'_, '_>,
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &tes3::esp::Reference,
+) {
+    report.refs += 1;
+    let mesh_contact = resolve_ref_mesh_contact(
+        report,
+        cell,
+        key,
+        reference,
+        context.static_index,
+        context.mesh_contacts,
+        context.include_details,
+    );
+    let contact_details = match &mesh_contact {
+        MeshContactResolution::Resolved {
+            static_mesh,
+            contact,
+        } => Some(classify_contact(
+            report,
+            context.terrain,
+            reference,
+            static_mesh,
+            contact,
+        )),
+        MeshContactResolution::UnresolvedStatic | MeshContactResolution::MissingContact { .. } => {
+            None
+        }
+    };
+    let origin = classify_origin(report, context.terrain, reference);
+    report.reference_inspections.push(reference_inspection(
+        cell,
+        key,
+        reference,
+        &origin,
+        &mesh_contact,
+        contact_details.as_ref(),
+    ));
+
+    if context.include_details {
+        write_reference_detail(
+            report,
+            cell,
+            key,
+            reference,
+            &origin,
+            contact_details.as_ref(),
+        );
+    }
+}
+
+fn classify_origin(
+    report: &mut TerrainInspectionReport,
+    terrain: &TerrainIndex,
+    reference: &tes3::esp::Reference,
+) -> OriginDetails {
+    let [x, y, z] = reference.translation;
+    let Some(terrain_z) = terrain.height_at(x, y) else {
+        report.refs_missing_terrain += 1;
+        return OriginDetails {
+            terrain_z: None,
+            delta: None,
+            classification: "origin_missing_terrain",
+        };
+    };
+
+    report.refs_with_terrain += 1;
+    let delta = z - terrain_z;
+    let classification = classify_origin_delta(delta);
+    match classification {
+        OriginTerrainClassification::Above => report.refs_above_terrain += 1,
+        OriginTerrainClassification::Below => report.refs_below_terrain += 1,
+        OriginTerrainClassification::OnTerrain => {}
+    }
+
+    OriginDetails {
+        terrain_z: Some(terrain_z),
+        delta: Some(delta),
+        classification: classification.label(),
+    }
+}
+
 fn reference_inspection(
     cell: CellCoord,
     key: (u32, u32),
     reference: &tes3::esp::Reference,
-    origin_terrain_z: Option<f32>,
-    origin_delta: Option<f32>,
-    origin_classification: &'static str,
+    origin: &OriginDetails,
+    mesh_resolution: &MeshContactResolution<'_>,
     contact_details: Option<&ContactDetails<'_>>,
 ) -> ReferenceInspection {
     ReferenceInspection {
@@ -438,14 +460,14 @@ fn reference_inspection(
         id: reference.id.clone(),
         origin: OriginInspection {
             position: reference.translation,
-            terrain_z: origin_terrain_z,
-            delta: origin_delta,
-            classification: origin_classification,
+            terrain_z: origin.terrain_z,
+            delta: origin.delta,
+            classification: origin.classification,
         },
-        static_mesh: contact_details.map(|contact| StaticMeshInspection {
-            id: contact.static_mesh.static_id.clone(),
-            mesh: contact.static_mesh.mesh_path.clone(),
-        }),
+        static_resolution: mesh_resolution.static_resolution_label(),
+        mesh_contact_status: mesh_resolution.mesh_contact_status_label(contact_details),
+        static_mesh: mesh_resolution.static_mesh().map(static_mesh_inspection),
+        mesh_contact_error: mesh_resolution.mesh_contact_error().map(str::to_owned),
         mesh_contact: contact_details.map(|contact| MeshContactInspection {
             position: contact.position,
             terrain_z: contact.terrain_z,
@@ -455,6 +477,13 @@ fn reference_inspection(
                 ContactTerrainClassification::label,
             ),
         }),
+    }
+}
+
+fn static_mesh_inspection(static_mesh: &super::mesh::StaticMesh) -> StaticMeshInspection {
+    StaticMeshInspection {
+        id: static_mesh.static_id.clone(),
+        mesh: static_mesh.mesh_path.clone(),
     }
 }
 
@@ -488,6 +517,54 @@ fn classify_contact<'a>(
         terrain_z,
         delta,
         classification,
+    }
+}
+
+fn write_reference_detail(
+    report: &mut TerrainInspectionReport,
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &tes3::esp::Reference,
+    origin: &OriginDetails,
+    contact_details: Option<&ContactDetails<'_>>,
+) {
+    if origin.terrain_z.is_none() {
+        write_missing_origin_terrain_detail(
+            &mut report.details,
+            cell,
+            key,
+            reference,
+            contact_details,
+        );
+    } else if let Some(contact_details) = contact_details {
+        let [contact_x, contact_y, contact_z] = contact_details.position;
+        let _ = writeln!(
+            report.details,
+            "CELL {cell:?} REF {key:?} {} static={} mesh={:?} origin_z={:.3} origin_terrain_z={} origin_delta={} origin_epsilon={ORIGIN_TERRAIN_EPSILON:.3} origin_classification={} contact=({contact_x:.3}, {contact_y:.3}, {contact_z:.3}) contact_terrain_z={} contact_delta={} contact_epsilon={CONTACT_TERRAIN_EPSILON:.3} contact_classification={}",
+            reference.id,
+            contact_details.static_mesh.static_id,
+            contact_details.static_mesh.mesh_path,
+            reference.translation[2],
+            optional_f32(origin.terrain_z),
+            optional_f32(origin.delta),
+            origin.classification,
+            optional_f32(contact_details.terrain_z),
+            optional_f32(contact_details.delta),
+            contact_details.classification.map_or(
+                "mesh_contact_missing_terrain",
+                ContactTerrainClassification::label
+            )
+        );
+    } else {
+        let _ = writeln!(
+            report.details,
+            "CELL {cell:?} REF {key:?} {} origin_z={:.3} terrain_z={} origin_delta={} origin_epsilon={ORIGIN_TERRAIN_EPSILON:.3} origin_classification={} contact_classification=unresolved",
+            reference.id,
+            reference.translation[2],
+            optional_f32(origin.terrain_z),
+            optional_f32(origin.delta),
+            origin.classification
+        );
     }
 }
 
@@ -541,6 +618,54 @@ fn classify_counted_contact_delta(
     classification
 }
 
+enum MeshContactResolution<'a> {
+    Resolved {
+        static_mesh: &'a super::mesh::StaticMesh,
+        contact: &'a super::mesh::MeshContact,
+    },
+    MissingContact {
+        static_mesh: &'a super::mesh::StaticMesh,
+        error: String,
+    },
+    UnresolvedStatic,
+}
+
+impl<'a> MeshContactResolution<'a> {
+    const fn static_resolution_label(&self) -> &'static str {
+        match self {
+            Self::Resolved { .. } | Self::MissingContact { .. } => "resolved",
+            Self::UnresolvedStatic => "unresolved",
+        }
+    }
+
+    fn mesh_contact_status_label(
+        &self,
+        contact_details: Option<&ContactDetails<'_>>,
+    ) -> &'static str {
+        match self {
+            Self::Resolved { .. } => contact_details.map_or("missing_terrain", |_| "resolved"),
+            Self::MissingContact { .. } => "missing_contact",
+            Self::UnresolvedStatic => "unresolved_static",
+        }
+    }
+
+    const fn static_mesh(&self) -> Option<&'a super::mesh::StaticMesh> {
+        match self {
+            Self::Resolved { static_mesh, .. } | Self::MissingContact { static_mesh, .. } => {
+                Some(*static_mesh)
+            }
+            Self::UnresolvedStatic => None,
+        }
+    }
+
+    fn mesh_contact_error(&self) -> Option<&str> {
+        match self {
+            Self::MissingContact { error, .. } => Some(error),
+            Self::Resolved { .. } | Self::UnresolvedStatic => None,
+        }
+    }
+}
+
 fn resolve_ref_mesh_contact<'a>(
     report: &mut TerrainInspectionReport,
     cell: CellCoord,
@@ -549,7 +674,7 @@ fn resolve_ref_mesh_contact<'a>(
     static_index: &'a StaticMeshIndex,
     mesh_contacts: &'a mut MeshContactCache<'_>,
     include_details: bool,
-) -> Option<(&'a super::mesh::StaticMesh, &'a super::mesh::MeshContact)> {
+) -> MeshContactResolution<'a> {
     let Some(static_mesh) = static_index.get(&reference.id) else {
         report.refs_without_resolved_static += 1;
         if include_details {
@@ -559,16 +684,20 @@ fn resolve_ref_mesh_contact<'a>(
                 reference.id
             );
         }
-        return None;
+        return MeshContactResolution::UnresolvedStatic;
     };
 
     match mesh_contacts.contact(&static_mesh.mesh_path) {
         Ok(contact) => {
             report.refs_with_mesh_contact += 1;
-            Some((static_mesh, contact))
+            MeshContactResolution::Resolved {
+                static_mesh,
+                contact,
+            }
         }
         Err(error) => {
             report.refs_missing_mesh_contact += 1;
+            let error = error.to_string();
             if include_details {
                 let _ = writeln!(
                     report.details,
@@ -576,7 +705,7 @@ fn resolve_ref_mesh_contact<'a>(
                     reference.id, static_mesh.static_id, static_mesh.mesh_path
                 );
             }
-            None
+            MeshContactResolution::MissingContact { static_mesh, error }
         }
     }
 }
