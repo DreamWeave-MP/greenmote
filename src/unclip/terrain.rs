@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tes3::esp::Landscape;
+use tes3::esp::{Landscape, LandscapeFlags};
 
 use super::cells::CellCoord;
 
@@ -20,7 +20,10 @@ impl TerrainIndex {
         for landscape in landscapes {
             if landscape.flags.contains(tes3::esp::ObjectFlags::DELETED) {
                 lands.remove(&landscape.grid);
-            } else {
+            } else if landscape
+                .landscape_flags
+                .intersects(LandscapeFlags::USES_VERTEX_HEIGHTS_AND_NORMALS)
+            {
                 lands.insert(landscape.grid, landscape.decode_vertex_heights());
             }
         }
@@ -137,5 +140,23 @@ mod tests {
 
         assert!((sample_height(&heights, 192.0, 64.0) - 15.0).abs() < f32::EPSILON);
         assert!((sample_height(&heights, 224.0, 96.0) - 57.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn texture_only_landscape_does_not_replace_height_data() {
+        let mut base = Landscape {
+            landscape_flags: LandscapeFlags::USES_VERTEX_HEIGHTS_AND_NORMALS,
+            ..Landscape::default()
+        };
+        base.vertex_heights.offset = 5.0;
+
+        let texture_only = Landscape {
+            landscape_flags: LandscapeFlags::USES_TEXTURES,
+            ..Landscape::default()
+        };
+
+        let terrain = TerrainIndex::from_landscapes([&base, &texture_only]);
+
+        assert!((terrain.height_at(0.0, 0.0).unwrap_or_default() - 40.0).abs() < f32::EPSILON);
     }
 }
