@@ -1,8 +1,8 @@
-use std::{io, io::Write};
+use std::{fs::File, io, io::Write};
 
 use tes3::esp::{Landscape, Plugin};
 
-use crate::groundcover::openmw;
+use crate::groundcover::{LOG_NAME, openmw};
 
 use super::{
     UnclipArgs,
@@ -97,6 +97,9 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     } else {
         None
     };
+    let log_path = openmw_config.user_config_path().join(LOG_NAME);
+    let mut log = File::create(log_path)?;
+    let mut output_writer = TeeWriter::new(stdout, &mut log);
 
     let mut output = OutputContext {
         plugin: &target_plugin_data,
@@ -107,7 +110,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         report: &report_context,
         policy: &policy,
     };
-    let inspection = write_output(stdout, args, &mut output, write_status.as_ref())?;
+    let inspection = write_output(&mut output_writer, args, &mut output, write_status.as_ref())?;
     report_context.write = save_write_plan(
         &mut target_plugin_data,
         &target_plugin.source_path,
@@ -115,9 +118,33 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         write_plan,
         (!policy.write_actions.any_enabled()).then_some("all_write_actions_disabled"),
     )?;
-    write_output_footer(stdout, args, &report_context, &inspection)?;
+    write_output_footer(&mut output_writer, args, &report_context, &inspection)?;
 
     Ok(())
+}
+
+struct TeeWriter<'a, 'b> {
+    primary: &'a mut dyn Write,
+    secondary: &'b mut dyn Write,
+}
+
+impl<'a, 'b> TeeWriter<'a, 'b> {
+    fn new(primary: &'a mut dyn Write, secondary: &'b mut dyn Write) -> Self {
+        Self { primary, secondary }
+    }
+}
+
+impl Write for TeeWriter<'_, '_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.primary.write_all(buf)?;
+        self.secondary.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.primary.flush()?;
+        self.secondary.flush()
+    }
 }
 
 fn save_write_plan(
@@ -276,6 +303,8 @@ fn write_structured_instances(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use crate::unclip::{
         UnclipArgs,
         args::WriteActionArg,
@@ -283,7 +312,22 @@ mod tests {
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
 
-    use super::write_output_footer;
+    use super::{TeeWriter, write_output_footer};
+
+    #[test]
+    fn tee_writer_writes_to_stdout_and_log() {
+        let mut stdout = Vec::new();
+        let mut log = Vec::new();
+
+        {
+            let mut writer = TeeWriter::new(&mut stdout, &mut log);
+            writer.write_all(b"unclip report\n").unwrap();
+            writer.flush().unwrap();
+        }
+
+        assert_eq!(stdout, b"unclip report\n");
+        assert_eq!(log, b"unclip report\n");
+    }
 
     #[test]
     fn structured_instance_footer_writes_changes_before_summary() {
