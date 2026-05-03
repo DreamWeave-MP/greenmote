@@ -13,7 +13,10 @@ use std::{
 use regex::RegexSet;
 use serde::{Deserialize, Serialize};
 
-use crate::groundcover::{GroundcoverArgs, default};
+use crate::{
+    groundcover::{GroundcoverArgs, default},
+    unclip::config::PersistedUnclipConfig,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 // These are persisted/CLI-facing runtime toggles. Hiding them behind enums would make the Rust
@@ -44,6 +47,9 @@ pub struct GroundcoverConfig {
     #[serde(default)]
     pub auto_enable: bool,
 
+    #[serde(skip)]
+    pub(crate) unclip: PersistedUnclipConfig,
+
     #[serde(skip, default = "RegexSet::empty")]
     include_set: RegexSet,
 
@@ -71,6 +77,7 @@ impl GroundcoverConfig {
             validate_config: false,
             debug: false,
             auto_enable: false,
+            unclip: PersistedUnclipConfig::generated_default(),
             include_set: RegexSet::empty(),
             exclude_set: RegexSet::empty(),
             ignored_plugin_set: RegexSet::empty(),

@@ -51,7 +51,35 @@ fn missing_config_default_initializes_next_to_user_config() {
     );
     let contents = read_to_string(dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME)).unwrap();
     assert!(contents.contains("[convert]"));
+    assert!(contents.contains("[unclip]"));
+    assert!(!contents.contains("plugin ="));
     assert!(!contents.contains("validate_config"));
+}
+
+#[test]
+fn save_for_edit_preserves_unclip_config() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[unclip]
+plugin = "custom-groundcover.omwaddon"
+write = true
+include_grass_ids = ["flora_.*"]
+"#,
+    )
+    .unwrap();
+
+    let mut config =
+        GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local")).unwrap();
+    config.dry_run = true;
+    config.save_for_edit(&config_path).unwrap();
+    let contents = read_to_string(config_path).unwrap();
+
+    assert!(contents.contains("plugin = \"custom-groundcover.omwaddon\""));
+    assert!(contents.contains("write = true"));
+    assert!(contents.contains("include_grass_ids = [\"flora_.*\"]"));
 }
 
 #[test]

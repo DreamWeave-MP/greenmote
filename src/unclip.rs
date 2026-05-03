@@ -3,6 +3,7 @@ use std::{io, io::Write};
 mod app;
 mod args;
 mod cells;
+pub(crate) mod config;
 mod inspection;
 mod mesh;
 mod model;
@@ -36,5 +37,6 @@ pub fn run(args: &UnclipArgs) -> io::Result<()> {
 ///
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or terrain lookup errors.
 pub fn run_with_output(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
-    app::run(args, stdout)
+    let config = config::UnclipConfig::get(args)?;
+    app::run(&config, stdout)
 }

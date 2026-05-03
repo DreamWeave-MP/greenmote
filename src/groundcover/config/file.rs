@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use regex::RegexSet;
 use serde::{Deserialize, Serialize};
 
-use crate::groundcover::{GroundcoverConfig, default};
+use crate::{
+    groundcover::{GroundcoverConfig, default},
+    unclip::config::PersistedUnclipConfig,
+};
 
 use super::to_io_error;
 
@@ -20,6 +23,9 @@ pub(super) struct GroundcoverConfigFile {
 
     #[serde(default)]
     convert: ConvertConfigFile,
+
+    #[serde(default)]
+    unclip: PersistedUnclipConfig,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -60,6 +66,7 @@ impl GroundcoverConfigFile {
                 debug: config.debug,
                 auto_enable: config.auto_enable,
             },
+            unclip: config.unclip.clone(),
         }
     }
 
@@ -72,6 +79,11 @@ impl GroundcoverConfigFile {
             return Err(to_io_error("validate_config is a CLI-only option"));
         }
         let convert = file.convert;
+        let unclip = if is_empty_unclip_config(&file.unclip) {
+            PersistedUnclipConfig::generated_default()
+        } else {
+            file.unclip
+        };
 
         Ok(GroundcoverConfig {
             output_directory: resolved_output_directory(
@@ -87,11 +99,30 @@ impl GroundcoverConfigFile {
             validate_config: false,
             debug: convert.debug,
             auto_enable: convert.auto_enable,
+            unclip,
             include_set: RegexSet::empty(),
             exclude_set: RegexSet::empty(),
             ignored_plugin_set: RegexSet::empty(),
         })
     }
+}
+
+fn is_empty_unclip_config(config: &PersistedUnclipConfig) -> bool {
+    config.openmw_cfg.is_none()
+        && config.plugin.is_none()
+        && config.instances.is_none()
+        && config.structured.is_none()
+        && config.write.is_none()
+        && config.write_actions.is_none()
+        && config.contact_epsilon.is_none()
+        && config.origin_epsilon.is_none()
+        && config.relocation_step.is_none()
+        && config.relocation_steps.is_none()
+        && config.orientation_epsilon.is_none()
+        && config.include_grass_ids.is_none()
+        && config.exclude_grass_ids.is_none()
+        && config.include_occluder_ids.is_none()
+        && config.exclude_occluder_ids.is_none()
 }
 
 fn resolved_output_directory(

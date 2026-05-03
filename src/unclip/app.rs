@@ -5,8 +5,8 @@ use tes3::esp::{Landscape, Plugin};
 use crate::groundcover::{LOG_NAME, openmw};
 
 use super::{
-    UnclipArgs,
     args::UnclipPolicy,
+    config::UnclipConfig,
     inspection::{ReferenceInspectionContext, count_target_refs, inspect_target_refs},
     mesh::{MeshBoundsCache, MeshContactCache, StaticMeshIndex},
     model::{TerrainInspectionReport, UnclipReportContext, UnclipReportContextInput},
@@ -24,13 +24,13 @@ use super::{
     writer::save_plugin_with_backup,
 };
 
-pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
-    let policy = args
+pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
+    let policy = config
         .policy()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let openmw_config = openmw::load_config_from_path(args.openmw_cfg.as_deref())?;
+    let openmw_config = openmw::load_config_from_path(config.openmw_cfg.as_deref())?;
     let vfs = openmw::build_vfs(&openmw_config);
-    let target_plugin = resolve_target_plugin(&args.plugin, &openmw_config, &vfs)?;
+    let target_plugin = resolve_target_plugin(&config.plugin, &openmw_config, &vfs)?;
     let mut target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
     let content_files = openmw::content_files(&openmw_config)?;
     let context_plugin_paths = resolve_content_plugin_paths(&content_files, &vfs)?;
@@ -73,7 +73,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
             loaded_terrain_cells_total: terrain.len(),
             missing_active_terrain_cells,
             static_occluder_report,
-            write_requested: args.write,
+            write_requested: config.write,
         },
         &policy,
     );
@@ -90,7 +90,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     } else {
         Some(WritePlan::default())
     };
-    let write_status = if args.instances || !args.write {
+    let write_status = if config.instances || !config.write {
         write_plan.as_ref().map(WriteStatusIndex::from_plan)
     } else {
         None
@@ -108,16 +108,21 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         report: &report_context,
         policy: &policy,
     };
-    let inspection = write_output(&mut output_writer, args, &mut output, write_status.as_ref())?;
+    let inspection = write_output(
+        &mut output_writer,
+        config,
+        &mut output,
+        write_status.as_ref(),
+    )?;
     report_context.write = save_write_plan(
         &mut target_plugin_data,
         &target_plugin.source_path,
         &target_plugin.destination_path,
         write_plan,
-        args.write,
+        config.write,
         (!policy.write_actions.any_enabled()).then_some("all_write_actions_disabled"),
     )?;
-    write_output_footer(&mut output_writer, args, &report_context, &inspection)?;
+    write_output_footer(&mut output_writer, config, &report_context, &inspection)?;
 
     Ok(())
 }
@@ -187,11 +192,11 @@ struct OutputContext<'a, 'b> {
 
 fn write_output(
     stdout: &mut dyn Write,
-    args: &UnclipArgs,
+    config: &UnclipConfig,
     output: &mut OutputContext<'_, '_>,
     write_status: Option<&WriteStatusIndex>,
 ) -> io::Result<TerrainInspectionReport> {
-    match (args.structured, args.instances) {
+    match (config.structured, config.instances) {
         (false, false) => Ok(write_text_summary(
             output.plugin,
             output.terrain,
@@ -215,11 +220,11 @@ fn write_output(
 
 fn write_output_footer(
     stdout: &mut dyn Write,
-    args: &UnclipArgs,
+    config: &UnclipConfig,
     context: &UnclipReportContext,
     inspection: &TerrainInspectionReport,
 ) -> io::Result<()> {
-    match (args.structured, args.instances) {
+    match (config.structured, config.instances) {
         (false, false) => {
             report::write_summary_text(stdout, context, inspection, context.write_requested())
         }
@@ -315,8 +320,8 @@ mod tests {
     use std::io::Write;
 
     use crate::unclip::{
-        UnclipArgs,
         args::WriteActionArg,
+        config::UnclipConfig,
         model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
@@ -340,7 +345,7 @@ mod tests {
 
     #[test]
     fn structured_instance_footer_writes_changes_before_summary() {
-        let args = UnclipArgs {
+        let config = UnclipConfig {
             openmw_cfg: None,
             plugin: "plugin.omwaddon".into(),
             instances: true,
@@ -376,7 +381,7 @@ mod tests {
 
         write_output_footer(
             &mut output,
-            &args,
+            &config,
             &context,
             &TerrainInspectionReport::default(),
         )

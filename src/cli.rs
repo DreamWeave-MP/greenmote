@@ -107,17 +107,17 @@ mod tests {
 
         assert_eq!(
             args.plugin,
-            std::path::PathBuf::from("groundcover.omwaddon")
+            Some(std::path::PathBuf::from("groundcover.omwaddon"))
         );
         assert!(args.openmw_cfg.is_none());
-        assert!(!args.instances);
-        assert!(!args.structured);
-        assert!(!args.write);
-        assert_close(args.contact_epsilon, 0.5);
-        assert_close(args.origin_epsilon, 0.5);
-        assert_close(args.relocation_step, 32.0);
-        assert_eq!(args.relocation_steps, 8);
-        assert_close(args.orientation_epsilon, 1.0);
+        assert_eq!(args.instances, None);
+        assert_eq!(args.structured, None);
+        assert_eq!(args.write, None);
+        assert_eq!(args.contact_epsilon, None);
+        assert_eq!(args.origin_epsilon, None);
+        assert_eq!(args.relocation_step, None);
+        assert_eq!(args.relocation_steps, None);
+        assert_eq!(args.orientation_epsilon, None);
     }
 
     #[test]
@@ -192,6 +192,27 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_unclip_bool_false_overrides() {
+        let cli = Cli::parse_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--instances=false",
+            "--structured=false",
+            "--write=false",
+        ]);
+
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("unclip command should parse");
+        };
+
+        assert_eq!(args.instances, Some(false));
+        assert_eq!(args.structured, Some(false));
+        assert_eq!(args.write, Some(false));
+    }
+
+    #[test]
     fn unclip_policy_rejects_invalid_regex_filters() {
         for flag in ["--include-grass-id", "--exclude-occluder-id"] {
             let cli = Cli::parse_from([
@@ -243,7 +264,7 @@ mod tests {
             panic!("unclip command should parse");
         };
 
-        assert!(args.structured);
+        assert_eq!(args.structured, Some(true));
     }
 
     #[test]
@@ -260,7 +281,7 @@ mod tests {
             panic!("unclip command should parse");
         };
 
-        assert!(args.instances);
+        assert_eq!(args.instances, Some(true));
     }
 
     #[test]
@@ -277,7 +298,7 @@ mod tests {
             panic!("unclip command should parse");
         };
 
-        assert!(args.write);
+        assert_eq!(args.write, Some(true));
     }
 
     #[test]

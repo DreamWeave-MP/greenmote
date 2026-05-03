@@ -2,12 +2,14 @@ use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
 use regex::{Regex, RegexBuilder};
+use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 use super::model::{CONTACT_TERRAIN_EPSILON, ORIGIN_TERRAIN_EPSILON};
 
-const DEFAULT_RELOCATION_STEP: f32 = 32.0;
-const DEFAULT_RELOCATION_STEPS: u16 = 8;
-const DEFAULT_ORIENTATION_EPSILON_DEGREES: f32 = 1.0;
+pub(crate) const DEFAULT_RELOCATION_STEP: f32 = 32.0;
+pub(crate) const DEFAULT_RELOCATION_STEPS: u16 = 8;
+pub(crate) const DEFAULT_ORIENTATION_EPSILON_DEGREES: f32 = 1.0;
 
 #[derive(Parser, Clone, Debug)]
 #[command(
@@ -21,48 +23,43 @@ pub struct UnclipArgs {
 
     /// Groundcover plugin to inspect. May be a filesystem path or a VFS plugin name.
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
-    pub plugin: PathBuf,
+    pub plugin: Option<PathBuf>,
 
     /// Include per-reference instance diagnostics.
-    #[arg(long = "instances")]
-    pub instances: bool,
+    #[arg(long = "instances", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+    pub instances: Option<bool>,
 
     /// Emit machine-readable compact JSON. With --instances, emits newline-delimited JSON records.
-    #[arg(long = "structured")]
-    pub structured: bool,
+    #[arg(long = "structured", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+    pub structured: Option<bool>,
 
     /// Back up and replace the target plugin with planned unclipping changes.
-    #[arg(long = "write")]
-    pub write: bool,
+    #[arg(long = "write", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+    pub write: Option<bool>,
 
     /// Comma-separated write actions to plan when --write is set.
-    #[arg(
-        long = "write-actions",
-        value_enum,
-        value_delimiter = ',',
-        default_values_t = [WriteActionArg::TerrainZ, WriteActionArg::StaticDelete, WriteActionArg::StaticMove, WriteActionArg::Orient],
-    )]
+    #[arg(long = "write-actions", value_enum, value_delimiter = ',')]
     pub write_actions: Vec<WriteActionArg>,
 
     /// Maximum mesh contact/terrain Z delta treated as already on terrain.
-    #[arg(long = "contact-epsilon", default_value_t = CONTACT_TERRAIN_EPSILON, value_parser = non_negative_f32)]
-    pub contact_epsilon: f32,
+    #[arg(long = "contact-epsilon", value_parser = non_negative_f32)]
+    pub contact_epsilon: Option<f32>,
 
     /// Maximum reference origin/terrain Z delta treated as already on terrain.
-    #[arg(long = "origin-epsilon", default_value_t = ORIGIN_TERRAIN_EPSILON, value_parser = non_negative_f32)]
-    pub origin_epsilon: f32,
+    #[arg(long = "origin-epsilon", value_parser = non_negative_f32)]
+    pub origin_epsilon: Option<f32>,
 
     /// Horizontal distance between static-bounds relocation probes.
-    #[arg(long = "relocation-step", default_value_t = DEFAULT_RELOCATION_STEP, value_parser = positive_f32)]
-    pub relocation_step: f32,
+    #[arg(long = "relocation-step", value_parser = positive_f32)]
+    pub relocation_step: Option<f32>,
 
     /// Number of relocation probe rings to try for static-bounds moves.
-    #[arg(long = "relocation-steps", default_value_t = DEFAULT_RELOCATION_STEPS, value_parser = relocation_steps)]
-    pub relocation_steps: u16,
+    #[arg(long = "relocation-steps", value_parser = relocation_steps)]
+    pub relocation_steps: Option<u16>,
 
     /// Maximum tilt angle in degrees treated as already aligned to terrain.
-    #[arg(long = "orientation-epsilon", default_value_t = DEFAULT_ORIENTATION_EPSILON_DEGREES, value_parser = non_negative_f32)]
-    pub orientation_epsilon: f32,
+    #[arg(long = "orientation-epsilon", value_parser = non_negative_f32)]
+    pub orientation_epsilon: Option<f32>,
 
     /// Include only target grass refs whose full IDs match this case-insensitive regex. May be repeated.
     #[arg(long = "include-grass-id", value_name = "REGEX")]
@@ -81,7 +78,8 @@ pub struct UnclipArgs {
     pub exclude_occluder_ids: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
 pub enum WriteActionArg {
     All,
     None,
@@ -127,6 +125,48 @@ pub(crate) struct IdFilter {
 }
 
 impl UnclipArgs {
+    #[cfg(test)]
+    pub(crate) fn policy(&self) -> Result<UnclipPolicy, String> {
+        let plugin = self.plugin.as_ref().ok_or_else(|| {
+            "unclip requires --plugin or [unclip].plugin in greenmote.toml".to_owned()
+        })?;
+        let resolved = crate::unclip::config::UnclipConfig {
+            openmw_cfg: self.openmw_cfg.clone(),
+            plugin: plugin.clone(),
+            instances: self.instances.unwrap_or(false),
+            structured: self.structured.unwrap_or(false),
+            write: self.write.unwrap_or(false),
+            write_actions: if self.write_actions.is_empty() {
+                default_write_actions()
+            } else {
+                self.write_actions.clone()
+            },
+            contact_epsilon: self.contact_epsilon.unwrap_or(CONTACT_TERRAIN_EPSILON),
+            origin_epsilon: self.origin_epsilon.unwrap_or(ORIGIN_TERRAIN_EPSILON),
+            relocation_step: self.relocation_step.unwrap_or(DEFAULT_RELOCATION_STEP),
+            relocation_steps: self.relocation_steps.unwrap_or(DEFAULT_RELOCATION_STEPS),
+            orientation_epsilon: self
+                .orientation_epsilon
+                .unwrap_or(DEFAULT_ORIENTATION_EPSILON_DEGREES),
+            include_grass_ids: self.include_grass_ids.clone(),
+            exclude_grass_ids: self.exclude_grass_ids.clone(),
+            include_occluder_ids: self.include_occluder_ids.clone(),
+            exclude_occluder_ids: self.exclude_occluder_ids.clone(),
+        };
+        resolved.policy()
+    }
+}
+
+pub(crate) fn default_write_actions() -> Vec<WriteActionArg> {
+    vec![
+        WriteActionArg::TerrainZ,
+        WriteActionArg::StaticDelete,
+        WriteActionArg::StaticMove,
+        WriteActionArg::Orient,
+    ]
+}
+
+impl crate::unclip::config::UnclipConfig {
     pub(crate) fn policy(&self) -> Result<UnclipPolicy, String> {
         let write_actions = WriteActions::from_args(&self.write_actions)?;
         Ok(UnclipPolicy {

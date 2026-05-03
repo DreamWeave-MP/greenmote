@@ -32,6 +32,7 @@ pub(super) struct SettingsDraft {
     dry_run: bool,
     debug: bool,
     auto_enable: bool,
+    unclip: crate::unclip::config::PersistedUnclipConfig,
 }
 
 impl Default for SettingsUiState {
@@ -305,6 +306,7 @@ impl SettingsDraft {
             dry_run: run_options.dry_run,
             debug: run_options.debug,
             auto_enable: run_options.auto_enable,
+            unclip: config.unclip.clone(),
         }
     }
 
@@ -317,6 +319,7 @@ impl SettingsDraft {
         config.dry_run = self.dry_run;
         config.debug = self.debug;
         config.auto_enable = self.auto_enable;
+        config.unclip = self.unclip.clone();
         config
     }
 
