@@ -5,6 +5,7 @@ mod args;
 mod cells;
 mod mesh;
 mod occlusion;
+mod report;
 mod terrain;
 mod write_plan;
 mod writer;

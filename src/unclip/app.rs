@@ -13,10 +13,10 @@ use super::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
         static_bounds_occlusion_ratio, translate_bounds_xy,
     },
+    report,
     terrain::TerrainIndex,
     write_plan::{
         WriteAdjustment, WritePlan, WriteReport, WriteStaticBoundsDeletion, WriteStaticBoundsMove,
-        WriteSummary,
     },
     writer::save_plugin_with_backup,
 };
@@ -185,7 +185,7 @@ fn write_text_summary(
         mesh_contacts,
         static_occluders,
     );
-    write_summary_text(stdout, context, &inspection, true)
+    report::write_summary_text(stdout, context, &inspection, true)
 }
 
 fn write_instance_text(
@@ -197,24 +197,7 @@ fn write_instance_text(
     static_occluders: &StaticOccluderIndex,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
-    writeln!(stdout, "Unclip reference diagnostics")?;
-    writeln!(stdout, "Target plugin: {}", context.target_plugin)?;
-    if let Some(write) = &context.write
-        && (!write.adjustments.is_empty() || !write.deletions.is_empty() || !write.moves.is_empty())
-    {
-        writeln!(stdout)?;
-        writeln!(stdout, "Write changes")?;
-        for adjustment in &write.adjustments {
-            write_adjustment_text(stdout, adjustment)?;
-        }
-        for deletion in &write.deletions {
-            write_static_bounds_deletion_text(stdout, deletion)?;
-        }
-        for move_ in &write.moves {
-            write_static_bounds_move_text(stdout, move_)?;
-        }
-    }
-    writeln!(stdout)?;
+    report::write_instance_header(stdout, context)?;
     let inspection = inspect_target_refs(
         plugin,
         terrain,
@@ -222,10 +205,10 @@ fn write_instance_text(
         mesh_contacts,
         static_occluders,
         context.write.as_ref(),
-        |reference| write_reference_text(stdout, reference),
+        |reference| report::write_reference_text(stdout, reference),
     )?;
     writeln!(stdout)?;
-    write_summary_text(stdout, context, &inspection, false)
+    report::write_summary_text(stdout, context, &inspection, false)
 }
 
 fn write_structured_summary(
@@ -244,15 +227,7 @@ fn write_structured_summary(
         mesh_contacts,
         static_occluders,
     );
-    let report = StructuredSummaryReport {
-        kind: "greenmote_unclip_terrain_inspection",
-        target_plugin: &context.target_plugin,
-        write: context.write.as_ref(),
-        missing_active_terrain_cells: context.missing_active_terrain_cells(),
-        summary: context.summary(&inspection),
-    };
-    write_json(stdout, &report)?;
-    writeln!(stdout)
+    report::write_structured_summary(stdout, context, &inspection)
 }
 
 fn write_structured_instances(
@@ -264,43 +239,8 @@ fn write_structured_instances(
     static_occluders: &StaticOccluderIndex,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
-    let header_write = context.write.as_ref().map(WriteReport::summary);
-    let header = StructuredHeader {
-        r#type: "header",
-        kind: "greenmote_unclip_terrain_inspection",
-        target_plugin: &context.target_plugin,
-        write: header_write.as_ref(),
-        missing_active_terrain_cells: context.missing_active_terrain_cells(),
-    };
-    write_json(stdout, &header)?;
-    writeln!(stdout)?;
-
-    if let Some(write) = &context.write {
-        for adjustment in &write.adjustments {
-            let record = StructuredWriteAdjustmentRecord {
-                r#type: "write_adjustment",
-                adjustment,
-            };
-            write_json(stdout, &record)?;
-            writeln!(stdout)?;
-        }
-        for deletion in &write.deletions {
-            let record = StructuredWriteDeletionRecord {
-                r#type: "write_static_bounds_deletion",
-                deletion,
-            };
-            write_json(stdout, &record)?;
-            writeln!(stdout)?;
-        }
-        for move_ in &write.moves {
-            let record = StructuredWriteMoveRecord {
-                r#type: "write_static_bounds_move",
-                move_,
-            };
-            write_json(stdout, &record)?;
-            writeln!(stdout)?;
-        }
-    }
+    report::write_structured_header(stdout, context)?;
+    report::write_structured_write_records(stdout, context.write.as_ref())?;
 
     let inspection = inspect_target_refs(
         plugin,
@@ -309,308 +249,9 @@ fn write_structured_instances(
         mesh_contacts,
         static_occluders,
         context.write.as_ref(),
-        |reference| {
-            let record = StructuredReferenceRecord {
-                r#type: "ref",
-                reference,
-            };
-            write_json(stdout, &record)?;
-            writeln!(stdout)
-        },
+        |reference| report::write_structured_reference_record(stdout, reference),
     )?;
-
-    let summary = StructuredSummaryRecord {
-        r#type: "summary",
-        summary: context.summary(&inspection),
-    };
-    write_json(stdout, &summary)?;
-    writeln!(stdout)
-}
-
-fn write_json(stdout: &mut dyn Write, value: &impl Serialize) -> io::Result<()> {
-    serde_json::to_writer(stdout, value).map_err(|error| {
-        if let Some(kind) = error.io_error_kind() {
-            io::Error::new(kind, error)
-        } else {
-            io::Error::other(error.to_string())
-        }
-    })
-}
-
-fn write_summary_text(
-    stdout: &mut dyn Write,
-    context: &UnclipReportContext,
-    inspection: &TerrainInspectionReport,
-    include_adjustments: bool,
-) -> io::Result<()> {
-    let summary = context.summary(inspection);
-    writeln!(stdout, "Unclip inspection summary")?;
-    writeln!(stdout, "Target plugin: {}", context.target_plugin)?;
-    write_write_summary_text(stdout, context.write.as_ref(), include_adjustments)?;
-    writeln!(stdout)?;
-    write_terrain_summary_text(stdout, &summary)?;
-    writeln!(stdout)?;
-    write_reference_summary_text(stdout, &summary)?;
-    writeln!(stdout)?;
-    write_mesh_contact_summary_text(stdout, &summary)?;
-    writeln!(stdout)?;
-    write_static_bounds_summary_text(stdout, &summary)?;
-    writeln!(stdout)?;
-    write_threshold_summary_text(stdout, &summary)
-}
-
-fn write_write_summary_text(
-    stdout: &mut dyn Write,
-    write: Option<&WriteReport>,
-    include_adjustments: bool,
-) -> io::Result<()> {
-    if let Some(write) = write {
-        if write.written {
-            writeln!(stdout, "Written plugin: {}", write.destination_plugin)?;
-            if let Some(backup) = &write.backup_plugin {
-                writeln!(stdout, "Backup plugin: {backup}")?;
-            }
-        } else {
-            writeln!(
-                stdout,
-                "No plugin written: no refs changed at {}",
-                write.destination_plugin
-            )?;
-        }
-        writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
-        writeln!(stdout, "Deleted refs: {}", write.deleted_refs)?;
-        writeln!(stdout, "Moved refs: {}", write.moved_refs)?;
-        if include_adjustments {
-            for adjustment in &write.adjustments {
-                write_adjustment_text(stdout, adjustment)?;
-            }
-            for deletion in &write.deletions {
-                write_static_bounds_deletion_text(stdout, deletion)?;
-            }
-            for move_ in &write.moves {
-                write_static_bounds_move_text(stdout, move_)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn write_terrain_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary) -> io::Result<()> {
-    writeln!(stdout, "Terrain cells:")?;
-    writeln!(
-        stdout,
-        "  target exterior cells: {}",
-        summary.target_exterior_cells
-    )?;
-    writeln!(stdout, "  active 3x3 cells: {}", summary.active_cells)?;
-    writeln!(
-        stdout,
-        "  loaded terrain cells total: {}",
-        summary.loaded_terrain_cells_total
-    )?;
-    writeln!(
-        stdout,
-        "  active terrain cells loaded: {}",
-        summary.active_terrain_cells_loaded
-    )?;
-    writeln!(
-        stdout,
-        "  active terrain cells missing: {}",
-        summary.active_terrain_cells_missing
-    )
-}
-
-fn write_reference_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary) -> io::Result<()> {
-    writeln!(stdout, "References:")?;
-    writeln!(stdout, "  total: {}", summary.refs)?;
-    writeln!(stdout, "  inspected: {}", summary.refs_actionable)?;
-    writeln!(stdout, "  deleted/skipped: {}", summary.refs_deleted)?;
-    writeln!(
-        stdout,
-        "  with origin terrain: {}",
-        summary.refs_with_terrain
-    )?;
-    writeln!(
-        stdout,
-        "  missing origin terrain: {}",
-        summary.refs_missing_terrain
-    )?;
-    writeln!(
-        stdout,
-        "  origin above terrain: {}",
-        summary.refs_origin_above_terrain
-    )?;
-    writeln!(
-        stdout,
-        "  origin below terrain: {}",
-        summary.refs_origin_below_terrain
-    )
-}
-
-fn write_mesh_contact_summary_text(
-    stdout: &mut dyn Write,
-    summary: &UnclipSummary,
-) -> io::Result<()> {
-    writeln!(stdout, "Mesh contacts:")?;
-    writeln!(stdout, "  resolved: {}", summary.refs_with_mesh_contact)?;
-    writeln!(
-        stdout,
-        "  unresolved static: {}",
-        summary.refs_without_resolved_static
-    )?;
-    writeln!(
-        stdout,
-        "  missing contact: {}",
-        summary.refs_missing_mesh_contact
-    )?;
-    writeln!(
-        stdout,
-        "  contact above terrain: {}",
-        summary.refs_mesh_contact_above_terrain
-    )?;
-    writeln!(
-        stdout,
-        "  contact below terrain: {}",
-        summary.refs_mesh_contact_below_terrain
-    )?;
-    writeln!(
-        stdout,
-        "  contact missing terrain: {}",
-        summary.refs_mesh_contact_missing_terrain
-    )
-}
-
-fn write_threshold_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary) -> io::Result<()> {
-    writeln!(stdout, "Thresholds:")?;
-    writeln!(
-        stdout,
-        "  origin terrain epsilon: {:.3}",
-        summary.origin_terrain_epsilon
-    )?;
-    writeln!(
-        stdout,
-        "  mesh contact terrain epsilon: {:.3}",
-        summary.mesh_contact_terrain_epsilon
-    )
-}
-
-fn write_static_bounds_summary_text(
-    stdout: &mut dyn Write,
-    summary: &UnclipSummary,
-) -> io::Result<()> {
-    writeln!(stdout, "Static bounds occlusion:")?;
-    writeln!(
-        stdout,
-        "  occluded: {}",
-        summary.refs_static_bounds_occluded
-    )?;
-    writeln!(
-        stdout,
-        "  fully occluded: {}",
-        summary.refs_static_bounds_fully_occluded
-    )?;
-    writeln!(
-        stdout,
-        "  relocatable: {}",
-        summary.refs_static_bounds_lightly_occluded
-    )?;
-    writeln!(stdout, "  blocked: {}", summary.refs_static_bounds_blocked)
-}
-
-fn write_reference_text(stdout: &mut dyn Write, reference: &ReferenceInspection) -> io::Result<()> {
-    writeln!(
-        stdout,
-        "CELL {:?} REF {:?} {}",
-        reference.cell, reference.reference_key, reference.id
-    )?;
-    writeln!(stdout, "  static: {}", reference.static_resolution)?;
-    writeln!(stdout, "  deleted: {}", reference.deleted)?;
-    writeln!(stdout, "  write status: {}", reference.write_status)?;
-    if let Some(static_mesh) = &reference.static_mesh {
-        writeln!(stdout, "  static id: {}", static_mesh.id)?;
-        writeln!(stdout, "  mesh: {}", static_mesh.mesh)?;
-    }
-    if let Some(error) = &reference.mesh_contact_error {
-        writeln!(stdout, "  mesh contact error: {error}")?;
-    }
-    writeln!(stdout, "  mesh contact: {}", reference.mesh_contact_status)?;
-    writeln!(
-        stdout,
-        "  origin: position={:?} terrain_z={} delta={} classification={}",
-        reference.origin.position,
-        optional_f32(reference.origin.terrain_z),
-        optional_f32(reference.origin.delta),
-        reference.origin.classification
-    )?;
-    if let Some(contact) = &reference.mesh_contact {
-        writeln!(
-            stdout,
-            "  contact: position={:?} terrain_z={} delta={} classification={}",
-            contact.position,
-            optional_f32(contact.terrain_z),
-            optional_f32(contact.delta),
-            contact.classification
-        )?;
-    }
-    if let Some(occlusion) = &reference.static_bounds_occlusion {
-        writeln!(
-            stdout,
-            "  static bounds occlusion: status={} ratio={:.3}",
-            occlusion.status, occlusion.ratio
-        )?;
-    }
-    Ok(())
-}
-
-fn write_adjustment_text(stdout: &mut dyn Write, adjustment: &WriteAdjustment) -> io::Result<()> {
-    writeln!(
-        stdout,
-        "WRITE CELL {:?} REF {:?} {} old_z={:.3} new_z={:.3} applied_delta={:.3} contact={:?} terrain_z={:.3}",
-        adjustment.cell,
-        adjustment.reference_key,
-        adjustment.id,
-        adjustment.old_z,
-        adjustment.new_z,
-        adjustment.applied_delta,
-        adjustment.contact_position,
-        adjustment.terrain_z
-    )
-}
-
-fn write_static_bounds_deletion_text(
-    stdout: &mut dyn Write,
-    deletion: &WriteStaticBoundsDeletion,
-) -> io::Result<()> {
-    writeln!(
-        stdout,
-        "DELETE_STATIC_BOUNDS CELL {:?} REF {:?} {} ratio={:.3} occluder={} occluder_cell={:?} occluder_ref={:?}",
-        deletion.cell,
-        deletion.reference_key,
-        deletion.id,
-        deletion.occlusion_ratio,
-        deletion.occluder_id,
-        deletion.occluder_cell,
-        deletion.occluder_reference_key
-    )
-}
-
-fn write_static_bounds_move_text(
-    stdout: &mut dyn Write,
-    move_: &WriteStaticBoundsMove,
-) -> io::Result<()> {
-    writeln!(
-        stdout,
-        "MOVE_STATIC_BOUNDS CELL {:?} REF {:?} {} ratio={:.3} old_position={:?} new_position={:?} occluder={} occluder_cell={:?} occluder_ref={:?}",
-        move_.cell,
-        move_.reference_key,
-        move_.id,
-        move_.occlusion_ratio,
-        move_.old_position,
-        move_.new_position,
-        move_.occluder_id,
-        move_.occluder_cell,
-        move_.occluder_reference_key
-    )
+    report::write_structured_summary_record(stdout, context, &inspection)
 }
 
 fn resolve_content_plugin_paths(
@@ -1124,67 +765,13 @@ fn effective_active_refs(
     refs
 }
 
-#[derive(Serialize)]
-struct StructuredSummaryReport<'a> {
-    kind: &'static str,
-    target_plugin: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    write: Option<&'a WriteReport>,
-    missing_active_terrain_cells: Vec<[i32; 2]>,
-    summary: UnclipSummary,
-}
-
-#[derive(Serialize)]
-struct StructuredHeader<'a> {
-    r#type: &'static str,
-    kind: &'static str,
-    target_plugin: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    write: Option<&'a WriteSummary>,
-    missing_active_terrain_cells: Vec<[i32; 2]>,
-}
-
-#[derive(Serialize)]
-struct StructuredSummaryRecord {
-    r#type: &'static str,
-    summary: UnclipSummary,
-}
-
-#[derive(Serialize)]
-struct StructuredReferenceRecord<'a> {
-    r#type: &'static str,
-    #[serde(flatten)]
-    reference: &'a ReferenceInspection,
-}
-
-#[derive(Serialize)]
-struct StructuredWriteAdjustmentRecord<'a> {
-    r#type: &'static str,
-    #[serde(flatten)]
-    adjustment: &'a WriteAdjustment,
-}
-
-#[derive(Serialize)]
-struct StructuredWriteDeletionRecord<'a> {
-    r#type: &'static str,
-    #[serde(flatten)]
-    deletion: &'a WriteStaticBoundsDeletion,
-}
-
-#[derive(Serialize)]
-struct StructuredWriteMoveRecord<'a> {
-    r#type: &'static str,
-    #[serde(flatten)]
-    move_: &'a WriteStaticBoundsMove,
-}
-
-struct UnclipReportContext {
-    target_plugin: String,
+pub(crate) struct UnclipReportContext {
+    pub(crate) target_plugin: String,
     target_exterior_cells: usize,
     active_cells: usize,
     loaded_terrain_cells_total: usize,
     missing_active_terrain_cells: Vec<CellCoord>,
-    write: Option<WriteReport>,
+    pub(crate) write: Option<WriteReport>,
 }
 
 impl UnclipReportContext {
@@ -1205,14 +792,14 @@ impl UnclipReportContext {
         }
     }
 
-    fn missing_active_terrain_cells(&self) -> Vec<[i32; 2]> {
+    pub(crate) fn missing_active_terrain_cells(&self) -> Vec<[i32; 2]> {
         self.missing_active_terrain_cells
             .iter()
             .map(|&(x, y)| [x, y])
             .collect()
     }
 
-    fn summary(&self, inspection: &TerrainInspectionReport) -> UnclipSummary {
+    pub(crate) fn summary(&self, inspection: &TerrainInspectionReport) -> UnclipSummary {
         let active_terrain_cells_missing = self.missing_active_terrain_cells.len();
         UnclipSummary {
             target_exterior_cells: self.target_exterior_cells,
@@ -1243,84 +830,98 @@ impl UnclipReportContext {
     }
 }
 
-#[derive(Serialize)]
-struct UnclipSummary {
-    target_exterior_cells: usize,
-    active_cells: usize,
-    loaded_terrain_cells_total: usize,
-    active_terrain_cells_loaded: usize,
-    active_terrain_cells_missing: usize,
-    refs: usize,
-    refs_actionable: usize,
-    refs_deleted: usize,
-    refs_with_mesh_contact: usize,
-    refs_without_resolved_static: usize,
-    refs_missing_mesh_contact: usize,
-    refs_with_terrain: usize,
-    refs_missing_terrain: usize,
-    refs_origin_above_terrain: usize,
-    refs_origin_below_terrain: usize,
-    refs_mesh_contact_above_terrain: usize,
-    refs_mesh_contact_below_terrain: usize,
-    refs_mesh_contact_missing_terrain: usize,
-    refs_static_bounds_occluded: usize,
-    refs_static_bounds_fully_occluded: usize,
-    refs_static_bounds_lightly_occluded: usize,
-    refs_static_bounds_blocked: usize,
-    origin_terrain_epsilon: f32,
-    mesh_contact_terrain_epsilon: f32,
+#[cfg(test)]
+impl UnclipReportContext {
+    pub(crate) fn new_for_test(target_plugin: &str) -> Self {
+        Self {
+            target_plugin: target_plugin.to_owned(),
+            target_exterior_cells: 0,
+            active_cells: 0,
+            loaded_terrain_cells_total: 0,
+            missing_active_terrain_cells: Vec::new(),
+            write: None,
+        }
+    }
 }
 
 #[derive(Serialize)]
-struct ReferenceInspection {
-    cell: [i32; 2],
-    reference_key: [u32; 2],
-    id: String,
-    static_resolution: &'static str,
-    mesh_contact_status: &'static str,
-    deleted: bool,
-    write_status: &'static str,
-    origin: OriginInspection,
+pub(crate) struct UnclipSummary {
+    pub(crate) target_exterior_cells: usize,
+    pub(crate) active_cells: usize,
+    pub(crate) loaded_terrain_cells_total: usize,
+    pub(crate) active_terrain_cells_loaded: usize,
+    pub(crate) active_terrain_cells_missing: usize,
+    pub(crate) refs: usize,
+    pub(crate) refs_actionable: usize,
+    pub(crate) refs_deleted: usize,
+    pub(crate) refs_with_mesh_contact: usize,
+    pub(crate) refs_without_resolved_static: usize,
+    pub(crate) refs_missing_mesh_contact: usize,
+    pub(crate) refs_with_terrain: usize,
+    pub(crate) refs_missing_terrain: usize,
+    pub(crate) refs_origin_above_terrain: usize,
+    pub(crate) refs_origin_below_terrain: usize,
+    pub(crate) refs_mesh_contact_above_terrain: usize,
+    pub(crate) refs_mesh_contact_below_terrain: usize,
+    pub(crate) refs_mesh_contact_missing_terrain: usize,
+    pub(crate) refs_static_bounds_occluded: usize,
+    pub(crate) refs_static_bounds_fully_occluded: usize,
+    pub(crate) refs_static_bounds_lightly_occluded: usize,
+    pub(crate) refs_static_bounds_blocked: usize,
+    pub(crate) origin_terrain_epsilon: f32,
+    pub(crate) mesh_contact_terrain_epsilon: f32,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ReferenceInspection {
+    pub(crate) cell: [i32; 2],
+    pub(crate) reference_key: [u32; 2],
+    pub(crate) id: String,
+    pub(crate) static_resolution: &'static str,
+    pub(crate) mesh_contact_status: &'static str,
+    pub(crate) deleted: bool,
+    pub(crate) write_status: &'static str,
+    pub(crate) origin: OriginInspection,
     #[serde(skip_serializing_if = "Option::is_none")]
-    static_mesh: Option<StaticMeshInspection>,
+    pub(crate) static_mesh: Option<StaticMeshInspection>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    mesh_contact_error: Option<String>,
+    pub(crate) mesh_contact_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    mesh_contact: Option<MeshContactInspection>,
+    pub(crate) mesh_contact: Option<MeshContactInspection>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    static_bounds_occlusion: Option<StaticBoundsOcclusionInspection>,
+    pub(crate) static_bounds_occlusion: Option<StaticBoundsOcclusionInspection>,
 }
 
 #[derive(Serialize)]
-struct OriginInspection {
-    position: [f32; 3],
-    terrain_z: Option<f32>,
-    delta: Option<f32>,
-    classification: &'static str,
+pub(crate) struct OriginInspection {
+    pub(crate) position: [f32; 3],
+    pub(crate) terrain_z: Option<f32>,
+    pub(crate) delta: Option<f32>,
+    pub(crate) classification: &'static str,
 }
 
 #[derive(Serialize)]
-struct StaticMeshInspection {
-    id: String,
-    mesh: String,
+pub(crate) struct StaticMeshInspection {
+    pub(crate) id: String,
+    pub(crate) mesh: String,
 }
 
 #[derive(Serialize)]
-struct MeshContactInspection {
-    position: [f32; 3],
-    terrain_z: Option<f32>,
-    delta: Option<f32>,
-    classification: &'static str,
+pub(crate) struct MeshContactInspection {
+    pub(crate) position: [f32; 3],
+    pub(crate) terrain_z: Option<f32>,
+    pub(crate) delta: Option<f32>,
+    pub(crate) classification: &'static str,
 }
 
 #[derive(Serialize)]
-struct StaticBoundsOcclusionInspection {
-    status: &'static str,
-    ratio: f32,
+pub(crate) struct StaticBoundsOcclusionInspection {
+    pub(crate) status: &'static str,
+    pub(crate) ratio: f32,
 }
 
 #[derive(Default)]
-struct TerrainInspectionReport {
+pub(crate) struct TerrainInspectionReport {
     refs: usize,
     refs_deleted: usize,
     refs_with_mesh_contact: usize,
@@ -1901,10 +1502,6 @@ fn resolve_ref_mesh_contact<'a>(
     }
 }
 
-fn optional_f32(value: Option<f32>) -> String {
-    value.map_or_else(|| "missing".to_owned(), |value| format!("{value:.3}"))
-}
-
 #[derive(Clone, Copy)]
 enum OriginTerrainClassification {
     Above,
@@ -1961,15 +1558,14 @@ fn classify_contact_delta(delta: f32) -> ContactTerrainClassification {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, path::Path};
+    use std::collections::BTreeSet;
 
     use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
     use super::{
         MeshContactResolution, apply_contact_adjustment, deleted_reference_inspection,
-        effective_active_refs, write_status_label, write_write_summary_text,
+        effective_active_refs, write_status_label,
     };
-    use crate::unclip::write_plan::{WriteAdjustment, WritePlan, WriteReport};
 
     #[test]
     fn contact_adjustment_moves_buried_contact_up() {
@@ -2005,28 +1601,6 @@ mod tests {
 
         assert!(adjustment.is_none());
         assert_close(reference.translation[2], 10.0);
-    }
-
-    #[test]
-    fn write_summary_prints_adjustments_only_when_requested() {
-        let report = WriteReport::not_written(
-            Path::new("plugin.omwaddon"),
-            WritePlan {
-                adjusted_refs: 1,
-                adjustments: vec![write_adjustment()],
-                ..WritePlan::default()
-            },
-        );
-        let mut with_adjustments = Vec::new();
-        let mut without_adjustments = Vec::new();
-
-        write_write_summary_text(&mut with_adjustments, Some(&report), true).unwrap();
-        write_write_summary_text(&mut without_adjustments, Some(&report), false).unwrap();
-
-        let with_adjustments = String::from_utf8(with_adjustments).unwrap();
-        let without_adjustments = String::from_utf8(without_adjustments).unwrap();
-        assert!(with_adjustments.contains("WRITE CELL"));
-        assert!(!without_adjustments.contains("WRITE CELL"));
     }
 
     #[test]
@@ -2105,19 +1679,6 @@ mod tests {
             id: "grass".to_owned(),
             translation: [0.0, 0.0, z],
             ..Reference::default()
-        }
-    }
-
-    fn write_adjustment() -> WriteAdjustment {
-        WriteAdjustment {
-            cell: [1, 2],
-            reference_key: [3, 4],
-            id: "grass".to_owned(),
-            old_z: 10.0,
-            new_z: 12.0,
-            applied_delta: 2.0,
-            contact_position: [0.0, 0.0, 7.0],
-            terrain_z: 9.0,
         }
     }
 
