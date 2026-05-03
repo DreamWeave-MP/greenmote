@@ -43,11 +43,10 @@ impl StaticOccluderIndex {
             .collect()
     }
 
-    pub(crate) fn bounds_for(&self, bounds: WorldAabb) -> Vec<WorldAabb> {
+    pub(crate) fn intersects_volume(&self, bounds: WorldAabb) -> bool {
         self.candidates_for(bounds)
             .into_iter()
-            .map(|occluder| occluder.bounds)
-            .collect()
+            .any(|occluder| bounds.intersection(occluder.bounds).is_some())
     }
 }
 
@@ -299,6 +298,17 @@ mod tests {
                 .candidates_for(aabb([8192.0, 0.0, 0.0], [8202.0, 10.0, 10.0]))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn static_occluder_index_reports_3d_intersection() {
+        let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
+            [0.0, 0.0, 0.0],
+            [10.0, 10.0, 10.0],
+        ))]);
+
+        assert!(occluders.intersects_volume(aabb([5.0, 5.0, 5.0], [15.0, 15.0, 15.0],)));
+        assert!(!occluders.intersects_volume(aabb([5.0, 5.0, 10.0], [15.0, 15.0, 20.0],)));
     }
 
     fn aabb(min: [f32; 3], max: [f32; 3]) -> WorldAabb {

@@ -8,7 +8,7 @@ use super::{
     model::CONTACT_TERRAIN_EPSILON,
     occlusion::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
-        static_bounds_occlusion_ratio, translate_bounds_xy,
+        translate_bounds_xy,
     },
     terrain::TerrainIndex,
     write_plan::{WriteAdjustment, WritePlan, WriteStaticBoundsDeletion, WriteStaticBoundsMove},
@@ -341,11 +341,7 @@ pub(crate) fn find_valid_relocation_transform(
                 candidate_xy[0] - original[0],
                 candidate_xy[1] - original[1],
             );
-            if static_bounds_occlusion_ratio(
-                moved_bounds,
-                &static_occluders.bounds_for(moved_bounds),
-            ) > f32::EPSILON
-            {
+            if static_occluders.intersects_volume(moved_bounds) {
                 continue;
             }
 
@@ -356,11 +352,7 @@ pub(crate) fn find_valid_relocation_transform(
             let terrain_z = terrain.height_at(contact_position[0], contact_position[1])?;
             candidate_translation[2] -= contact_position[2] - terrain_z;
             let final_bounds = bounds.world_aabb(candidate_translation, rotation, scale);
-            if static_bounds_occlusion_ratio(
-                final_bounds,
-                &static_occluders.bounds_for(final_bounds),
-            ) <= f32::EPSILON
-            {
+            if !static_occluders.intersects_volume(final_bounds) {
                 return Some(candidate_translation);
             }
         }
