@@ -328,7 +328,7 @@ fn strip_meshes_prefix(mesh_path: &str) -> &str {
 fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
     let accumulated = collect_mesh(stream, true)?;
     let mut vertices = accumulated.vertices.unwrap_or_default();
-    sort_dedup_vertices(&mut vertices);
+    dedup_vertices_preserving_order(&mut vertices);
 
     Some(MeshGeometry {
         contact: MeshContact {
@@ -341,7 +341,7 @@ fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
     })
 }
 
-fn sort_dedup_vertices(vertices: &mut Vec<Vec3>) {
+fn dedup_vertices_preserving_order(vertices: &mut Vec<Vec3>) {
     let mut seen = HashSet::new();
     vertices.retain(|vertex| {
         let key = [vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()];
@@ -505,7 +505,7 @@ mod tests {
             Vec3::new(1.0, 2.0, 3.0),
         ];
 
-        sort_dedup_vertices(&mut vertices);
+        dedup_vertices_preserving_order(&mut vertices);
 
         assert_eq!(
             vertices,
