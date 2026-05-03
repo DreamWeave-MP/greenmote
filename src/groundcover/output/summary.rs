@@ -1,7 +1,8 @@
 use std::io::{self, Write};
 
 use crate::groundcover::{
-    DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME, GroundcoverConfig, mesh, plan::ConversionPlan,
+    DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME, GroundcoverConfig, mesh,
+    plan::{ConversionPlan, PluginCellPlan, StaticPlan},
 };
 
 #[derive(Debug)]
@@ -58,7 +59,9 @@ pub fn write_summary(
         writeln!(writer, "SKIP generated plugin {plugin:?}")?;
     }
 
-    for static_plan in plan.used_static_plans() {
+    let mut used_static_plans = plan.used_static_plans();
+    used_static_plans.sort_by(|left, right| compare_static_report_order(left, right));
+    for static_plan in used_static_plans {
         let output_static = static_plan.output_static()?;
         writeln!(
             writer,
@@ -71,7 +74,13 @@ pub fn write_summary(
         )?;
     }
 
-    for cell_plan in plan.cell_plans.iter().filter(|plan| plan.is_used()) {
+    let mut used_cell_plans = plan
+        .cell_plans
+        .iter()
+        .filter(|cell_plan| cell_plan.is_used())
+        .collect::<Vec<_>>();
+    used_cell_plans.sort_by(|left, right| compare_cell_report_order(left, right));
+    for cell_plan in used_cell_plans {
         writeln!(
             writer,
             "CELL refs from {:?}: {} refs in {} exterior cells",
@@ -91,4 +100,16 @@ pub fn write_summary(
     }
 
     Ok(())
+}
+
+fn compare_static_report_order(left: &StaticPlan, right: &StaticPlan) -> std::cmp::Ordering {
+    left.source_load_index
+        .cmp(&right.source_load_index)
+        .then_with(|| left.source_static.id.cmp(&right.source_static.id))
+}
+
+fn compare_cell_report_order(left: &PluginCellPlan, right: &PluginCellPlan) -> std::cmp::Ordering {
+    left.load_index
+        .cmp(&right.load_index)
+        .then_with(|| left.plugin_name.cmp(&right.plugin_name))
 }

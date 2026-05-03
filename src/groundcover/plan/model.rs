@@ -110,7 +110,6 @@ pub struct PluginCellPlan {
     pub source_master: MasterSpec,
     pub header_masters: Vec<MasterSpec>,
     pub groundcover_cells: Vec<Cell>,
-    pub deleted_cells: Vec<Cell>,
     pub touched_refs: usize,
     pub used_static_ids: BTreeSet<String>,
 }

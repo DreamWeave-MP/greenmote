@@ -29,7 +29,7 @@ pub fn deleted_master_indices(plan: &ConversionPlan) -> BTreeMap<MasterSpec, u32
         .iter()
         .filter(|cell_plan| cell_plan.is_used())
     {
-        for cell in &cell_plan.deleted_cells {
+        for cell in &cell_plan.groundcover_cells {
             masters.insert_cell_reference_masters(cell, cell_plan);
         }
     }

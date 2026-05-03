@@ -32,7 +32,7 @@ pub fn scan_cells_parallel<S: BuildHasher + Sync>(
                 return Err(cancelled_error());
             }
 
-            let (groundcover_cells, deleted_cells, touched_refs, used_static_ids) =
+            let (groundcover_cells, touched_refs, used_static_ids) =
                 records::process_exterior_cells(&loaded.plugin, matched_static_ids);
 
             let cell_plan = PluginCellPlan {
@@ -42,7 +42,6 @@ pub fn scan_cells_parallel<S: BuildHasher + Sync>(
                 source_master: loaded.source_master(),
                 header_masters: loaded.header_masters(),
                 groundcover_cells,
-                deleted_cells,
                 touched_refs,
                 used_static_ids,
             };

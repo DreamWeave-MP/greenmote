@@ -53,17 +53,18 @@ pub fn build_plugins(plan: &ConversionPlan) -> io::Result<BuiltPlugins> {
                 .into(),
             );
         }
-        for cell in &cell_plan.deleted_cells {
-            deleted_plugin.objects.push(
-                remap::remap_cell(
-                    cell,
-                    cell_plan,
-                    &deleted_master_indices,
-                    RefIdMode::Source,
-                    &generated_static_ids,
-                )?
-                .into(),
-            );
+        for cell in &cell_plan.groundcover_cells {
+            let mut deleted_cell = remap::remap_cell(
+                cell,
+                cell_plan,
+                &deleted_master_indices,
+                RefIdMode::Source,
+                &generated_static_ids,
+            )?;
+            for reference in deleted_cell.references.values_mut() {
+                reference.deleted = Some(true);
+            }
+            deleted_plugin.objects.push(deleted_cell.into());
         }
     }
 

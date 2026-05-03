@@ -81,7 +81,6 @@ fn source_index_zero_resolves_to_source_plugin() {
         source_master: master("Bloodmoon.esm", 2),
         header_masters: vec![master("Morrowind.esm", 1)],
         groundcover_cells: Vec::new(),
-        deleted_cells: Vec::new(),
         touched_refs: 0,
         used_static_ids: BTreeSet::new(),
     };
@@ -100,7 +99,6 @@ fn header_master_index_resolves_to_exact_owner() {
         source_master: master("Patch.esp", 3),
         header_masters: vec![master("Morrowind.esm", 1), master("Tribunal.esm", 2)],
         groundcover_cells: Vec::new(),
-        deleted_cells: Vec::new(),
         touched_refs: 0,
         used_static_ids: BTreeSet::new(),
     };
@@ -214,12 +212,10 @@ fn exterior_matching_refs_are_copied_and_deleted() {
         BTreeSet::from(["flora_grass_01".to_owned()])
     );
     assert_eq!(plan.cell_plans[0].groundcover_cells.len(), 1);
-    assert_eq!(plan.cell_plans[0].deleted_cells.len(), 1);
-    let deleted_ref = plan.cell_plans[0].deleted_cells[0]
-        .references
-        .get(&(0, 1))
-        .unwrap();
-    assert_eq!(deleted_ref.deleted, Some(true));
+    assert_eq!(
+        plan.cell_plans[0].groundcover_cells[0].references[&(0, 1)].deleted,
+        None
+    );
 }
 
 #[test]
@@ -241,5 +237,4 @@ fn interior_matching_refs_are_ignored() {
     assert_eq!(plan.static_plans.len(), 1);
     assert_eq!(plan.cell_plans[0].touched_refs, 0);
     assert!(plan.cell_plans[0].groundcover_cells.is_empty());
-    assert!(plan.cell_plans[0].deleted_cells.is_empty());
 }

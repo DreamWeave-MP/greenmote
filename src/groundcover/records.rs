@@ -3,15 +3,14 @@ use std::{
     hash::BuildHasher,
 };
 
-use tes3::esp::{Cell, Plugin, Reference};
+use tes3::esp::{Cell, Plugin};
 
 #[must_use]
 pub fn process_exterior_cells<S: BuildHasher>(
     plugin: &Plugin,
     matched_static_ids: &HashSet<String, S>,
-) -> (Vec<Cell>, Vec<Cell>, usize, BTreeSet<String>) {
+) -> (Vec<Cell>, usize, BTreeSet<String>) {
     let mut groundcover_cells = Vec::new();
-    let mut deleted_cells = Vec::new();
     let mut touched_refs = 0;
     let mut used_static_ids = BTreeSet::new();
 
@@ -20,7 +19,6 @@ pub fn process_exterior_cells<S: BuildHasher>(
         .filter(|cell| cell.is_exterior())
     {
         let mut groundcover_cell = None;
-        let mut deleted_cell = None;
 
         for (key, reference) in &cell.references {
             let static_id = reference.id.to_ascii_lowercase();
@@ -30,30 +28,18 @@ pub fn process_exterior_cells<S: BuildHasher>(
 
             let groundcover_cell = groundcover_cell
                 .get_or_insert_with(|| minimal_cell_shell(cell, cell.references.len()));
-            let deleted_cell =
-                deleted_cell.get_or_insert_with(|| minimal_cell_shell(cell, cell.references.len()));
 
             used_static_ids.insert(static_id);
             groundcover_cell.references.insert(*key, reference.clone());
-
-            let mut deleted_reference = reference.clone();
-            mark_reference_deleted(&mut deleted_reference);
-            deleted_cell.references.insert(*key, deleted_reference);
             touched_refs += 1;
         }
 
-        if let (Some(groundcover_cell), Some(deleted_cell)) = (groundcover_cell, deleted_cell) {
+        if let Some(groundcover_cell) = groundcover_cell {
             groundcover_cells.push(groundcover_cell);
-            deleted_cells.push(deleted_cell);
         }
     }
 
-    (
-        groundcover_cells,
-        deleted_cells,
-        touched_refs,
-        used_static_ids,
-    )
+    (groundcover_cells, touched_refs, used_static_ids)
 }
 
 fn minimal_cell_shell(source: &Cell, reference_capacity: usize) -> Cell {
@@ -71,15 +57,11 @@ fn minimal_cell_shell(source: &Cell, reference_capacity: usize) -> Cell {
     cell
 }
 
-fn mark_reference_deleted(reference: &mut Reference) {
-    reference.deleted = Some(true);
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use tes3::esp::{CellData, CellFlags};
+    use tes3::esp::{CellData, CellFlags, Reference};
 
     use super::*;
 
@@ -130,7 +112,7 @@ mod tests {
         };
         let matched_static_ids = HashSet::from(["flora_grass_01".to_owned()]);
 
-        let (groundcover_cells, deleted_cells, touched_refs, used_static_ids) =
+        let (groundcover_cells, touched_refs, used_static_ids) =
             process_exterior_cells(&plugin, &matched_static_ids);
 
         assert_eq!(touched_refs, 1);
@@ -143,7 +125,6 @@ mod tests {
         assert_eq!(groundcover_cells[0].data.grid, (3, -4));
         assert!(groundcover_cells[0].references.contains_key(&(0, 1)));
         assert!(!groundcover_cells[0].references.contains_key(&(0, 2)));
-        assert_eq!(deleted_cells[0].references[&(0, 1)].deleted, Some(true));
     }
 
     #[test]
@@ -153,13 +134,12 @@ mod tests {
         };
         let matched_static_ids = HashSet::from(["flora_grass_01".to_owned()]);
 
-        let (groundcover_cells, deleted_cells, touched_refs, used_static_ids) =
+        let (groundcover_cells, touched_refs, used_static_ids) =
             process_exterior_cells(&plugin, &matched_static_ids);
 
         assert_eq!(touched_refs, 0);
         assert!(used_static_ids.is_empty());
         assert!(groundcover_cells.is_empty());
-        assert!(deleted_cells.is_empty());
     }
 
     #[test]
@@ -169,7 +149,7 @@ mod tests {
         };
         let matched_static_ids = HashSet::from(["flora_grass_01".to_owned()]);
 
-        let (groundcover_cells, _, touched_refs, used_static_ids) =
+        let (groundcover_cells, touched_refs, used_static_ids) =
             process_exterior_cells(&plugin, &matched_static_ids);
 
         assert_eq!(touched_refs, 1);

@@ -5,7 +5,10 @@ use std::{
 
 use tes3::esp::{Cell, Reference, Static};
 
-use crate::groundcover::plan::{ConversionPlan, MasterSpec, PluginCellPlan, StaticPlan};
+use crate::groundcover::{
+    GroundcoverConfig,
+    plan::{ConversionPlan, MasterSpec, PluginCellPlan, StaticPlan},
+};
 
 use super::*;
 
@@ -58,8 +61,7 @@ fn cell_plan(
         plugin_path: PathBuf::from(&source_master.name),
         source_master,
         header_masters,
-        groundcover_cells: vec![groundcover_cell.clone()],
-        deleted_cells: vec![groundcover_cell],
+        groundcover_cells: vec![groundcover_cell],
         touched_refs: 1,
         used_static_ids: BTreeSet::from([used_static_id.to_owned()]),
     }
@@ -280,6 +282,103 @@ fn unused_static_only_source_plugins_do_not_emit_records_or_become_masters() {
     assert!(built.groundcover_plugin.objects.is_empty());
     assert!(built.groundcover_header.masters.is_empty());
     assert!(built.deleted_header.masters.is_empty());
+}
+
+#[test]
+fn summary_lists_statics_and_cells_in_source_load_order() {
+    let morrowind_master = master("Morrowind.esm", 79_837_557);
+    let tribunal_master = master("Tribunal.esm", 4_568_965);
+    let bloodmoon_master = master("Bloodmoon.esm", 9_631_798);
+    let plan = plan(
+        vec![
+            StaticPlan {
+                source_load_index: 2,
+                ..static_plan(bloodmoon_master.clone(), "flora_aaa", "gm_flora_aaa")
+            },
+            StaticPlan {
+                source_load_index: 0,
+                ..static_plan(morrowind_master.clone(), "flora_zzz", "gm_flora_zzz")
+            },
+            StaticPlan {
+                source_load_index: 1,
+                ..static_plan(tribunal_master.clone(), "flora_mmm", "gm_flora_mmm")
+            },
+        ],
+        vec![
+            cell_plan(
+                2,
+                bloodmoon_master,
+                Vec::new(),
+                cell([((0, 2), reference("flora_aaa", 0))]),
+                "flora_aaa",
+            ),
+            cell_plan(
+                0,
+                morrowind_master,
+                Vec::new(),
+                cell([((0, 0), reference("flora_zzz", 0))]),
+                "flora_zzz",
+            ),
+            cell_plan(
+                1,
+                tribunal_master,
+                Vec::new(),
+                cell([((0, 1), reference("flora_mmm", 0))]),
+                "flora_mmm",
+            ),
+        ],
+        BTreeSet::from([
+            "flora_aaa".to_owned(),
+            "flora_mmm".to_owned(),
+            "flora_zzz".to_owned(),
+        ]),
+    );
+    let summary = RunSummary {
+        content_files: 3,
+        loaded_plugins: 3,
+        skipped_generated_plugins: Vec::new(),
+        matched_statics: 3,
+        used_statics: 3,
+        changed_cells: 3,
+        touched_refs: 3,
+        meshes_to_copy: 3,
+    };
+
+    let mut output = Vec::new();
+    write_summary(&mut output, &summary, &plan, &GroundcoverConfig::default()).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    let stat_sources = output
+        .lines()
+        .filter(|line| line.starts_with("STAT "))
+        .map(|line| {
+            line.split(" from ")
+                .nth(1)
+                .unwrap()
+                .split(':')
+                .next()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let cell_sources = output
+        .lines()
+        .filter(|line| line.starts_with("CELL refs from "))
+        .map(|line| {
+            line.strip_prefix("CELL refs from ")
+                .unwrap()
+                .split(':')
+                .next()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        stat_sources,
+        vec!["\"Morrowind.esm\"", "\"Tribunal.esm\"", "\"Bloodmoon.esm\""]
+    );
+    assert_eq!(
+        cell_sources,
+        vec!["\"Morrowind.esm\"", "\"Tribunal.esm\"", "\"Bloodmoon.esm\""]
+    );
 }
 
 #[test]

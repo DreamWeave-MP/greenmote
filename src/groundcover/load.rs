@@ -268,7 +268,7 @@ fn load_and_scan_one_plugin<S: BuildHasher>(
                     })
                     .collect()
             });
-    let (groundcover_cells, deleted_cells, touched_refs, used_static_ids) =
+    let (groundcover_cells, touched_refs, used_static_ids) =
         records::process_exterior_cells(&plugin, matched_static_ids);
 
     Ok(Some(crate::groundcover::plan::PluginCellPlan {
@@ -278,7 +278,6 @@ fn load_and_scan_one_plugin<S: BuildHasher>(
         source_master,
         header_masters,
         groundcover_cells,
-        deleted_cells,
         touched_refs,
         used_static_ids,
     }))
