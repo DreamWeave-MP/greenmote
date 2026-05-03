@@ -130,8 +130,10 @@ pub(crate) fn write_structured_summary_record(
     context: &UnclipReportContext,
     inspection: &TerrainInspectionReport,
 ) -> io::Result<()> {
+    let write = context.write.as_ref().map(WriteReport::summary);
     let summary = StructuredSummaryRecord {
         r#type: "summary",
+        write: write.as_ref(),
         summary: context.summary(inspection),
     };
     write_json(stdout, &summary)?;
@@ -435,8 +437,10 @@ struct StructuredHeader<'a> {
 }
 
 #[derive(Serialize)]
-struct StructuredSummaryRecord {
+struct StructuredSummaryRecord<'a> {
     r#type: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    write: Option<&'a WriteSummary>,
     summary: UnclipSummary,
 }
 

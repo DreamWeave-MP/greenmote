@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, collections::BTreeSet, io, io::Write, path::Path, path::PathBuf};
+use std::{collections::BTreeMap, collections::BTreeSet, io, io::Write, path::PathBuf};
 
 use tes3::esp::{Cell, Landscape, Plugin, Static};
 
@@ -18,7 +18,7 @@ use super::{
     },
     report,
     terrain::TerrainIndex,
-    write_plan::{WritePlan, WriteReport},
+    write_plan::{WritePlan, WriteReport, WriteStatusIndex},
     write_policy::{
         apply_unclip_write_plan, find_valid_relocation_position, plan_unclip_adjustments,
     },
@@ -79,6 +79,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     } else {
         None
     };
+    let write_status = write_plan.as_ref().map(WriteStatusIndex::from_plan);
 
     let mut mesh_contacts = MeshContactCache::new(&vfs);
     let mut output = OutputContext {
@@ -89,13 +90,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         static_occluders: &static_occluders,
         report: &report_context,
     };
-    let inspection = write_output(
-        stdout,
-        args,
-        &mut output,
-        &target_plugin.destination_path,
-        write_plan.as_ref(),
-    )?;
+    let inspection = write_output(stdout, args, &mut output, write_status.as_ref())?;
     report_context.write = save_write_plan(
         &mut target_plugin_data,
         &target_plugin.source_path,
@@ -136,8 +131,7 @@ fn write_output(
     stdout: &mut dyn Write,
     args: &UnclipArgs,
     output: &mut OutputContext<'_, '_>,
-    destination_path: &Path,
-    write_plan: Option<&WritePlan>,
+    write_status: Option<&WriteStatusIndex>,
 ) -> io::Result<TerrainInspectionReport> {
     match (args.structured, args.instances) {
         (false, false) => Ok(write_text_summary(
@@ -147,7 +141,7 @@ fn write_output(
             output.mesh_contacts,
             output.static_occluders,
         )),
-        (false, true) => write_instance_text(stdout, output, destination_path, write_plan),
+        (false, true) => write_instance_text(stdout, output, write_status),
         (true, false) => Ok(write_structured_summary(
             output.plugin,
             output.terrain,
@@ -155,7 +149,7 @@ fn write_output(
             output.mesh_contacts,
             output.static_occluders,
         )),
-        (true, true) => write_structured_instances(stdout, output, destination_path, write_plan),
+        (true, true) => write_structured_instances(stdout, output, write_status),
     }
 }
 
@@ -198,20 +192,16 @@ fn write_text_summary(
 fn write_instance_text(
     stdout: &mut dyn Write,
     output: &mut OutputContext<'_, '_>,
-    destination_path: &Path,
-    write_plan: Option<&WritePlan>,
+    write_status: Option<&WriteStatusIndex>,
 ) -> io::Result<TerrainInspectionReport> {
     report::write_instance_header(stdout, output.report)?;
-    let planned_write = write_plan
-        .cloned()
-        .map(|plan| WriteReport::not_written(destination_path, plan));
     let inspection = inspect_target_refs(
         output.plugin,
         output.terrain,
         output.static_index,
         output.mesh_contacts,
         output.static_occluders,
-        planned_write.as_ref(),
+        write_status,
         |reference| report::write_reference_text(stdout, reference),
     )?;
     Ok(inspection)
@@ -236,13 +226,9 @@ fn write_structured_summary(
 fn write_structured_instances(
     stdout: &mut dyn Write,
     output: &mut OutputContext<'_, '_>,
-    destination_path: &Path,
-    write_plan: Option<&WritePlan>,
+    write_status: Option<&WriteStatusIndex>,
 ) -> io::Result<TerrainInspectionReport> {
     report::write_structured_header(stdout, output.report)?;
-    let planned_write = write_plan
-        .cloned()
-        .map(|plan| WriteReport::not_written(destination_path, plan));
 
     let inspection = inspect_target_refs(
         output.plugin,
@@ -250,7 +236,7 @@ fn write_structured_instances(
         output.static_index,
         output.mesh_contacts,
         output.static_occluders,
-        planned_write.as_ref(),
+        write_status,
         |reference| report::write_structured_reference_record(stdout, reference),
     )?;
     Ok(inspection)
@@ -506,7 +492,7 @@ fn inspect_target_refs(
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
     static_occluders: &StaticOccluderIndex,
-    write: Option<&WriteReport>,
+    write: Option<&WriteStatusIndex>,
     mut reference_sink: impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<TerrainInspectionReport> {
     let mut report = TerrainInspectionReport::default();
@@ -517,16 +503,23 @@ fn inspect_target_refs(
         static_occluders,
     };
 
-    for target_ref in sorted_exterior_refs(plugin) {
-        inspect_reference(
-            &mut report,
-            &mut context,
-            target_ref.cell,
-            target_ref.key,
-            target_ref.reference,
-            write,
-            &mut reference_sink,
-        )?;
+    for cell in sorted_exterior_cells(plugin) {
+        let mut reference_keys = cell.references.keys().copied().collect::<Vec<_>>();
+        reference_keys.sort_unstable();
+        for key in reference_keys {
+            let Some(reference) = cell.references.get(&key) else {
+                continue;
+            };
+            inspect_reference(
+                &mut report,
+                &mut context,
+                cell.data.grid,
+                key,
+                reference,
+                write,
+                &mut reference_sink,
+            )?;
+        }
     }
 
     Ok(report)
@@ -547,47 +540,27 @@ fn count_target_refs(
         static_occluders,
     };
 
-    for target_ref in sorted_exterior_refs(plugin) {
-        count_reference(
-            &mut report,
-            &mut context,
-            target_ref.cell,
-            target_ref.reference,
-        );
+    for cell in sorted_exterior_cells(plugin) {
+        let mut reference_keys = cell.references.keys().copied().collect::<Vec<_>>();
+        reference_keys.sort_unstable();
+        for key in reference_keys {
+            let Some(reference) = cell.references.get(&key) else {
+                continue;
+            };
+            count_reference(&mut report, &mut context, cell.data.grid, reference);
+        }
     }
 
     report
 }
 
-struct SortedReference<'a> {
-    cell: CellCoord,
-    key: (u32, u32),
-    reference: &'a tes3::esp::Reference,
-}
-
-fn sorted_exterior_refs(plugin: &Plugin) -> Vec<SortedReference<'_>> {
+fn sorted_exterior_cells(plugin: &Plugin) -> Vec<&Cell> {
     let mut cells = plugin
         .objects_of_type::<Cell>()
         .filter(|cell| cell.is_exterior())
         .collect::<Vec<_>>();
     cells.sort_by_key(|cell| cell.data.grid);
-
-    let mut sorted = Vec::new();
-    for cell in cells {
-        let mut references = cell.references.iter().collect::<Vec<_>>();
-        references.sort_by_key(|(key, _)| **key);
-        sorted.extend(
-            references
-                .into_iter()
-                .map(|(key, reference)| SortedReference {
-                    cell: cell.data.grid,
-                    key: *key,
-                    reference,
-                }),
-        );
-    }
-
-    sorted
+    cells
 }
 
 struct ReferenceInspectionContext<'a, 'b> {
@@ -609,7 +582,7 @@ fn inspect_reference(
     cell: CellCoord,
     key: (u32, u32),
     reference: &tes3::esp::Reference,
-    write: Option<&WriteReport>,
+    write: Option<&WriteStatusIndex>,
     reference_sink: &mut impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<()> {
     report.refs += 1;

@@ -19,12 +19,6 @@ pub(crate) struct WriteReport {
     pub(crate) deletions: Vec<WriteStaticBoundsDeletion>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) moves: Vec<WriteStaticBoundsMove>,
-    #[serde(skip)]
-    adjusted_ref_keys: BTreeSet<AdjustedRefKey>,
-    #[serde(skip)]
-    deleted_ref_keys: BTreeSet<AdjustedRefKey>,
-    #[serde(skip)]
-    moved_ref_keys: BTreeSet<AdjustedRefKey>,
 }
 
 impl WriteReport {
@@ -52,9 +46,6 @@ impl WriteReport {
         mut plan: WritePlan,
     ) -> Self {
         plan.sort_records();
-        let adjusted_ref_keys = adjusted_ref_keys(&plan.adjustments);
-        let deleted_ref_keys = adjusted_ref_keys_from_deletions(&plan.deletions);
-        let moved_ref_keys = adjusted_ref_keys_from_moves(&plan.moves);
         Self {
             written,
             destination_plugin: destination_path.display().to_string(),
@@ -65,9 +56,6 @@ impl WriteReport {
             adjustments: plan.adjustments,
             deletions: plan.deletions,
             moves: plan.moves,
-            adjusted_ref_keys,
-            deleted_ref_keys,
-            moved_ref_keys,
         }
     }
 
@@ -80,21 +68,6 @@ impl WriteReport {
             deleted_refs: self.deleted_refs,
             moved_refs: self.moved_refs,
         }
-    }
-
-    pub(crate) fn is_adjusted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
-        self.adjusted_ref_keys
-            .contains(&AdjustedRefKey::new(cell, key))
-    }
-
-    pub(crate) fn is_deleted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
-        self.deleted_ref_keys
-            .contains(&AdjustedRefKey::new(cell, key))
-    }
-
-    pub(crate) fn is_moved(&self, cell: CellCoord, key: (u32, u32)) -> bool {
-        self.moved_ref_keys
-            .contains(&AdjustedRefKey::new(cell, key))
     }
 }
 
@@ -109,7 +82,7 @@ pub(crate) struct WriteSummary {
     pub(crate) moved_refs: usize,
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct WritePlan {
     pub(crate) adjusted_refs: usize,
     pub(crate) deleted_refs: usize,
@@ -134,7 +107,7 @@ impl WritePlan {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 pub(crate) struct WriteAdjustment {
     pub(crate) cell: [i32; 2],
     pub(crate) reference_key: [u32; 2],
@@ -146,7 +119,7 @@ pub(crate) struct WriteAdjustment {
     pub(crate) terrain_z: f32,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 pub(crate) struct WriteStaticBoundsDeletion {
     pub(crate) cell: [i32; 2],
     pub(crate) reference_key: [u32; 2],
@@ -157,7 +130,7 @@ pub(crate) struct WriteStaticBoundsDeletion {
     pub(crate) occluder_reference_key: [u32; 2],
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 pub(crate) struct WriteStaticBoundsMove {
     pub(crate) cell: [i32; 2],
     pub(crate) reference_key: [u32; 2],
@@ -221,25 +194,53 @@ fn adjusted_ref_keys_from_moves(moves: &[WriteStaticBoundsMove]) -> BTreeSet<Adj
         .collect()
 }
 
+pub(crate) struct WriteStatusIndex {
+    adjusted: BTreeSet<AdjustedRefKey>,
+    deleted: BTreeSet<AdjustedRefKey>,
+    moved: BTreeSet<AdjustedRefKey>,
+}
+
+impl WriteStatusIndex {
+    pub(crate) fn from_plan(plan: &WritePlan) -> Self {
+        Self {
+            adjusted: adjusted_ref_keys(&plan.adjustments),
+            deleted: adjusted_ref_keys_from_deletions(&plan.deletions),
+            moved: adjusted_ref_keys_from_moves(&plan.moves),
+        }
+    }
+
+    pub(crate) fn is_adjusted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
+        self.adjusted.contains(&AdjustedRefKey::new(cell, key))
+    }
+
+    pub(crate) fn is_deleted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
+        self.deleted.contains(&AdjustedRefKey::new(cell, key))
+    }
+
+    pub(crate) fn is_moved(&self, cell: CellCoord, key: (u32, u32)) -> bool {
+        self.moved.contains(&AdjustedRefKey::new(cell, key))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{WriteAdjustment, WritePlan, WriteReport, WriteStaticBoundsDeletion};
+    use super::{
+        WriteAdjustment, WritePlan, WriteReport, WriteStaticBoundsDeletion, WriteStatusIndex,
+    };
 
     #[test]
-    fn write_report_uses_adjusted_key_set() {
-        let report = WriteReport::not_written(
-            Path::new("plugin.omwaddon"),
-            WritePlan {
-                adjusted_refs: 1,
-                adjustments: vec![write_adjustment()],
-                ..WritePlan::default()
-            },
-        );
+    fn write_status_index_uses_adjusted_key_set() {
+        let plan = WritePlan {
+            adjusted_refs: 1,
+            adjustments: vec![write_adjustment()],
+            ..WritePlan::default()
+        };
+        let index = WriteStatusIndex::from_plan(&plan);
 
-        assert!(report.is_adjusted((1, 2), (3, 4)));
-        assert!(!report.is_adjusted((1, 2), (3, 5)));
+        assert!(index.is_adjusted((1, 2), (3, 4)));
+        assert!(!index.is_adjusted((1, 2), (3, 5)));
     }
 
     #[test]

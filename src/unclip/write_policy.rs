@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use tes3::esp::{Plugin, TES3Object};
 
 use super::{
@@ -75,6 +77,7 @@ pub(crate) fn plan_unclip_adjustments(
 }
 
 pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
+    let changes_by_cell = WriteChangesByCell::from_plan(plan);
     for object in &mut plugin.objects {
         let TES3Object::Cell(cell) = object else {
             continue;
@@ -83,21 +86,16 @@ pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
             continue;
         }
         let cell_grid = [cell.data.grid.0, cell.data.grid.1];
+        let Some(changes) = changes_by_cell.get(cell_grid) else {
+            continue;
+        };
 
-        for deletion in plan
-            .deletions
-            .iter()
-            .filter(|deletion| deletion.cell == cell_grid)
-        {
+        for deletion in &changes.deletions {
             cell.references
                 .remove(&(deletion.reference_key[0], deletion.reference_key[1]));
         }
 
-        for adjustment in plan
-            .adjustments
-            .iter()
-            .filter(|adjustment| adjustment.cell == cell_grid)
-        {
+        for adjustment in &changes.adjustments {
             if let Some(reference) = cell
                 .references
                 .get_mut(&(adjustment.reference_key[0], adjustment.reference_key[1]))
@@ -106,7 +104,7 @@ pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
             }
         }
 
-        for move_ in plan.moves.iter().filter(|move_| move_.cell == cell_grid) {
+        for move_ in &changes.moves {
             if let Some(reference) = cell
                 .references
                 .get_mut(&(move_.reference_key[0], move_.reference_key[1]))
@@ -114,6 +112,45 @@ pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
                 reference.translation = move_.new_position;
             }
         }
+    }
+}
+
+#[derive(Default)]
+struct CellWriteChanges<'a> {
+    adjustments: Vec<&'a WriteAdjustment>,
+    deletions: Vec<&'a WriteStaticBoundsDeletion>,
+    moves: Vec<&'a WriteStaticBoundsMove>,
+}
+
+struct WriteChangesByCell<'a> {
+    cells: BTreeMap<[i32; 2], CellWriteChanges<'a>>,
+}
+
+impl<'a> WriteChangesByCell<'a> {
+    fn from_plan(plan: &'a WritePlan) -> Self {
+        let mut cells = BTreeMap::<[i32; 2], CellWriteChanges<'a>>::new();
+        for adjustment in &plan.adjustments {
+            cells
+                .entry(adjustment.cell)
+                .or_default()
+                .adjustments
+                .push(adjustment);
+        }
+        for deletion in &plan.deletions {
+            cells
+                .entry(deletion.cell)
+                .or_default()
+                .deletions
+                .push(deletion);
+        }
+        for move_ in &plan.moves {
+            cells.entry(move_.cell).or_default().moves.push(move_);
+        }
+        Self { cells }
+    }
+
+    fn get(&self, cell: [i32; 2]) -> Option<&CellWriteChanges<'a>> {
+        self.cells.get(&cell)
     }
 }
 
