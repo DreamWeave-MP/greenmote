@@ -73,14 +73,12 @@ pub(crate) fn write_structured_header(
     stdout: &mut dyn Write,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
-    let header_write = context.write.as_ref().map(WriteReport::summary);
     let header = StructuredHeader {
         r#type: "header",
         kind: "greenmote_unclip_terrain_inspection",
         target_plugin: &context.target_plugin,
         write_requested: context.write_requested(),
         policy: context.policy(),
-        write: header_write.as_ref(),
         missing_active_terrain_cells: context.missing_active_terrain_cells(),
     };
     write_json(stdout, &header)?;
@@ -164,7 +162,7 @@ fn write_write_summary_text(
             writeln!(
                 stdout,
                 "No plugin written: {} at {}",
-                write.no_write_reason.unwrap_or("no_refs_changed"),
+                text_no_write_reason(write.no_write_reason),
                 write.destination_plugin
             )?;
         }
@@ -359,6 +357,14 @@ fn pattern_list(patterns: &[String]) -> String {
     }
 }
 
+fn text_no_write_reason(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("all_write_actions_disabled") => "all write actions disabled",
+        Some("no_refs_changed") | None => "no refs changed",
+        Some(_) => "write skipped",
+    }
+}
+
 fn write_static_bounds_summary_text(
     stdout: &mut dyn Write,
     summary: &UnclipSummary,
@@ -518,8 +524,6 @@ struct StructuredHeader<'a> {
     target_plugin: &'a str,
     write_requested: bool,
     policy: &'a UnclipPolicySummary,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    write: Option<&'a WriteSummary>,
     missing_active_terrain_cells: Vec<[i32; 2]>,
 }
 
@@ -628,7 +632,7 @@ mod tests {
 
         let output = String::from_utf8(output).unwrap();
         assert!(
-            output.contains("No plugin written: all_write_actions_disabled at plugin.omwaddon")
+            output.contains("No plugin written: all write actions disabled at plugin.omwaddon")
         );
     }
 
