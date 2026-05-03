@@ -1,6 +1,9 @@
 use serde::Serialize;
 
-use super::{args::UnclipPolicy, cells::CellCoord, write_plan::WriteReport};
+use super::{
+    args::UnclipPolicy, cells::CellCoord, static_occluders::StaticOccluderBuildReport,
+    write_plan::WriteReport,
+};
 
 pub(crate) const ORIGIN_TERRAIN_EPSILON: f32 = 0.5;
 pub(crate) const CONTACT_TERRAIN_EPSILON: f32 = 0.5;
@@ -12,6 +15,7 @@ pub(crate) struct UnclipReportContext {
     active_cells: usize,
     loaded_terrain_cells_total: usize,
     missing_active_terrain_cells: Vec<CellCoord>,
+    pub(crate) static_occluder_report: StaticOccluderBuildReport,
     policy: UnclipPolicySummary,
     write_requested: bool,
     pub(crate) write: Option<WriteReport>,
@@ -26,6 +30,7 @@ impl UnclipReportContext {
             active_cells: input.active_cells,
             loaded_terrain_cells_total: input.loaded_terrain_cells_total,
             missing_active_terrain_cells: input.missing_active_terrain_cells,
+            static_occluder_report: input.static_occluder_report,
             policy: UnclipPolicySummary::from_policy(policy),
             write_requested: input.write_requested,
             write: None,
@@ -87,6 +92,7 @@ pub(crate) struct UnclipReportContextInput<'a> {
     pub(crate) active_cells: usize,
     pub(crate) loaded_terrain_cells_total: usize,
     pub(crate) missing_active_terrain_cells: Vec<CellCoord>,
+    pub(crate) static_occluder_report: StaticOccluderBuildReport,
     pub(crate) write_requested: bool,
 }
 
@@ -139,6 +145,7 @@ impl UnclipReportContext {
             active_cells: 0,
             loaded_terrain_cells_total: 0,
             missing_active_terrain_cells: Vec::new(),
+            static_occluder_report: StaticOccluderBuildReport::default(),
             policy: UnclipPolicySummary {
                 write_actions: vec!["terrain-z", "static-delete", "static-move", "orient"],
                 origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
@@ -233,6 +240,24 @@ pub(crate) struct MeshContactInspection {
 pub(crate) struct StaticBoundsOcclusionInspection {
     pub(crate) status: &'static str,
     pub(crate) ratio: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) occluder_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) occluder_cell: Option<[i32; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) occluder_reference_key: Option<[u32; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) target_bounds: Option<BoundsInspection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) occluder_bounds: Option<BoundsInspection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) intersection_volume: Option<f32>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct BoundsInspection {
+    pub(crate) min: [f32; 3],
+    pub(crate) max: [f32; 3],
 }
 
 #[derive(Default)]

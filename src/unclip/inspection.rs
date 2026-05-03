@@ -5,12 +5,14 @@ use tes3::esp::Plugin;
 use super::{
     args::UnclipPolicy,
     cells::CellCoord,
-    mesh::{MeshContact, MeshContactCache, StaticMesh, StaticMeshIndex},
+    mesh::{MeshContact, MeshContactCache, StaticMesh, StaticMeshIndex, WorldAabb},
     model::{
-        MeshContactInspection, OriginInspection, ReferenceInspection,
+        BoundsInspection, MeshContactInspection, OriginInspection, ReferenceInspection,
         StaticBoundsOcclusionInspection, StaticMeshInspection, TerrainInspectionReport,
     },
-    occlusion::{StaticBoundsAction, StaticOccluderIndex, decide_static_bounds_action},
+    occlusion::{
+        StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
+    },
     orientation::orientation_angle_degrees,
     target::sorted_exterior_cells,
     terrain::TerrainIndex,
@@ -308,6 +310,21 @@ fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceIn
             StaticBoundsOcclusionInspection {
                 status: occlusion.status,
                 ratio: occlusion.ratio,
+                occluder_id: occlusion
+                    .occluder
+                    .as_ref()
+                    .map(|occluder| occluder.id.clone()),
+                occluder_cell: occlusion.occluder.as_ref().map(|occluder| occluder.cell),
+                occluder_reference_key: occlusion
+                    .occluder
+                    .as_ref()
+                    .map(|occluder| occluder.reference_key),
+                target_bounds: occlusion.target_bounds.map(bounds_inspection),
+                occluder_bounds: occlusion
+                    .occluder
+                    .as_ref()
+                    .map(|occluder| bounds_inspection(occluder.bounds)),
+                intersection_volume: occlusion.intersection_volume,
             }
         }),
     }
@@ -376,6 +393,9 @@ struct ContactDetails {
 struct StaticBoundsOcclusionDetails {
     status: &'static str,
     ratio: f32,
+    occluder: Option<StaticOccluder>,
+    target_bounds: Option<WorldAabb>,
+    intersection_volume: Option<f32>,
 }
 
 fn classify_static_bounds_occlusion(
@@ -402,41 +422,65 @@ fn classify_static_bounds_occlusion(
     let corrected_bounds =
         bounds.world_aabb(corrected_translation, reference.rotation, reference.scale);
     let action = decide_static_bounds_action(corrected_bounds, static_occluders);
-    let (status, ratio) = match action {
-        StaticBoundsAction::None => ("static_bounds_clear", 0.0),
-        StaticBoundsAction::Delete { ratio, .. } => {
+    let (status, ratio, occluder) = match action {
+        StaticBoundsAction::None => ("static_bounds_clear", 0.0, None),
+        StaticBoundsAction::Delete { ratio, occluder } => {
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_fully_occluded += 1;
-            ("static_bounds_fully_occluded", ratio)
-        }
-        StaticBoundsAction::Move { ratio, .. }
-            if find_valid_relocation_transform(
-                cell,
-                RefTransform {
-                    translation: corrected_translation,
-                    rotation: reference.rotation,
-                    scale: reference.scale,
-                },
-                contact,
-                *bounds,
-                terrain,
-                static_occluders,
-                policy.relocation,
+            (
+                "static_bounds_fully_occluded",
+                ratio,
+                Some(occluder.clone()),
             )
-            .is_some() =>
+        }
+        StaticBoundsAction::Move {
+            ratio, occluder, ..
+        } if find_valid_relocation_transform(
+            cell,
+            RefTransform {
+                translation: corrected_translation,
+                rotation: reference.rotation,
+                scale: reference.scale,
+            },
+            contact,
+            *bounds,
+            terrain,
+            static_occluders,
+            policy.relocation,
+        )
+        .is_some() =>
         {
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_relocatable += 1;
-            ("static_bounds_relocatable", ratio)
+            ("static_bounds_relocatable", ratio, Some(occluder.clone()))
         }
-        StaticBoundsAction::Move { ratio, .. } => {
+        StaticBoundsAction::Move {
+            ratio, occluder, ..
+        } => {
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_blocked += 1;
-            ("static_bounds_blocked", ratio)
+            ("static_bounds_blocked", ratio, Some(occluder.clone()))
         }
     };
 
-    Some(StaticBoundsOcclusionDetails { status, ratio })
+    let intersection_volume = occluder
+        .as_ref()
+        .and_then(|occluder| corrected_bounds.intersection(occluder.bounds))
+        .map(WorldAabb::volume);
+    Some(StaticBoundsOcclusionDetails {
+        status,
+        ratio,
+        occluder,
+        target_bounds: Some(corrected_bounds),
+        intersection_volume,
+    })
+}
+
+fn bounds_inspection(bounds: WorldAabb) -> BoundsInspection {
+    BoundsInspection {
+        min: bounds.min,
+        max: bounds.max,
+    }
 }
 
 fn classify_contact(

@@ -5,9 +5,23 @@ use tes3::esp::{Cell, Plugin};
 use super::{
     args::IdFilter,
     cells::CellCoord,
-    mesh::{MeshBoundsCache, StaticMeshIndex},
+    mesh::{MeshBoundsCache, StaticMeshIndex, WorldAabb},
     occlusion::{StaticOccluder, StaticOccluderIndex},
 };
+
+const HUGE_OCCLUDER_FOOTPRINT_SIDE: f32 = 4096.0;
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub(crate) struct StaticOccluderBuildReport {
+    pub(crate) active_refs_scanned: usize,
+    pub(crate) target_refs_excluded: usize,
+    pub(crate) regex_excluded: usize,
+    pub(crate) unresolved_static: usize,
+    pub(crate) missing_bounds: usize,
+    pub(crate) resolved_bounds: usize,
+    pub(crate) huge_footprint: usize,
+    pub(crate) huge_footprint_side_threshold: f32,
+}
 
 pub(crate) fn build_static_occluders(
     active_plugins: &[Plugin],
@@ -16,39 +30,53 @@ pub(crate) fn build_static_occluders(
     mesh_bounds: &mut MeshBoundsCache<'_>,
     target_static_ids: &BTreeSet<String>,
     occluder_filter: &IdFilter,
-) -> StaticOccluderIndex {
+) -> (StaticOccluderIndex, StaticOccluderBuildReport) {
     let effective_refs = effective_active_refs(active_plugins, active_cells);
+    let mut build_report = StaticOccluderBuildReport {
+        active_refs_scanned: effective_refs.len(),
+        huge_footprint_side_threshold: HUGE_OCCLUDER_FOOTPRINT_SIDE,
+        ..StaticOccluderBuildReport::default()
+    };
     let mut occluders = Vec::new();
 
     for (key, reference) in effective_refs {
         let reference_id_key = reference.id.to_lowercase();
-        if !should_include_occluder(
-            &reference.id,
-            &reference_id_key,
-            target_static_ids,
-            occluder_filter,
-        ) {
+        if target_static_ids.contains(&reference_id_key) {
+            build_report.target_refs_excluded += 1;
+            continue;
+        }
+        if !occluder_filter.includes(&reference.id) {
+            build_report.regex_excluded += 1;
             continue;
         }
 
         let Some(static_mesh) = static_index.get_normalized_key(&reference_id_key) else {
+            build_report.unresolved_static += 1;
             continue;
         };
         let Ok(bounds) = mesh_bounds.bounds(static_mesh) else {
+            build_report.missing_bounds += 1;
             continue;
         };
+        let world_bounds =
+            bounds.world_aabb(reference.translation, reference.rotation, reference.scale);
+        build_report.resolved_bounds += 1;
+        if huge_footprint(world_bounds) {
+            build_report.huge_footprint += 1;
+        }
 
         occluders.push(StaticOccluder {
             id: reference.id.clone(),
             cell: [key.cell.0, key.cell.1],
             reference_key: [key.reference.0, key.reference.1],
-            bounds: bounds.world_aabb(reference.translation, reference.rotation, reference.scale),
+            bounds: world_bounds,
         });
     }
 
-    StaticOccluderIndex::new(occluders)
+    (StaticOccluderIndex::new(occluders), build_report)
 }
 
+#[cfg(test)]
 fn should_include_occluder(
     reference_id: &str,
     reference_id_key: &str,
@@ -56,6 +84,12 @@ fn should_include_occluder(
     occluder_filter: &IdFilter,
 ) -> bool {
     !target_static_ids.contains(reference_id_key) && occluder_filter.includes(reference_id)
+}
+
+fn huge_footprint(bounds: WorldAabb) -> bool {
+    let width = bounds.max[0] - bounds.min[0];
+    let depth = bounds.max[1] - bounds.min[1];
+    width > HUGE_OCCLUDER_FOOTPRINT_SIDE || depth > HUGE_OCCLUDER_FOOTPRINT_SIDE
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]

@@ -51,7 +51,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     );
     let target_static_ids = target_reference_static_ids(&target_plugin_data, &policy);
     let mut context_meshes = MeshBoundsCache::new(&vfs);
-    let static_occluders = build_static_occluders(
+    let (static_occluders, static_occluder_report) = build_static_occluders(
         &context_plugins,
         &active_cells,
         &active_static_index,
@@ -72,28 +72,25 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
             active_cells: active_cells.len(),
             loaded_terrain_cells_total: terrain.len(),
             missing_active_terrain_cells,
+            static_occluder_report,
             write_requested: args.write,
         },
         &policy,
     );
     let mut target_meshes = MeshContactCache::new(&vfs);
-    let write_plan = if args.write {
-        if policy.write_actions.any_enabled() {
-            Some(plan_unclip_adjustments(
-                &target_plugin_data,
-                &terrain,
-                &target_static_index,
-                &mut target_meshes,
-                &static_occluders,
-                &policy,
-            ))
-        } else {
-            Some(WritePlan::default())
-        }
+    let write_plan = if policy.write_actions.any_enabled() {
+        Some(plan_unclip_adjustments(
+            &target_plugin_data,
+            &terrain,
+            &target_static_index,
+            &mut target_meshes,
+            &static_occluders,
+            &policy,
+        ))
     } else {
-        None
+        Some(WritePlan::default())
     };
-    let write_status = if args.instances {
+    let write_status = if args.instances || !args.write {
         write_plan.as_ref().map(WriteStatusIndex::from_plan)
     } else {
         None
@@ -117,6 +114,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         &target_plugin.source_path,
         &target_plugin.destination_path,
         write_plan,
+        args.write,
         (!policy.write_actions.any_enabled()).then_some("all_write_actions_disabled"),
     )?;
     write_output_footer(&mut output_writer, args, &report_context, &inspection)?;
@@ -153,6 +151,7 @@ fn save_write_plan(
     source_path: &std::path::Path,
     destination_path: &std::path::Path,
     write_plan: Option<WritePlan>,
+    write_requested: bool,
     no_change_reason: Option<&'static str>,
 ) -> io::Result<Option<WriteReport>> {
     let Some(write_plan) = write_plan else {
@@ -163,6 +162,13 @@ fn save_write_plan(
             destination_path,
             write_plan,
             no_change_reason.unwrap_or("no_refs_changed"),
+        )));
+    }
+    if !write_requested {
+        return Ok(Some(WriteReport::not_written(
+            destination_path,
+            write_plan,
+            "inspect_only",
         )));
     }
     apply_unclip_write_plan(plugin, &write_plan);
@@ -214,10 +220,12 @@ fn write_output_footer(
     inspection: &TerrainInspectionReport,
 ) -> io::Result<()> {
     match (args.structured, args.instances) {
-        (false, false) => report::write_summary_text(stdout, context, inspection, true),
+        (false, false) => {
+            report::write_summary_text(stdout, context, inspection, context.write_requested())
+        }
         (false, true) => {
             writeln!(stdout)?;
-            report::write_summary_text(stdout, context, inspection, true)
+            report::write_summary_text(stdout, context, inspection, context.write_requested())
         }
         (true, false) => report::write_structured_summary(stdout, context, inspection),
         (true, true) => {

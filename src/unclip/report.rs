@@ -28,6 +28,8 @@ pub(crate) fn write_summary_text(
     writeln!(stdout)?;
     write_terrain_summary_text(stdout, &summary)?;
     writeln!(stdout)?;
+    write_occluder_summary_text(stdout, context)?;
+    writeln!(stdout)?;
     write_reference_summary_text(stdout, &summary)?;
     writeln!(stdout)?;
     write_mesh_contact_summary_text(stdout, &summary)?;
@@ -66,6 +68,7 @@ pub(crate) fn write_structured_summary(
         policy: context.policy(),
         write: context.write.as_ref(),
         missing_active_terrain_cells: context.missing_active_terrain_cells(),
+        static_occluders: &context.static_occluder_report,
         summary: context.summary(inspection),
     };
     write_json(stdout, &report)?;
@@ -83,6 +86,7 @@ pub(crate) fn write_structured_header(
         write_requested: context.write_requested(),
         policy: context.policy(),
         missing_active_terrain_cells: context.missing_active_terrain_cells(),
+        static_occluders: &context.static_occluder_report,
     };
     write_json(stdout, &header)?;
     writeln!(stdout)
@@ -394,6 +398,7 @@ fn pattern_list(patterns: &[String]) -> String {
 fn text_no_write_reason(reason: Option<&str>) -> &'static str {
     match reason {
         Some("all_write_actions_disabled") => "all write actions disabled",
+        Some("inspect_only") => "inspect-only dry run",
         Some("no_refs_changed") | None => "no refs changed",
         Some(_) => "write skipped",
     }
@@ -424,6 +429,44 @@ fn write_static_bounds_summary_text(
         "  matching blocked: {}",
         summary.filtered_refs_static_bounds_blocked
     )
+}
+
+fn write_occluder_summary_text(
+    stdout: &mut dyn Write,
+    context: &UnclipReportContext,
+) -> io::Result<()> {
+    let occluders = &context.static_occluder_report;
+    writeln!(stdout, "Static occluders:")?;
+    writeln!(
+        stdout,
+        "  active refs scanned: {}",
+        occluders.active_refs_scanned
+    )?;
+    writeln!(
+        stdout,
+        "  target refs excluded: {}",
+        occluders.target_refs_excluded
+    )?;
+    writeln!(stdout, "  regex excluded: {}", occluders.regex_excluded)?;
+    writeln!(
+        stdout,
+        "  unresolved static: {}",
+        occluders.unresolved_static
+    )?;
+    writeln!(stdout, "  missing bounds: {}", occluders.missing_bounds)?;
+    writeln!(stdout, "  resolved bounds: {}", occluders.resolved_bounds)?;
+    writeln!(
+        stdout,
+        "  huge footprint: {} over {:.0} units",
+        occluders.huge_footprint, occluders.huge_footprint_side_threshold
+    )?;
+    if occluders.huge_footprint > 0 {
+        writeln!(
+            stdout,
+            "  warning: huge occluder bounds can cause false static-bounds occlusion; consider --exclude-occluder-id"
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) fn write_reference_text(
@@ -472,6 +515,30 @@ pub(crate) fn write_reference_text(
             "  static bounds occlusion: status={} ratio={:.3}",
             occlusion.status, occlusion.ratio
         )?;
+        if let Some(occluder_id) = &occlusion.occluder_id {
+            writeln!(
+                stdout,
+                "    occluder: id={} cell={:?} ref={:?} intersection_volume={}",
+                occluder_id,
+                occlusion.occluder_cell,
+                occlusion.occluder_reference_key,
+                optional_f32(occlusion.intersection_volume)
+            )?;
+        }
+        if let Some(bounds) = &occlusion.target_bounds {
+            writeln!(
+                stdout,
+                "    target bounds: min={:?} max={:?}",
+                bounds.min, bounds.max
+            )?;
+        }
+        if let Some(bounds) = &occlusion.occluder_bounds {
+            writeln!(
+                stdout,
+                "    occluder bounds: min={:?} max={:?}",
+                bounds.min, bounds.max
+            )?;
+        }
     }
     Ok(())
 }
@@ -575,6 +642,7 @@ struct StructuredSummaryReport<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     write: Option<&'a WriteReport>,
     missing_active_terrain_cells: Vec<[i32; 2]>,
+    static_occluders: &'a super::static_occluders::StaticOccluderBuildReport,
     summary: UnclipSummary,
 }
 
@@ -586,6 +654,7 @@ struct StructuredHeader<'a> {
     write_requested: bool,
     policy: &'a UnclipPolicySummary,
     missing_active_terrain_cells: Vec<[i32; 2]>,
+    static_occluders: &'a super::static_occluders::StaticOccluderBuildReport,
 }
 
 #[derive(Serialize)]
