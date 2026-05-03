@@ -4,6 +4,7 @@ mod app;
 mod args;
 mod cells;
 mod mesh;
+mod occlusion;
 mod terrain;
 
 pub use args::UnclipArgs;
