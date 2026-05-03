@@ -103,13 +103,19 @@ fn terrain_write_status(input: &WriteStatusInput) -> Option<&'static str> {
         return None;
     };
     input.contact_delta.and_then(|delta| {
-        if delta.abs() > input.contact_epsilon && input.write.actions.terrain_z {
-            Some("adjusted_or_adjustable")
-        } else if delta.abs() > input.contact_epsilon {
-            Some("skipped_terrain_z_disabled")
-        } else {
-            None
+        if delta.abs() <= input.contact_epsilon {
+            return None;
         }
+        if !input.write.actions.terrain_z {
+            return Some("skipped_terrain_z_disabled");
+        }
+        Some(match input.write.plan {
+            WritePlanEvidence::NotPlanned => "would_adjust_terrain_z",
+            WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
+            WritePlanEvidence::Adjusted | WritePlanEvidence::Deleted | WritePlanEvidence::Moved => {
+                unreachable!("handled before terrain status")
+            }
+        })
     })
 }
 
@@ -184,7 +190,16 @@ mod tests {
         input.static_bounds_status = Some("static_bounds_fully_occluded");
         input.write.actions.static_delete = false;
 
-        assert_eq!(write_status_label(&input), "adjusted_or_adjustable");
+        assert_eq!(write_status_label(&input), "would_adjust_terrain_z");
+    }
+
+    #[test]
+    fn write_status_reports_write_plan_terrain_mismatch() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.contact_delta = Some(10.0);
+        input.write.plan = WritePlanEvidence::Unchanged;
+
+        assert_eq!(write_status_label(&input), "skipped_write_plan_unchanged");
     }
 
     const fn test_write_actions() -> WriteActions {
