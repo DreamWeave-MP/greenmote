@@ -126,7 +126,6 @@ fn cli_values_merge_over_toml() {
         &config_path,
         r#"
 [convert]
-groundcover_output = "gc.omwaddon"
 ignored_plugins = ["Generated"]
 dry_run = false
 "#,
@@ -144,15 +143,10 @@ dry_run = false
 
     let config = GroundcoverConfig::get(args, &dir.path, default_output_directory).unwrap();
 
-    assert_eq!(
-        crate::groundcover::GROUNDCOVER_PLUGIN_NAME,
-        "groundcover.omwaddon"
-    );
     assert_eq!(config.output_directory, PathBuf::from("out"));
     assert!(config.dry_run);
     assert!(config.is_ignored_plugin_name("Generated.omwaddon"));
     assert!(config.is_ignored_plugin_name("OtherGenerated.omwaddon"));
-    assert!(read_to_string(config_path).unwrap().contains("gc.omwaddon"));
 }
 
 #[test]
@@ -163,7 +157,7 @@ fn missing_toml_output_directory_uses_effective_data_local() {
         &config_path,
         r#"
 [convert]
-groundcover_output = "gc.omwaddon"
+ignored_plugins = ["Generated"]
 "#,
     )
     .unwrap();
@@ -176,7 +170,7 @@ groundcover_output = "gc.omwaddon"
 }
 
 #[test]
-fn deprecated_output_names_are_not_resaved() {
+fn convert_output_names_are_rejected() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
@@ -188,14 +182,14 @@ deleted_output = "deleted_gc.omwaddon"
 "#,
     )
     .unwrap();
-    let config =
-        GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local")).unwrap();
 
-    config.save_for_edit(&config_path).unwrap();
+    let result = GroundcoverConfig::get(
+        GroundcoverArgs::parse_from(["convert"]),
+        &dir.path,
+        dir.path.join("data-local"),
+    );
 
-    let contents = read_to_string(config_path).unwrap();
-    assert!(!contents.contains("groundcover_output"));
-    assert!(!contents.contains("deleted_output"));
+    assert!(result.is_err());
 }
 
 #[test]

@@ -28,12 +28,6 @@ pub(super) struct GroundcoverConfigFile {
 // command mode into TOML is how a config file starts lying to its owner.
 #[allow(clippy::struct_excessive_bools)]
 struct ConvertConfigFile {
-    #[serde(rename = "groundcover_output", default, skip_serializing)]
-    _groundcover_output: Option<String>,
-
-    #[serde(rename = "deleted_output", default, skip_serializing)]
-    _deleted_output: Option<String>,
-
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grass_ids: Option<Vec<String>>,
 
@@ -59,8 +53,6 @@ impl GroundcoverConfigFile {
             output_directory: Some(config.output_directory.clone()),
             validate_config: None,
             convert: ConvertConfigFile {
-                _groundcover_output: None,
-                _deleted_output: None,
                 grass_ids: Some(config.grass_ids.clone()),
                 exclude: Some(config.exclude.clone()),
                 ignored_plugins: Some(config.ignored_plugins.clone()),
