@@ -22,7 +22,7 @@ pub struct Cli {
 pub enum Command {
     /// Convert vanilla-style static exterior refs into `OpenMW` groundcover.
     Convert(GroundcoverArgs),
-    /// Inspect a groundcover plugin against active exterior terrain.
+    /// Find and optionally fix groundcover refs clipped into terrain or statics.
     Unclip(UnclipArgs),
 }
 
