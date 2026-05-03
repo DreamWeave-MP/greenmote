@@ -670,6 +670,7 @@ fn inspect_reference(
             adjusted: write.is_some_and(|write| write.is_adjusted(cell, key)),
             deleted: write.is_some_and(|write| write.is_deleted(cell, key)),
             moved: write.is_some_and(|write| write.is_moved(cell, key)),
+            actions: context.policy.write_actions,
         },
         contact_epsilon: context.policy.contact_epsilon,
     });
@@ -768,6 +769,7 @@ struct WriteStatusEvidence {
     adjusted: bool,
     deleted: bool,
     moved: bool,
+    actions: super::args::WriteActions,
 }
 
 fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceInspection {
@@ -786,15 +788,7 @@ fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceIn
             .mesh_resolution
             .mesh_contact_status_label(input.contact_details),
         deleted: input.reference.deleted == Some(true),
-        write_status: write_status_label(
-            input.reference,
-            input.mesh_resolution,
-            input.contact_details,
-            input.write.adjusted,
-            input.write.deleted,
-            input.write.moved,
-            input.contact_epsilon,
-        ),
+        write_status: write_status_label(input),
         static_mesh: input
             .mesh_resolution
             .static_mesh()
@@ -855,38 +849,53 @@ fn static_mesh_inspection(static_mesh: &super::mesh::StaticMesh) -> StaticMeshIn
     }
 }
 
-fn write_status_label(
-    reference: &tes3::esp::Reference,
-    mesh_resolution: &MeshContactResolution<'_>,
-    contact_details: Option<&ContactDetails>,
-    was_adjusted: bool,
-    was_deleted: bool,
-    was_moved: bool,
-    contact_epsilon: f32,
-) -> &'static str {
-    if was_deleted {
+fn write_status_label(input: &ReferenceInspectionInput<'_, '_>) -> &'static str {
+    if input.write.deleted {
         return "deleted_static_bounds_occluded";
     }
-    if was_moved {
+    if input.write.moved {
         return "moved_static_bounds_occluded";
     }
-    if was_adjusted {
+    if input.write.adjusted {
         return "adjusted";
     }
-    if reference.deleted == Some(true) {
+    if input.reference.deleted == Some(true) {
         return "skipped_deleted_ref";
     }
-    match mesh_resolution {
+    if let Some(occlusion) = input.static_bounds_occlusion {
+        match occlusion.status {
+            "static_bounds_fully_occluded" if !input.write.actions.static_delete => {
+                return "skipped_static_delete_disabled";
+            }
+            "static_bounds_relocatable" | "static_bounds_blocked"
+                if !input.write.actions.static_move =>
+            {
+                return "skipped_static_move_disabled";
+            }
+            _ => {}
+        }
+    }
+    match input.mesh_resolution {
         MeshContactResolution::UnresolvedStatic => "skipped_unresolved_static",
         MeshContactResolution::MissingContact { .. } => "skipped_missing_mesh_contact",
         MeshContactResolution::Resolved { .. } => {
-            contact_details.map_or("skipped_missing_contact_terrain", |details| {
-                match details.delta {
-                    Some(delta) if delta.abs() > contact_epsilon => "adjusted_or_adjustable",
-                    Some(_) => "skipped_within_epsilon",
-                    None => "skipped_missing_contact_terrain",
-                }
-            })
+            input
+                .contact_details
+                .map_or("skipped_missing_contact_terrain", |details| {
+                    match details.delta {
+                        Some(delta)
+                            if delta.abs() > input.contact_epsilon
+                                && input.write.actions.terrain_z =>
+                        {
+                            "adjusted_or_adjustable"
+                        }
+                        Some(delta) if delta.abs() > input.contact_epsilon => {
+                            "skipped_terrain_z_disabled"
+                        }
+                        Some(_) => "skipped_within_epsilon",
+                        None => "skipped_missing_contact_terrain",
+                    }
+                })
         }
     }
 }
@@ -1144,36 +1153,98 @@ fn classify_contact_delta(delta: f32, epsilon: f32) -> ContactTerrainClassificat
 mod tests {
     use std::collections::BTreeSet;
 
-    use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
+    use tes3::esp::{Cell, CellData, Plugin, Reference, Static, TES3Object};
 
     use crate::unclip::{
         UnclipArgs,
         args::{RelocationPolicy, TargetFilter, UnclipPolicy, WriteActionArg, WriteActions},
+        mesh::{MeshAabb, MeshContact, StaticMeshIndex},
         model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
 
     use super::{
-        MeshContactResolution, deleted_reference_inspection, effective_active_refs,
-        target_reference_static_ids, write_output_footer, write_status_label,
+        ContactDetails, MeshContactResolution, OriginDetails, ReferenceInspectionInput,
+        StaticBoundsOcclusionDetails, WriteStatusEvidence, deleted_reference_inspection,
+        effective_active_refs, target_reference_static_ids, write_output_footer,
+        write_status_label,
     };
 
     #[test]
     fn write_status_prefers_adjusted_plan_evidence() {
         let reference = reference_at_z(10.0);
 
-        assert_eq!(
-            write_status_label(
-                &reference,
-                &MeshContactResolution::UnresolvedStatic,
-                None,
-                true,
-                false,
-                false,
-                0.5,
-            ),
-            "adjusted"
-        );
+        let mesh_resolution = MeshContactResolution::UnresolvedStatic;
+        let mut input = base_write_status_input(&reference, &mesh_resolution);
+        input.write.adjusted = true;
+
+        assert_eq!(write_status_label(&input), "adjusted");
+    }
+
+    #[test]
+    fn write_status_reports_disabled_terrain_adjustment() {
+        let reference = reference_at_z(10.0);
+        let static_mesh_index = StaticMeshIndex::from_statics([&Static {
+            id: "grass".to_owned(),
+            mesh: "meshes\\grass.nif".to_owned(),
+            ..Static::default()
+        }]);
+        let static_mesh = static_mesh_index.get("grass").unwrap();
+        let contact = MeshContact {
+            vertices: vec![[0.0, 0.0, 0.0]],
+        };
+        let actions = WriteActions {
+            terrain_z: false,
+            static_delete: true,
+            static_move: true,
+        };
+
+        let mesh_resolution = MeshContactResolution::Resolved {
+            static_mesh,
+            contact: &contact,
+            bounds: MeshAabb {
+                min: [0.0, 0.0, 0.0],
+                max: [1.0, 1.0, 1.0],
+            },
+        };
+        let contact_details = ContactDetails {
+            position: [0.0, 0.0, 10.0],
+            terrain_z: Some(0.0),
+            delta: Some(10.0),
+            classification: None,
+        };
+        let mut input = base_write_status_input(&reference, &mesh_resolution);
+        input.contact_details = Some(&contact_details);
+        input.write.actions = actions;
+
+        assert_eq!(write_status_label(&input), "skipped_terrain_z_disabled");
+    }
+
+    #[test]
+    fn write_status_reports_disabled_static_actions() {
+        let reference = reference_at_z(10.0);
+        let actions = WriteActions {
+            terrain_z: true,
+            static_delete: false,
+            static_move: false,
+        };
+
+        let mesh_resolution = MeshContactResolution::UnresolvedStatic;
+        let fully_occluded = StaticBoundsOcclusionDetails {
+            status: "static_bounds_fully_occluded",
+            ratio: 1.0,
+        };
+        let mut input = base_write_status_input(&reference, &mesh_resolution);
+        input.static_bounds_occlusion = Some(&fully_occluded);
+        input.write.actions = actions;
+
+        assert_eq!(write_status_label(&input), "skipped_static_delete_disabled");
+        let relocatable = StaticBoundsOcclusionDetails {
+            status: "static_bounds_relocatable",
+            ratio: 0.5,
+        };
+        input.static_bounds_occlusion = Some(&relocatable);
+        assert_eq!(write_status_label(&input), "skipped_static_move_disabled");
     }
 
     #[test]
@@ -1293,6 +1364,34 @@ mod tests {
         assert!(write_record < summary_record);
     }
 
+    const MISSING_ORIGIN: OriginDetails = OriginDetails {
+        terrain_z: None,
+        delta: None,
+        classification: "origin_missing_terrain",
+    };
+
+    fn base_write_status_input<'a, 'b>(
+        reference: &'a Reference,
+        mesh_resolution: &'a MeshContactResolution<'b>,
+    ) -> ReferenceInspectionInput<'a, 'b> {
+        ReferenceInspectionInput {
+            cell: (0, 0),
+            key: (0, 0),
+            reference,
+            origin: &MISSING_ORIGIN,
+            mesh_resolution,
+            contact_details: None,
+            static_bounds_occlusion: None,
+            write: WriteStatusEvidence {
+                adjusted: false,
+                deleted: false,
+                moved: false,
+                actions: test_write_actions(),
+            },
+            contact_epsilon: 0.5,
+        }
+    }
+
     fn reference_at_z(z: f32) -> Reference {
         Reference {
             id: "grass".to_owned(),
@@ -1310,11 +1409,7 @@ mod tests {
 
     fn test_policy_with_filter(include_ids: &[&str], exclude_ids: &[&str]) -> UnclipPolicy {
         UnclipPolicy {
-            write_actions: WriteActions {
-                terrain_z: true,
-                static_delete: true,
-                static_move: true,
-            },
+            write_actions: test_write_actions(),
             contact_epsilon: 0.5,
             origin_epsilon: 0.5,
             relocation: RelocationPolicy {
@@ -1331,6 +1426,14 @@ mod tests {
                     .map(|pattern| (*pattern).to_owned())
                     .collect::<Vec<_>>(),
             ),
+        }
+    }
+
+    const fn test_write_actions() -> WriteActions {
+        WriteActions {
+            terrain_z: true,
+            static_delete: true,
+            static_move: true,
         }
     }
 
