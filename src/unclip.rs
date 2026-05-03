@@ -7,6 +7,7 @@ mod mesh;
 mod occlusion;
 mod terrain;
 mod write_plan;
+mod writer;
 
 pub use args::UnclipArgs;
 
