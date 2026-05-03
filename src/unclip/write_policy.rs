@@ -26,8 +26,8 @@ const RELOCATION_DIRECTIONS: &[[f32; 2]] = &[
     [-0.707_106_77, -0.707_106_77],
 ];
 
-pub(crate) fn apply_unclip_adjustments(
-    plugin: &mut Plugin,
+pub(crate) fn plan_unclip_adjustments(
+    plugin: &Plugin,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
@@ -48,14 +48,14 @@ pub(crate) fn apply_unclip_adjustments(
     exterior_cells.sort_unstable();
 
     for (cell_grid, object_index) in exterior_cells {
-        let TES3Object::Cell(cell) = &mut plugin.objects[object_index] else {
+        let TES3Object::Cell(cell) = &plugin.objects[object_index] else {
             unreachable!("sorted exterior cell index should still point to a CELL")
         };
         let mut reference_keys = cell.references.keys().copied().collect::<Vec<_>>();
         reference_keys.sort_unstable();
 
         for key in reference_keys {
-            let Some(reference) = cell.references.get_mut(&key) else {
+            let Some(reference) = cell.references.get(&key) else {
                 continue;
             };
             let change = adjust_reference_for_terrain_and_static_bounds(
@@ -67,19 +67,57 @@ pub(crate) fn apply_unclip_adjustments(
                 mesh_contacts,
                 static_occluders,
             );
-            record_reference_change(cell, key, change, &mut plan);
+            record_reference_change(change, &mut plan);
         }
     }
 
     plan
 }
 
-fn record_reference_change(
-    cell: &mut tes3::esp::Cell,
-    key: (u32, u32),
-    change: WriteReferenceChange,
-    plan: &mut WritePlan,
-) {
+pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
+    for object in &mut plugin.objects {
+        let TES3Object::Cell(cell) = object else {
+            continue;
+        };
+        if !cell.is_exterior() {
+            continue;
+        }
+        let cell_grid = [cell.data.grid.0, cell.data.grid.1];
+
+        for deletion in plan
+            .deletions
+            .iter()
+            .filter(|deletion| deletion.cell == cell_grid)
+        {
+            cell.references
+                .remove(&(deletion.reference_key[0], deletion.reference_key[1]));
+        }
+
+        for adjustment in plan
+            .adjustments
+            .iter()
+            .filter(|adjustment| adjustment.cell == cell_grid)
+        {
+            if let Some(reference) = cell
+                .references
+                .get_mut(&(adjustment.reference_key[0], adjustment.reference_key[1]))
+            {
+                reference.translation[2] = adjustment.new_z;
+            }
+        }
+
+        for move_ in plan.moves.iter().filter(|move_| move_.cell == cell_grid) {
+            if let Some(reference) = cell
+                .references
+                .get_mut(&(move_.reference_key[0], move_.reference_key[1]))
+            {
+                reference.translation = move_.new_position;
+            }
+        }
+    }
+}
+
+fn record_reference_change(change: WriteReferenceChange, plan: &mut WritePlan) {
     match change {
         WriteReferenceChange::None => {}
         WriteReferenceChange::AdjustZ(adjustment) => {
@@ -87,7 +125,6 @@ fn record_reference_change(
             plan.adjustments.push(adjustment);
         }
         WriteReferenceChange::Delete(deletion) => {
-            cell.references.remove(&key);
             plan.deleted_refs += 1;
             plan.deletions.push(deletion);
         }
@@ -114,7 +151,7 @@ struct StaticBoundsMoveCause<'a> {
 fn adjust_reference_for_terrain_and_static_bounds(
     cell: CellCoord,
     key: (u32, u32),
-    reference: &mut tes3::esp::Reference,
+    reference: &tes3::esp::Reference,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
@@ -175,10 +212,9 @@ fn adjust_reference_for_terrain_and_static_bounds(
                 let Some(terrain_z) = terrain_z else {
                     return WriteReferenceChange::None;
                 };
-                return apply_contact_adjustment(cell, key, reference, contact_position, terrain_z)
+                return plan_contact_adjustment(cell, key, reference, contact_position, terrain_z)
                     .map_or(WriteReferenceChange::None, WriteReferenceChange::AdjustZ);
             };
-            reference.translation = corrected_reference.translation;
             return WriteReferenceChange::Move(move_);
         }
     }
@@ -186,7 +222,7 @@ fn adjust_reference_for_terrain_and_static_bounds(
     let Some(terrain_z) = terrain_z else {
         return WriteReferenceChange::None;
     };
-    apply_contact_adjustment(cell, key, reference, contact_position, terrain_z)
+    plan_contact_adjustment(cell, key, reference, contact_position, terrain_z)
         .map_or(WriteReferenceChange::None, WriteReferenceChange::AdjustZ)
 }
 
@@ -291,10 +327,10 @@ fn cell_contains_xy(cell: CellCoord, position: [f32; 2]) -> bool {
         && position[1] < min_y + CELL_SIZE
 }
 
-fn apply_contact_adjustment(
+fn plan_contact_adjustment(
     cell: CellCoord,
     key: (u32, u32),
-    reference: &mut tes3::esp::Reference,
+    reference: &tes3::esp::Reference,
     contact_position: [f32; 3],
     terrain_z: f32,
 ) -> Option<WriteAdjustment> {
@@ -303,13 +339,13 @@ fn apply_contact_adjustment(
         return None;
     }
     let old_z = reference.translation[2];
-    reference.translation[2] -= contact_delta;
+    let new_z = old_z - contact_delta;
     Some(WriteAdjustment {
         cell: [cell.0, cell.1],
         reference_key: [key.0, key.1],
         id: reference.id.clone(),
         old_z,
-        new_z: reference.translation[2],
+        new_z,
         applied_delta: -contact_delta,
         contact_position,
         terrain_z,
@@ -318,19 +354,22 @@ fn apply_contact_adjustment(
 
 #[cfg(test)]
 mod tests {
-    use tes3::esp::{Cell, CellData, Reference};
+    use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
-    use super::{WriteReferenceChange, apply_contact_adjustment, record_reference_change};
+    use super::{
+        WriteReferenceChange, apply_unclip_write_plan, plan_contact_adjustment,
+        record_reference_change,
+    };
     use crate::unclip::write_plan::{WritePlan, WriteStaticBoundsDeletion};
 
     #[test]
     fn contact_adjustment_moves_buried_contact_up() {
-        let mut reference = reference_at_z(10.0);
+        let reference = reference_at_z(10.0);
 
         let adjustment =
-            apply_contact_adjustment((1, 2), (3, 4), &mut reference, [0.0, 0.0, 7.0], 9.0).unwrap();
+            plan_contact_adjustment((1, 2), (3, 4), &reference, [0.0, 0.0, 7.0], 9.0).unwrap();
 
-        assert_close(reference.translation[2], 12.0);
+        assert_close(reference.translation[2], 10.0);
         assert_close(adjustment.old_z, 10.0);
         assert_close(adjustment.new_z, 12.0);
         assert_close(adjustment.applied_delta, 2.0);
@@ -338,22 +377,21 @@ mod tests {
 
     #[test]
     fn contact_adjustment_moves_floating_contact_down() {
-        let mut reference = reference_at_z(10.0);
+        let reference = reference_at_z(10.0);
 
         let adjustment =
-            apply_contact_adjustment((1, 2), (3, 4), &mut reference, [0.0, 0.0, 12.0], 9.0)
-                .unwrap();
+            plan_contact_adjustment((1, 2), (3, 4), &reference, [0.0, 0.0, 12.0], 9.0).unwrap();
 
-        assert_close(reference.translation[2], 7.0);
+        assert_close(reference.translation[2], 10.0);
+        assert_close(adjustment.new_z, 7.0);
         assert_close(adjustment.applied_delta, -3.0);
     }
 
     #[test]
     fn contact_adjustment_skips_within_epsilon() {
-        let mut reference = reference_at_z(10.0);
+        let reference = reference_at_z(10.0);
 
-        let adjustment =
-            apply_contact_adjustment((1, 2), (3, 4), &mut reference, [0.0, 0.0, 9.25], 9.0);
+        let adjustment = plan_contact_adjustment((1, 2), (3, 4), &reference, [0.0, 0.0, 9.25], 9.0);
 
         assert!(adjustment.is_none());
         assert_close(reference.translation[2], 10.0);
@@ -361,12 +399,15 @@ mod tests {
 
     #[test]
     fn deleted_write_changes_physically_remove_local_refs() {
-        let mut cell = exterior_cell([((3, 4), reference_at_z(10.0))]);
+        let mut plugin = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (3, 4),
+                reference_at_z(10.0),
+            )]))],
+        };
         let mut plan = WritePlan::default();
 
         record_reference_change(
-            &mut cell,
-            (3, 4),
             WriteReferenceChange::Delete(WriteStaticBoundsDeletion {
                 cell: [1, 2],
                 reference_key: [3, 4],
@@ -379,6 +420,10 @@ mod tests {
             &mut plan,
         );
 
+        apply_unclip_write_plan(&mut plugin, &plan);
+        let TES3Object::Cell(cell) = &plugin.objects[0] else {
+            unreachable!("test plugin should contain a CELL")
+        };
         assert_eq!(plan.deleted_refs, 1);
         assert!(!cell.references.contains_key(&(3, 4)));
     }

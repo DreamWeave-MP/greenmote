@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, collections::BTreeSet, io, io::Write, path::PathBuf};
+use std::{collections::BTreeMap, collections::BTreeSet, io, io::Write, path::Path, path::PathBuf};
 
 use tes3::esp::{Cell, Landscape, Plugin, Static};
 
@@ -18,8 +18,10 @@ use super::{
     },
     report,
     terrain::TerrainIndex,
-    write_plan::WriteReport,
-    write_policy::{apply_unclip_adjustments, find_valid_relocation_position},
+    write_plan::{WritePlan, WriteReport},
+    write_policy::{
+        apply_unclip_write_plan, find_valid_relocation_position, plan_unclip_adjustments,
+    },
     writer::save_plugin_with_backup,
 };
 
@@ -27,7 +29,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     let openmw_config = openmw::load_config_from_path(args.openmw_cfg.as_deref())?;
     let vfs = openmw::build_vfs(&openmw_config);
     let target_plugin = resolve_target_plugin(&args.plugin, &openmw_config, &vfs)?;
-    let target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
+    let mut target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
     let content_files = openmw::content_files(&openmw_config)?;
     let context_plugin_paths = resolve_content_plugin_paths(&content_files, &vfs)?;
     let context_plugins = load_context_plugins(&context_plugin_paths)?;
@@ -65,33 +67,18 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         terrain.len(),
         missing_active_terrain_cells,
     );
-    if args.write {
-        // Reports describe the refs the user asked us to inspect. `--write`
-        // mutates a separate plugin instance; feeding that mutated plugin into
-        // reporting would make the summary describe the cleaned result instead
-        // of the discovered problems. That is technically correct in the least
-        // useful way.
-        let mut write_plugin_data = target_plugin_data.clone();
+    let write_plan = if args.write {
         let mut mesh_contacts = MeshContactCache::new(&vfs);
-        let write_plan = apply_unclip_adjustments(
-            &mut write_plugin_data,
+        Some(plan_unclip_adjustments(
+            &target_plugin_data,
             &terrain,
             &target_static_index,
             &mut mesh_contacts,
             &static_occluders,
-        );
-        let write_report = if write_plan.changed_refs() == 0 {
-            WriteReport::not_written(&target_plugin.destination_path, write_plan)
-        } else {
-            save_plugin_with_backup(
-                &mut write_plugin_data,
-                &target_plugin.source_path,
-                &target_plugin.destination_path,
-                write_plan,
-            )?
-        };
-        report_context.write = Some(write_report);
-    }
+        ))
+    } else {
+        None
+    };
 
     let mut mesh_contacts = MeshContactCache::new(&vfs);
     let mut output = OutputContext {
@@ -102,9 +89,38 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         static_occluders: &static_occluders,
         report: &report_context,
     };
-    write_output(stdout, args, &mut output)?;
+    let inspection = write_output(
+        stdout,
+        args,
+        &mut output,
+        &target_plugin.destination_path,
+        write_plan.as_ref(),
+    )?;
+    report_context.write = save_write_plan(
+        &mut target_plugin_data,
+        &target_plugin.source_path,
+        &target_plugin.destination_path,
+        write_plan,
+    )?;
+    write_output_footer(stdout, args, &report_context, &inspection)?;
 
     Ok(())
+}
+
+fn save_write_plan(
+    plugin: &mut Plugin,
+    source_path: &std::path::Path,
+    destination_path: &std::path::Path,
+    write_plan: Option<WritePlan>,
+) -> io::Result<Option<WriteReport>> {
+    let Some(write_plan) = write_plan else {
+        return Ok(None);
+    };
+    if write_plan.changed_refs() == 0 {
+        return Ok(Some(WriteReport::not_written(destination_path, write_plan)));
+    }
+    apply_unclip_write_plan(plugin, &write_plan);
+    save_plugin_with_backup(plugin, source_path, destination_path, write_plan).map(Some)
 }
 
 struct OutputContext<'a, 'b> {
@@ -120,130 +136,124 @@ fn write_output(
     stdout: &mut dyn Write,
     args: &UnclipArgs,
     output: &mut OutputContext<'_, '_>,
+    destination_path: &Path,
+    write_plan: Option<&WritePlan>,
+) -> io::Result<TerrainInspectionReport> {
+    match (args.structured, args.instances) {
+        (false, false) => Ok(write_text_summary(
+            output.plugin,
+            output.terrain,
+            output.static_index,
+            output.mesh_contacts,
+            output.static_occluders,
+        )),
+        (false, true) => write_instance_text(stdout, output, destination_path, write_plan),
+        (true, false) => Ok(write_structured_summary(
+            output.plugin,
+            output.terrain,
+            output.static_index,
+            output.mesh_contacts,
+            output.static_occluders,
+        )),
+        (true, true) => write_structured_instances(stdout, output, destination_path, write_plan),
+    }
+}
+
+fn write_output_footer(
+    stdout: &mut dyn Write,
+    args: &UnclipArgs,
+    context: &UnclipReportContext,
+    inspection: &TerrainInspectionReport,
 ) -> io::Result<()> {
     match (args.structured, args.instances) {
-        (false, false) => write_text_summary(
-            stdout,
-            output.plugin,
-            output.terrain,
-            output.static_index,
-            output.mesh_contacts,
-            output.static_occluders,
-            output.report,
-        ),
-        (false, true) => write_instance_text(
-            stdout,
-            output.plugin,
-            output.terrain,
-            output.static_index,
-            output.mesh_contacts,
-            output.static_occluders,
-            output.report,
-        ),
-        (true, false) => write_structured_summary(
-            stdout,
-            output.plugin,
-            output.terrain,
-            output.static_index,
-            output.mesh_contacts,
-            output.static_occluders,
-            output.report,
-        ),
-        (true, true) => write_structured_instances(
-            stdout,
-            output.plugin,
-            output.terrain,
-            output.static_index,
-            output.mesh_contacts,
-            output.static_occluders,
-            output.report,
-        ),
+        (false, false) => report::write_summary_text(stdout, context, inspection, true),
+        (false, true) => {
+            writeln!(stdout)?;
+            report::write_summary_text(stdout, context, inspection, true)
+        }
+        (true, false) => report::write_structured_summary(stdout, context, inspection),
+        (true, true) => {
+            report::write_structured_write_records(stdout, context.write.as_ref())?;
+            report::write_structured_summary_record(stdout, context, inspection)
+        }
     }
 }
 
 fn write_text_summary(
-    stdout: &mut dyn Write,
     plugin: &Plugin,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
     static_occluders: &StaticOccluderIndex,
-    context: &UnclipReportContext,
-) -> io::Result<()> {
-    let inspection = count_target_refs(
+) -> TerrainInspectionReport {
+    count_target_refs(
         plugin,
         terrain,
         static_index,
         mesh_contacts,
         static_occluders,
-    );
-    report::write_summary_text(stdout, context, &inspection, true)
+    )
 }
 
 fn write_instance_text(
     stdout: &mut dyn Write,
-    plugin: &Plugin,
-    terrain: &TerrainIndex,
-    static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshContactCache<'_>,
-    static_occluders: &StaticOccluderIndex,
-    context: &UnclipReportContext,
-) -> io::Result<()> {
-    report::write_instance_header(stdout, context)?;
+    output: &mut OutputContext<'_, '_>,
+    destination_path: &Path,
+    write_plan: Option<&WritePlan>,
+) -> io::Result<TerrainInspectionReport> {
+    report::write_instance_header(stdout, output.report)?;
+    let planned_write = write_plan
+        .cloned()
+        .map(|plan| WriteReport::not_written(destination_path, plan));
     let inspection = inspect_target_refs(
-        plugin,
-        terrain,
-        static_index,
-        mesh_contacts,
-        static_occluders,
-        context.write.as_ref(),
+        output.plugin,
+        output.terrain,
+        output.static_index,
+        output.mesh_contacts,
+        output.static_occluders,
+        planned_write.as_ref(),
         |reference| report::write_reference_text(stdout, reference),
     )?;
-    writeln!(stdout)?;
-    report::write_summary_text(stdout, context, &inspection, false)
+    Ok(inspection)
 }
 
 fn write_structured_summary(
-    stdout: &mut dyn Write,
     plugin: &Plugin,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
     static_occluders: &StaticOccluderIndex,
-    context: &UnclipReportContext,
-) -> io::Result<()> {
-    let inspection = count_target_refs(
+) -> TerrainInspectionReport {
+    count_target_refs(
         plugin,
         terrain,
         static_index,
         mesh_contacts,
         static_occluders,
-    );
-    report::write_structured_summary(stdout, context, &inspection)
+    )
 }
 
 fn write_structured_instances(
     stdout: &mut dyn Write,
-    plugin: &Plugin,
-    terrain: &TerrainIndex,
-    static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshContactCache<'_>,
-    static_occluders: &StaticOccluderIndex,
-    context: &UnclipReportContext,
-) -> io::Result<()> {
-    report::write_structured_header(stdout, context)?;
-    report::write_structured_write_records(stdout, context.write.as_ref())?;
+    output: &mut OutputContext<'_, '_>,
+    destination_path: &Path,
+    write_plan: Option<&WritePlan>,
+) -> io::Result<TerrainInspectionReport> {
+    report::write_structured_header(stdout, output.report)?;
+    let planned_write = write_plan
+        .cloned()
+        .map(|plan| WriteReport::not_written(destination_path, plan));
 
     let inspection = inspect_target_refs(
-        plugin,
-        terrain,
-        static_index,
-        mesh_contacts,
-        static_occluders,
-        context.write.as_ref(),
+        output.plugin,
+        output.terrain,
+        output.static_index,
+        output.mesh_contacts,
+        output.static_occluders,
+        planned_write.as_ref(),
         |reference| report::write_structured_reference_record(stdout, reference),
     )?;
-    report::write_structured_summary_record(stdout, context, &inspection)
+    Ok(inspection)
 }
 
 fn resolve_content_plugin_paths(
@@ -1112,9 +1122,15 @@ mod tests {
 
     use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
+    use crate::unclip::{
+        UnclipArgs,
+        model::{TerrainInspectionReport, UnclipReportContext},
+        write_plan::{WriteAdjustment, WritePlan, WriteReport},
+    };
+
     use super::{
         MeshContactResolution, deleted_reference_inspection, effective_active_refs,
-        write_status_label,
+        write_output_footer, write_status_label,
     };
 
     #[test]
@@ -1188,6 +1204,40 @@ mod tests {
         assert!(refs.is_empty());
     }
 
+    #[test]
+    fn structured_instance_footer_writes_changes_before_summary() {
+        let args = UnclipArgs {
+            openmw_cfg: None,
+            plugin: "plugin.omwaddon".into(),
+            instances: true,
+            structured: true,
+            write: true,
+        };
+        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
+        context.write = Some(WriteReport::not_written(
+            std::path::Path::new("plugin.omwaddon"),
+            WritePlan {
+                adjusted_refs: 1,
+                adjustments: vec![write_adjustment()],
+                ..WritePlan::default()
+            },
+        ));
+        let mut output = Vec::new();
+
+        write_output_footer(
+            &mut output,
+            &args,
+            &context,
+            &TerrainInspectionReport::default(),
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        let write_record = output.find("\"type\":\"write_adjustment\"").unwrap();
+        let summary_record = output.find("\"type\":\"summary\"").unwrap();
+        assert!(write_record < summary_record);
+    }
+
     fn reference_at_z(z: f32) -> Reference {
         Reference {
             id: "grass".to_owned(),
@@ -1220,6 +1270,19 @@ mod tests {
             deleted: Some(true),
             id: "rock".to_owned(),
             ..Reference::default()
+        }
+    }
+
+    fn write_adjustment() -> WriteAdjustment {
+        WriteAdjustment {
+            cell: [1, 2],
+            reference_key: [3, 4],
+            id: "grass".to_owned(),
+            old_z: 10.0,
+            new_z: 12.0,
+            applied_delta: 2.0,
+            contact_position: [0.0, 0.0, 7.0],
+            terrain_z: 9.0,
         }
     }
 }

@@ -109,7 +109,7 @@ pub(crate) struct WriteSummary {
     pub(crate) moved_refs: usize,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct WritePlan {
     pub(crate) adjusted_refs: usize,
     pub(crate) deleted_refs: usize,
@@ -134,7 +134,7 @@ impl WritePlan {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct WriteAdjustment {
     pub(crate) cell: [i32; 2],
     pub(crate) reference_key: [u32; 2],
@@ -146,7 +146,7 @@ pub(crate) struct WriteAdjustment {
     pub(crate) terrain_z: f32,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct WriteStaticBoundsDeletion {
     pub(crate) cell: [i32; 2],
     pub(crate) reference_key: [u32; 2],
@@ -157,7 +157,7 @@ pub(crate) struct WriteStaticBoundsDeletion {
     pub(crate) occluder_reference_key: [u32; 2],
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct WriteStaticBoundsMove {
     pub(crate) cell: [i32; 2],
     pub(crate) reference_key: [u32; 2],
