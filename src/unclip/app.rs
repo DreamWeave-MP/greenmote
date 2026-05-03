@@ -330,7 +330,9 @@ fn write_terrain_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary) -
 
 fn write_reference_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary) -> io::Result<()> {
     writeln!(stdout, "References:")?;
-    writeln!(stdout, "  inspected: {}", summary.refs)?;
+    writeln!(stdout, "  total: {}", summary.refs)?;
+    writeln!(stdout, "  inspected: {}", summary.refs_actionable)?;
+    writeln!(stdout, "  deleted/skipped: {}", summary.refs_deleted)?;
     writeln!(
         stdout,
         "  with origin terrain: {}",
@@ -992,6 +994,8 @@ impl UnclipReportContext {
             active_terrain_cells_loaded: self.active_cells - active_terrain_cells_missing,
             active_terrain_cells_missing,
             refs: inspection.refs,
+            refs_actionable: inspection.refs - inspection.refs_deleted,
+            refs_deleted: inspection.refs_deleted,
             refs_with_mesh_contact: inspection.refs_with_mesh_contact,
             refs_without_resolved_static: inspection.refs_without_resolved_static,
             refs_missing_mesh_contact: inspection.refs_missing_mesh_contact,
@@ -1113,6 +1117,8 @@ struct UnclipSummary {
     active_terrain_cells_loaded: usize,
     active_terrain_cells_missing: usize,
     refs: usize,
+    refs_actionable: usize,
+    refs_deleted: usize,
     refs_with_mesh_contact: usize,
     refs_without_resolved_static: usize,
     refs_missing_mesh_contact: usize,
@@ -1170,6 +1176,7 @@ struct MeshContactInspection {
 #[derive(Default)]
 struct TerrainInspectionReport {
     refs: usize,
+    refs_deleted: usize,
     refs_with_mesh_contact: usize,
     refs_without_resolved_static: usize,
     refs_missing_mesh_contact: usize,
@@ -1276,6 +1283,12 @@ fn inspect_reference(
     reference_sink: &mut impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<()> {
     report.refs += 1;
+    if reference.deleted == Some(true) {
+        report.refs_deleted += 1;
+        let inspection = deleted_reference_inspection(cell, key, reference);
+        return reference_sink(&inspection);
+    }
+
     let mesh_contact = resolve_ref_mesh_contact(
         report,
         reference,
@@ -1312,6 +1325,11 @@ fn count_reference(
     reference: &tes3::esp::Reference,
 ) {
     report.refs += 1;
+    if reference.deleted == Some(true) {
+        report.refs_deleted += 1;
+        return;
+    }
+
     let mesh_contact = resolve_ref_mesh_contact(
         report,
         reference,
@@ -1389,6 +1407,31 @@ fn reference_inspection(
                 ContactTerrainClassification::label,
             ),
         }),
+    }
+}
+
+fn deleted_reference_inspection(
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &tes3::esp::Reference,
+) -> ReferenceInspection {
+    ReferenceInspection {
+        cell: [cell.0, cell.1],
+        reference_key: [key.0, key.1],
+        id: reference.id.clone(),
+        static_resolution: "skipped_deleted_ref",
+        mesh_contact_status: "skipped_deleted_ref",
+        deleted: true,
+        write_status: "skipped_deleted_ref",
+        origin: OriginInspection {
+            position: reference.translation,
+            terrain_z: None,
+            delta: None,
+            classification: "skipped_deleted_ref",
+        },
+        static_mesh: None,
+        mesh_contact_error: None,
+        mesh_contact: None,
     }
 }
 
@@ -1622,8 +1665,8 @@ mod tests {
 
     use super::{
         MeshContactResolution, WriteAdjustment, WritePlan, WriteReport, adjusted_ref_keys,
-        apply_contact_adjustment, next_numbered_backup_path, prepare_plugin_backup,
-        replace_with_temp, write_status_label, write_write_summary_text,
+        apply_contact_adjustment, deleted_reference_inspection, next_numbered_backup_path,
+        prepare_plugin_backup, replace_with_temp, write_status_label, write_write_summary_text,
     };
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
@@ -1820,6 +1863,21 @@ mod tests {
 
         assert!(report.is_adjusted((1, 2), (3, 4)));
         assert!(!report.is_adjusted((1, 2), (3, 5)));
+    }
+
+    #[test]
+    fn deleted_reference_inspection_skips_actionable_details() {
+        let mut reference = reference_at_z(10.0);
+        reference.deleted = Some(true);
+
+        let inspection = deleted_reference_inspection((1, 2), (3, 4), &reference);
+
+        assert!(inspection.deleted);
+        assert_eq!(inspection.static_resolution, "skipped_deleted_ref");
+        assert_eq!(inspection.mesh_contact_status, "skipped_deleted_ref");
+        assert_eq!(inspection.write_status, "skipped_deleted_ref");
+        assert!(inspection.static_mesh.is_none());
+        assert!(inspection.mesh_contact.is_none());
     }
 
     fn reference_at_z(z: f32) -> Reference {
