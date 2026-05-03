@@ -296,7 +296,7 @@ fn write_static_bounds_summary_text(
     writeln!(
         stdout,
         "  relocatable: {}",
-        summary.refs_static_bounds_lightly_occluded
+        summary.refs_static_bounds_relocatable
     )?;
     writeln!(stdout, "  blocked: {}", summary.refs_static_bounds_blocked)
 }
@@ -470,7 +470,7 @@ struct StructuredWriteMoveRecord<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::write_summary_text;
+    use super::{write_structured_write_records, write_summary_text};
     use crate::unclip::{
         model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
@@ -511,10 +511,37 @@ mod tests {
         assert!(!without_adjustments.contains("WRITE CELL"));
     }
 
+    #[test]
+    fn structured_write_records_use_sorted_write_report_order() {
+        let report = WriteReport::not_written(
+            std::path::Path::new("plugin.omwaddon"),
+            WritePlan {
+                adjusted_refs: 2,
+                adjustments: vec![
+                    write_adjustment_at([1, 0], [4, 0]),
+                    write_adjustment_at([0, 0], [9, 0]),
+                ],
+                ..WritePlan::default()
+            },
+        );
+        let mut output = Vec::new();
+
+        write_structured_write_records(&mut output, Some(&report)).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        let first = output.find("\"cell\":[0,0]").unwrap();
+        let second = output.find("\"cell\":[1,0]").unwrap();
+        assert!(first < second);
+    }
+
     fn write_adjustment() -> WriteAdjustment {
+        write_adjustment_at([1, 2], [3, 4])
+    }
+
+    fn write_adjustment_at(cell: [i32; 2], reference_key: [u32; 2]) -> WriteAdjustment {
         WriteAdjustment {
-            cell: [1, 2],
-            reference_key: [3, 4],
+            cell,
+            reference_key,
             id: "grass".to_owned(),
             old_z: 10.0,
             new_z: 12.0,

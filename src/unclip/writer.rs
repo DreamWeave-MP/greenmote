@@ -14,6 +14,8 @@ pub(crate) fn save_plugin_with_backup(
         fs::create_dir_all(parent)?;
     }
 
+    let backup = prepare_plugin_backup(source_path, destination_path)?;
+
     let temp_path = next_temp_plugin_path(destination_path);
     if let Err(error) = plugin.save_path(&temp_path) {
         let _ = fs::remove_file(&temp_path);
@@ -25,14 +27,6 @@ pub(crate) fn save_plugin_with_backup(
             ),
         ));
     }
-
-    let backup = match prepare_plugin_backup(source_path, destination_path) {
-        Ok(backup) => backup,
-        Err(error) => {
-            let _ = fs::remove_file(&temp_path);
-            return Err(error);
-        }
-    };
 
     let had_destination = path_entry_exists(destination_path);
     if let Err(error) = replace_with_temp(

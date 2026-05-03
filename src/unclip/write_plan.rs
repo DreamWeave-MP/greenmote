@@ -49,8 +49,9 @@ impl WriteReport {
         written: bool,
         destination_path: &Path,
         backup_plugin: Option<String>,
-        plan: WritePlan,
+        mut plan: WritePlan,
     ) -> Self {
+        plan.sort_records();
         let adjusted_ref_keys = adjusted_ref_keys(&plan.adjustments);
         let deleted_ref_keys = adjusted_ref_keys_from_deletions(&plan.deletions);
         let moved_ref_keys = adjusted_ref_keys_from_moves(&plan.moves);
@@ -121,6 +122,15 @@ pub(crate) struct WritePlan {
 impl WritePlan {
     pub(crate) const fn changed_refs(&self) -> usize {
         self.adjusted_refs + self.deleted_refs + self.moved_refs
+    }
+
+    fn sort_records(&mut self) {
+        self.adjustments
+            .sort_by_key(|adjustment| (adjustment.cell, adjustment.reference_key));
+        self.deletions
+            .sort_by_key(|deletion| (deletion.cell, deletion.reference_key));
+        self.moves
+            .sort_by_key(|move_| (move_.cell, move_.reference_key));
     }
 }
 
@@ -215,7 +225,7 @@ fn adjusted_ref_keys_from_moves(moves: &[WriteStaticBoundsMove]) -> BTreeSet<Adj
 mod tests {
     use std::path::Path;
 
-    use super::{WriteAdjustment, WritePlan, WriteReport};
+    use super::{WriteAdjustment, WritePlan, WriteReport, WriteStaticBoundsDeletion};
 
     #[test]
     fn write_report_uses_adjusted_key_set() {
@@ -232,16 +242,58 @@ mod tests {
         assert!(!report.is_adjusted((1, 2), (3, 5)));
     }
 
+    #[test]
+    fn write_report_sorts_change_records() {
+        let report = WriteReport::not_written(
+            Path::new("plugin.omwaddon"),
+            WritePlan {
+                adjusted_refs: 2,
+                deleted_refs: 2,
+                adjustments: vec![
+                    write_adjustment_at([1, 0], [4, 0]),
+                    write_adjustment_at([0, 0], [9, 0]),
+                ],
+                deletions: vec![
+                    write_deletion_at([1, 0], [4, 0]),
+                    write_deletion_at([0, 0], [9, 0]),
+                ],
+                ..WritePlan::default()
+            },
+        );
+
+        assert_eq!(report.adjustments[0].cell, [0, 0]);
+        assert_eq!(report.adjustments[0].reference_key, [9, 0]);
+        assert_eq!(report.adjustments[1].cell, [1, 0]);
+        assert_eq!(report.deletions[0].cell, [0, 0]);
+        assert_eq!(report.deletions[1].cell, [1, 0]);
+    }
+
     fn write_adjustment() -> WriteAdjustment {
+        write_adjustment_at([1, 2], [3, 4])
+    }
+
+    fn write_adjustment_at(cell: [i32; 2], reference_key: [u32; 2]) -> WriteAdjustment {
         WriteAdjustment {
-            cell: [1, 2],
-            reference_key: [3, 4],
+            cell,
+            reference_key,
             id: "grass".to_owned(),
             old_z: 10.0,
             new_z: 12.0,
             applied_delta: 2.0,
             contact_position: [0.0, 0.0, 7.0],
             terrain_z: 9.0,
+        }
+    }
+
+    fn write_deletion_at(cell: [i32; 2], reference_key: [u32; 2]) -> WriteStaticBoundsDeletion {
+        WriteStaticBoundsDeletion {
+            cell,
+            reference_key,
+            id: "grass".to_owned(),
+            occlusion_ratio: 1.0,
+            occluder_id: "rock".to_owned(),
+            occluder_cell: [0, 0],
+            occluder_reference_key: [1, 0],
         }
     }
 }

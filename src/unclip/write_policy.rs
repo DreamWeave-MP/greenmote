@@ -34,19 +34,33 @@ pub(crate) fn apply_unclip_adjustments(
     static_occluders: &StaticOccluderIndex,
 ) -> WritePlan {
     let mut plan = WritePlan::default();
+    let mut exterior_cells = plugin
+        .objects
+        .iter()
+        .enumerate()
+        .filter_map(|(index, object)| {
+            let TES3Object::Cell(cell) = object else {
+                return None;
+            };
+            cell.is_exterior().then_some((cell.data.grid, index))
+        })
+        .collect::<Vec<_>>();
+    exterior_cells.sort_unstable();
 
-    for object in &mut plugin.objects {
-        let TES3Object::Cell(cell) = object else {
-            continue;
+    for (cell_grid, object_index) in exterior_cells {
+        let TES3Object::Cell(cell) = &mut plugin.objects[object_index] else {
+            unreachable!("sorted exterior cell index should still point to a CELL")
         };
-        if !cell.is_exterior() {
-            continue;
-        }
+        let mut reference_keys = cell.references.keys().copied().collect::<Vec<_>>();
+        reference_keys.sort_unstable();
 
-        for (key, reference) in &mut cell.references {
+        for key in reference_keys {
+            let Some(reference) = cell.references.get_mut(&key) else {
+                continue;
+            };
             let change = adjust_reference_for_terrain_and_static_bounds(
-                cell.data.grid,
-                *key,
+                cell_grid,
+                key,
                 reference,
                 terrain,
                 static_index,

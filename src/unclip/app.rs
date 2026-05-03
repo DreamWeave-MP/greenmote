@@ -913,7 +913,7 @@ fn classify_static_bounds_occlusion(
             .is_some() =>
         {
             report.refs_static_bounds_occluded += 1;
-            report.refs_static_bounds_lightly_occluded += 1;
+            report.refs_static_bounds_relocatable += 1;
             ("static_bounds_relocatable", ratio)
         }
         StaticBoundsAction::Move { ratio, .. } => {
