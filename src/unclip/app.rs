@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs, io, io::Write, path::PathBuf};
+use std::{collections::BTreeMap, collections::BTreeSet, fs, io, io::Write, path::PathBuf};
 
 use serde::Serialize;
 use tes3::esp::{Cell, Landscape, Plugin, Static, TES3Object};
@@ -8,12 +8,26 @@ use crate::groundcover::openmw;
 use super::{
     UnclipArgs,
     cells::{CellCoord, active_grid},
-    mesh::{MeshContactCache, StaticMeshIndex},
+    mesh::{MeshContactCache, StaticMeshIndex, WorldAabb},
     terrain::TerrainIndex,
 };
 
 const ORIGIN_TERRAIN_EPSILON: f32 = 0.5;
 const CONTACT_TERRAIN_EPSILON: f32 = 0.5;
+const STATIC_BOUNDS_OCCLUSION_RELOCATE_LIMIT: f32 = 0.10;
+const RELOCATION_STEP: f32 = 32.0;
+const RELOCATION_STEPS: u16 = 8;
+const CELL_SIZE: f32 = 8192.0;
+const RELOCATION_DIRECTIONS: &[[f32; 2]] = &[
+    [1.0, 0.0],
+    [-1.0, 0.0],
+    [0.0, 1.0],
+    [0.0, -1.0],
+    [0.707_106_77, 0.707_106_77],
+    [0.707_106_77, -0.707_106_77],
+    [-0.707_106_77, 0.707_106_77],
+    [-0.707_106_77, -0.707_106_77],
+];
 
 pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     let openmw_config = openmw::load_config_from_path(args.openmw_cfg.as_deref())?;
@@ -21,20 +35,30 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     let target_plugin = resolve_target_plugin(&args.plugin, &openmw_config, &vfs)?;
     let mut target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
     let content_files = openmw::content_files(&openmw_config)?;
-    let terrain_plugin_paths = resolve_content_plugin_paths(&content_files, &vfs)?;
-    let terrain_plugins = load_terrain_plugins(&terrain_plugin_paths)?;
-    let target_is_active = path_matches_any(&target_plugin.source_path, &terrain_plugin_paths);
-    let static_index = build_static_index(
-        &terrain_plugins,
+    let context_plugin_paths = resolve_content_plugin_paths(&content_files, &vfs)?;
+    let context_plugins = load_context_plugins(&context_plugin_paths)?;
+    let target_is_active = path_matches_any(&target_plugin.source_path, &context_plugin_paths);
+    let active_static_index = build_static_index(&context_plugins, None);
+    let target_static_index = build_static_index(
+        &context_plugins,
         (!target_is_active).then_some(&target_plugin_data),
     );
     let terrain = TerrainIndex::from_landscapes(
-        terrain_plugins
+        context_plugins
             .iter()
             .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
     );
     let target_cells = target_exterior_cells(&target_plugin_data);
     let active_cells = active_cells(&target_cells)?;
+    let target_static_ids = target_reference_static_ids(&target_plugin_data);
+    let mut context_meshes = MeshContactCache::new(&vfs);
+    let static_occluders = build_static_occluders(
+        &context_plugins,
+        &active_cells,
+        &active_static_index,
+        &mut context_meshes,
+        &target_static_ids,
+    );
     let missing_active_terrain_cells = active_cells
         .iter()
         .copied()
@@ -52,10 +76,11 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         let write_plan = apply_unclip_adjustments(
             &mut target_plugin_data,
             &terrain,
-            &static_index,
+            &target_static_index,
             &mut mesh_contacts,
+            &static_occluders,
         );
-        let write_report = if write_plan.adjusted_refs == 0 {
+        let write_report = if write_plan.changed_refs() == 0 {
             WriteReport::not_written(&target_plugin.destination_path, write_plan)
         } else {
             save_plugin_with_backup(
@@ -69,60 +94,69 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     }
 
     let mut mesh_contacts = MeshContactCache::new(&vfs);
-    write_output(
-        stdout,
-        &target_plugin_data,
-        &terrain,
-        &static_index,
-        &mut mesh_contacts,
-        &report_context,
-        args,
-    )?;
+    let mut output = OutputContext {
+        plugin: &target_plugin_data,
+        terrain: &terrain,
+        static_index: &target_static_index,
+        mesh_contacts: &mut mesh_contacts,
+        static_occluders: &static_occluders,
+        report: &report_context,
+    };
+    write_output(stdout, args, &mut output)?;
 
     Ok(())
 }
 
+struct OutputContext<'a, 'b> {
+    plugin: &'a Plugin,
+    terrain: &'a TerrainIndex,
+    static_index: &'a StaticMeshIndex,
+    mesh_contacts: &'a mut MeshContactCache<'b>,
+    static_occluders: &'a StaticOccluderIndex,
+    report: &'a UnclipReportContext,
+}
+
 fn write_output(
     stdout: &mut dyn Write,
-    plugin: &Plugin,
-    terrain: &TerrainIndex,
-    static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshContactCache<'_>,
-    context: &UnclipReportContext,
     args: &UnclipArgs,
+    output: &mut OutputContext<'_, '_>,
 ) -> io::Result<()> {
     match (args.structured, args.instances) {
         (false, false) => write_text_summary(
             stdout,
-            plugin,
-            terrain,
-            static_index,
-            mesh_contacts,
-            context,
+            output.plugin,
+            output.terrain,
+            output.static_index,
+            output.mesh_contacts,
+            output.static_occluders,
+            output.report,
         ),
         (false, true) => write_instance_text(
             stdout,
-            plugin,
-            terrain,
-            static_index,
-            mesh_contacts,
-            context,
+            output.plugin,
+            output.terrain,
+            output.static_index,
+            output.mesh_contacts,
+            output.static_occluders,
+            output.report,
         ),
         (true, false) => write_structured_summary(
             stdout,
-            plugin,
-            terrain,
-            static_index,
-            mesh_contacts,
-            context,
+            output.plugin,
+            output.terrain,
+            output.static_index,
+            output.mesh_contacts,
+            output.static_occluders,
+            output.report,
         ),
         (true, true) => write_structured_instances(
             stdout,
-            plugin,
-            terrain,
-            static_index,
-            mesh_contacts,
-            context,
+            output.plugin,
+            output.terrain,
+            output.static_index,
+            output.mesh_contacts,
+            output.static_occluders,
+            output.report,
         ),
     }
 }
@@ -133,9 +167,16 @@ fn write_text_summary(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
+    static_occluders: &StaticOccluderIndex,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
-    let inspection = count_target_refs(plugin, terrain, static_index, mesh_contacts);
+    let inspection = count_target_refs(
+        plugin,
+        terrain,
+        static_index,
+        mesh_contacts,
+        static_occluders,
+    );
     write_summary_text(stdout, context, &inspection, true)
 }
 
@@ -145,17 +186,24 @@ fn write_instance_text(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
+    static_occluders: &StaticOccluderIndex,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
     writeln!(stdout, "Unclip reference diagnostics")?;
     writeln!(stdout, "Target plugin: {}", context.target_plugin)?;
     if let Some(write) = &context.write
-        && !write.adjustments.is_empty()
+        && (!write.adjustments.is_empty() || !write.deletions.is_empty() || !write.moves.is_empty())
     {
         writeln!(stdout)?;
-        writeln!(stdout, "Write adjustments")?;
+        writeln!(stdout, "Write changes")?;
         for adjustment in &write.adjustments {
             write_adjustment_text(stdout, adjustment)?;
+        }
+        for deletion in &write.deletions {
+            write_static_bounds_deletion_text(stdout, deletion)?;
+        }
+        for move_ in &write.moves {
+            write_static_bounds_move_text(stdout, move_)?;
         }
     }
     writeln!(stdout)?;
@@ -164,6 +212,7 @@ fn write_instance_text(
         terrain,
         static_index,
         mesh_contacts,
+        static_occluders,
         context.write.as_ref(),
         |reference| write_reference_text(stdout, reference),
     )?;
@@ -177,9 +226,16 @@ fn write_structured_summary(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
+    static_occluders: &StaticOccluderIndex,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
-    let inspection = count_target_refs(plugin, terrain, static_index, mesh_contacts);
+    let inspection = count_target_refs(
+        plugin,
+        terrain,
+        static_index,
+        mesh_contacts,
+        static_occluders,
+    );
     let report = StructuredSummaryReport {
         kind: "greenmote_unclip_terrain_inspection",
         target_plugin: &context.target_plugin,
@@ -197,6 +253,7 @@ fn write_structured_instances(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
+    static_occluders: &StaticOccluderIndex,
     context: &UnclipReportContext,
 ) -> io::Result<()> {
     let header_write = context.write.as_ref().map(WriteReport::summary);
@@ -219,6 +276,22 @@ fn write_structured_instances(
             write_json(stdout, &record)?;
             writeln!(stdout)?;
         }
+        for deletion in &write.deletions {
+            let record = StructuredWriteDeletionRecord {
+                r#type: "write_static_bounds_deletion",
+                deletion,
+            };
+            write_json(stdout, &record)?;
+            writeln!(stdout)?;
+        }
+        for move_ in &write.moves {
+            let record = StructuredWriteMoveRecord {
+                r#type: "write_static_bounds_move",
+                move_,
+            };
+            write_json(stdout, &record)?;
+            writeln!(stdout)?;
+        }
     }
 
     let inspection = inspect_target_refs(
@@ -226,6 +299,7 @@ fn write_structured_instances(
         terrain,
         static_index,
         mesh_contacts,
+        static_occluders,
         context.write.as_ref(),
         |reference| {
             let record = StructuredReferenceRecord {
@@ -272,6 +346,8 @@ fn write_summary_text(
     writeln!(stdout)?;
     write_mesh_contact_summary_text(stdout, &summary)?;
     writeln!(stdout)?;
+    write_static_bounds_summary_text(stdout, &summary)?;
+    writeln!(stdout)?;
     write_threshold_summary_text(stdout, &summary)
 }
 
@@ -289,14 +365,22 @@ fn write_write_summary_text(
         } else {
             writeln!(
                 stdout,
-                "No plugin written: no refs were adjusted at {}",
+                "No plugin written: no refs changed at {}",
                 write.destination_plugin
             )?;
         }
         writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
+        writeln!(stdout, "Deleted refs: {}", write.deleted_refs)?;
+        writeln!(stdout, "Moved refs: {}", write.moved_refs)?;
         if include_adjustments {
             for adjustment in &write.adjustments {
                 write_adjustment_text(stdout, adjustment)?;
+            }
+            for deletion in &write.deletions {
+                write_static_bounds_deletion_text(stdout, deletion)?;
+            }
+            for move_ in &write.moves {
+                write_static_bounds_move_text(stdout, move_)?;
             }
         }
     }
@@ -399,7 +483,35 @@ fn write_threshold_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary)
         stdout,
         "  mesh contact terrain epsilon: {:.3}",
         summary.mesh_contact_terrain_epsilon
+    )?;
+    writeln!(
+        stdout,
+        "  static bounds relocate limit: {:.3}",
+        summary.static_bounds_occlusion_relocate_limit
     )
+}
+
+fn write_static_bounds_summary_text(
+    stdout: &mut dyn Write,
+    summary: &UnclipSummary,
+) -> io::Result<()> {
+    writeln!(stdout, "Static bounds occlusion:")?;
+    writeln!(
+        stdout,
+        "  occluded: {}",
+        summary.refs_static_bounds_occluded
+    )?;
+    writeln!(
+        stdout,
+        "  fully occluded: {}",
+        summary.refs_static_bounds_fully_occluded
+    )?;
+    writeln!(
+        stdout,
+        "  lightly occluded: {}",
+        summary.refs_static_bounds_lightly_occluded
+    )?;
+    writeln!(stdout, "  blocked: {}", summary.refs_static_bounds_blocked)
 }
 
 fn write_reference_text(stdout: &mut dyn Write, reference: &ReferenceInspection) -> io::Result<()> {
@@ -437,6 +549,13 @@ fn write_reference_text(stdout: &mut dyn Write, reference: &ReferenceInspection)
             contact.classification
         )?;
     }
+    if let Some(occlusion) = &reference.static_bounds_occlusion {
+        writeln!(
+            stdout,
+            "  static bounds occlusion: status={} ratio={:.3}",
+            occlusion.status, occlusion.ratio
+        )?;
+    }
     Ok(())
 }
 
@@ -452,6 +571,42 @@ fn write_adjustment_text(stdout: &mut dyn Write, adjustment: &WriteAdjustment) -
         adjustment.applied_delta,
         adjustment.contact_position,
         adjustment.terrain_z
+    )
+}
+
+fn write_static_bounds_deletion_text(
+    stdout: &mut dyn Write,
+    deletion: &WriteStaticBoundsDeletion,
+) -> io::Result<()> {
+    writeln!(
+        stdout,
+        "DELETE_STATIC_BOUNDS CELL {:?} REF {:?} {} ratio={:.3} occluder={} occluder_cell={:?} occluder_ref={:?}",
+        deletion.cell,
+        deletion.reference_key,
+        deletion.id,
+        deletion.occlusion_ratio,
+        deletion.occluder_id,
+        deletion.occluder_cell,
+        deletion.occluder_reference_key
+    )
+}
+
+fn write_static_bounds_move_text(
+    stdout: &mut dyn Write,
+    move_: &WriteStaticBoundsMove,
+) -> io::Result<()> {
+    writeln!(
+        stdout,
+        "MOVE_STATIC_BOUNDS CELL {:?} REF {:?} {} ratio={:.3} old_position={:?} new_position={:?} occluder={} occluder_cell={:?} occluder_ref={:?}",
+        move_.cell,
+        move_.reference_key,
+        move_.id,
+        move_.occlusion_ratio,
+        move_.old_position,
+        move_.new_position,
+        move_.occluder_id,
+        move_.occluder_cell,
+        move_.occluder_reference_key
     )
 }
 
@@ -556,6 +711,7 @@ fn apply_unclip_adjustments(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
+    static_occluders: &StaticOccluderIndex,
 ) -> WritePlan {
     let mut plan = WritePlan::default();
 
@@ -568,16 +724,29 @@ fn apply_unclip_adjustments(
         }
 
         for (key, reference) in &mut cell.references {
-            if let Some(adjustment) = adjust_reference_z(
+            let change = adjust_reference_for_terrain_and_static_bounds(
                 cell.data.grid,
                 *key,
                 reference,
                 terrain,
                 static_index,
                 mesh_contacts,
-            ) {
-                plan.adjusted_refs += 1;
-                plan.adjustments.push(adjustment);
+                static_occluders,
+            );
+            match change {
+                WriteReferenceChange::None => {}
+                WriteReferenceChange::AdjustZ(adjustment) => {
+                    plan.adjusted_refs += 1;
+                    plan.adjustments.push(adjustment);
+                }
+                WriteReferenceChange::Delete(deletion) => {
+                    plan.deleted_refs += 1;
+                    plan.deletions.push(deletion);
+                }
+                WriteReferenceChange::Move(move_) => {
+                    plan.moved_refs += 1;
+                    plan.moves.push(move_);
+                }
             }
         }
     }
@@ -585,25 +754,198 @@ fn apply_unclip_adjustments(
     plan
 }
 
-fn adjust_reference_z(
+enum WriteReferenceChange {
+    None,
+    AdjustZ(WriteAdjustment),
+    Delete(WriteStaticBoundsDeletion),
+    Move(WriteStaticBoundsMove),
+}
+
+#[derive(Clone, Copy)]
+struct StaticBoundsMoveCause<'a> {
+    ratio: f32,
+    occluder: &'a StaticOccluder,
+}
+
+fn adjust_reference_for_terrain_and_static_bounds(
     cell: CellCoord,
     key: (u32, u32),
     reference: &mut tes3::esp::Reference,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
-) -> Option<WriteAdjustment> {
+    static_occluders: &StaticOccluderIndex,
+) -> WriteReferenceChange {
     if reference.deleted == Some(true) {
-        return None;
+        return WriteReferenceChange::None;
     }
-    let static_mesh = static_index.get(&reference.id)?;
-    let Ok(contact) = mesh_contacts.contact(&static_mesh.mesh_path) else {
-        return None;
+    let Some(static_mesh) = static_index.get(&reference.id) else {
+        return WriteReferenceChange::None;
     };
-    let position =
-        contact.world_position(reference.translation, reference.rotation, reference.scale);
-    let terrain_z = terrain.height_at(position[0], position[1])?;
-    apply_contact_adjustment(cell, key, reference, position, terrain_z)
+    let Ok(geometry) = mesh_contacts.geometry(&static_mesh.mesh_path) else {
+        return WriteReferenceChange::None;
+    };
+
+    let contact_position =
+        geometry
+            .contact
+            .world_position(reference.translation, reference.rotation, reference.scale);
+    let terrain_z = terrain.height_at(contact_position[0], contact_position[1]);
+    let mut corrected_translation = reference.translation;
+    if let Some(terrain_z) = terrain_z {
+        corrected_translation[2] -= contact_position[2] - terrain_z;
+    }
+    let mut corrected_reference = reference.clone();
+    corrected_reference.translation = corrected_translation;
+
+    match decide_static_bounds_action(
+        geometry
+            .bounds
+            .world_aabb(corrected_translation, reference.rotation, reference.scale),
+        static_occluders,
+    ) {
+        StaticBoundsAction::None | StaticBoundsAction::Blocked { .. } => {}
+        StaticBoundsAction::Delete { ratio, occluder } => {
+            reference.deleted = Some(true);
+            return WriteReferenceChange::Delete(WriteStaticBoundsDeletion {
+                cell: [cell.0, cell.1],
+                reference_key: [key.0, key.1],
+                id: reference.id.clone(),
+                occlusion_ratio: ratio,
+                occluder_id: occluder.id.clone(),
+                occluder_cell: occluder.cell,
+                occluder_reference_key: occluder.reference_key,
+            });
+        }
+        StaticBoundsAction::Move {
+            ratio, occluder, ..
+        } => {
+            let Some(move_) = apply_static_bounds_move(
+                cell,
+                key,
+                &mut corrected_reference,
+                geometry,
+                terrain,
+                static_occluders,
+                StaticBoundsMoveCause { ratio, occluder },
+            ) else {
+                let Some(terrain_z) = terrain_z else {
+                    return WriteReferenceChange::None;
+                };
+                return apply_contact_adjustment(cell, key, reference, contact_position, terrain_z)
+                    .map_or(WriteReferenceChange::None, WriteReferenceChange::AdjustZ);
+            };
+            reference.translation = corrected_reference.translation;
+            return WriteReferenceChange::Move(move_);
+        }
+    }
+
+    let Some(terrain_z) = terrain_z else {
+        return WriteReferenceChange::None;
+    };
+    apply_contact_adjustment(cell, key, reference, contact_position, terrain_z)
+        .map_or(WriteReferenceChange::None, WriteReferenceChange::AdjustZ)
+}
+
+fn apply_static_bounds_move(
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &mut tes3::esp::Reference,
+    geometry: &super::mesh::MeshGeometry,
+    terrain: &TerrainIndex,
+    static_occluders: &StaticOccluderIndex,
+    cause: StaticBoundsMoveCause<'_>,
+) -> Option<WriteStaticBoundsMove> {
+    let old_position = reference.translation;
+    let new_position = find_valid_relocation_position(
+        cell,
+        reference,
+        &geometry.contact,
+        geometry.bounds,
+        terrain,
+        static_occluders,
+    )?;
+    reference.translation = new_position;
+
+    Some(WriteStaticBoundsMove {
+        cell: [cell.0, cell.1],
+        reference_key: [key.0, key.1],
+        id: reference.id.clone(),
+        occlusion_ratio: cause.ratio,
+        old_position,
+        new_position,
+        occluder_id: cause.occluder.id.clone(),
+        occluder_cell: cause.occluder.cell,
+        occluder_reference_key: cause.occluder.reference_key,
+    })
+}
+
+fn find_valid_relocation_position(
+    cell: CellCoord,
+    reference: &tes3::esp::Reference,
+    contact: &super::mesh::MeshContact,
+    bounds: super::mesh::MeshAabb,
+    terrain: &TerrainIndex,
+    static_occluders: &StaticOccluderIndex,
+) -> Option<[f32; 3]> {
+    let original = [reference.translation[0], reference.translation[1]];
+    let grass_bounds =
+        bounds.world_aabb(reference.translation, reference.rotation, reference.scale);
+
+    for step in 1..=RELOCATION_STEPS {
+        let radius = f32::from(step) * RELOCATION_STEP;
+        for direction in RELOCATION_DIRECTIONS {
+            let candidate_xy = [
+                original[0] + direction[0] * radius,
+                original[1] + direction[1] * radius,
+            ];
+            if !cell_contains_xy(cell, candidate_xy) {
+                continue;
+            }
+
+            let moved_bounds = translate_bounds_xy(
+                grass_bounds,
+                candidate_xy[0] - original[0],
+                candidate_xy[1] - original[1],
+            );
+            if static_bounds_occlusion_ratio(
+                moved_bounds,
+                &static_occluders.bounds_for(moved_bounds),
+            ) > f32::EPSILON
+            {
+                continue;
+            }
+
+            let mut candidate_translation = reference.translation;
+            candidate_translation[0] = candidate_xy[0];
+            candidate_translation[1] = candidate_xy[1];
+            let contact_position =
+                contact.world_position(candidate_translation, reference.rotation, reference.scale);
+            let terrain_z = terrain.height_at(contact_position[0], contact_position[1])?;
+            candidate_translation[2] -= contact_position[2] - terrain_z;
+            let final_bounds =
+                bounds.world_aabb(candidate_translation, reference.rotation, reference.scale);
+            if static_bounds_occlusion_ratio(
+                final_bounds,
+                &static_occluders.bounds_for(final_bounds),
+            ) <= f32::EPSILON
+            {
+                return Some(candidate_translation);
+            }
+        }
+    }
+
+    None
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn cell_contains_xy(cell: CellCoord, position: [f32; 2]) -> bool {
+    let min_x = cell.0 as f32 * CELL_SIZE;
+    let min_y = cell.1 as f32 * CELL_SIZE;
+    position[0] >= min_x
+        && position[0] < min_x + CELL_SIZE
+        && position[1] >= min_y
+        && position[1] < min_y + CELL_SIZE
 }
 
 fn apply_contact_adjustment(
@@ -671,13 +1013,23 @@ fn save_plugin_with_backup(
         return Err(error);
     }
 
+    let adjusted_ref_keys = adjusted_ref_keys(&plan.adjustments);
+    let deleted_ref_keys = adjusted_ref_keys_from_deletions(&plan.deletions);
+    let moved_ref_keys = adjusted_ref_keys_from_moves(&plan.moves);
+
     Ok(WriteReport {
         written: true,
         destination_plugin: destination_path.display().to_string(),
         backup_plugin: backup.path().map(|path| path.display().to_string()),
         adjusted_refs: plan.adjusted_refs,
-        adjusted_ref_keys: adjusted_ref_keys(&plan.adjustments),
+        deleted_refs: plan.deleted_refs,
+        moved_refs: plan.moved_refs,
+        adjusted_ref_keys,
+        deleted_ref_keys,
+        moved_ref_keys,
         adjustments: plan.adjustments,
+        deletions: plan.deletions,
+        moves: plan.moves,
     })
 }
 
@@ -850,17 +1202,22 @@ fn same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
     left == right
 }
 
-fn load_terrain_plugins(paths: &[PathBuf]) -> io::Result<Vec<Plugin>> {
+fn load_context_plugins(paths: &[PathBuf]) -> io::Result<Vec<Plugin>> {
     paths
         .iter()
         .map(|path| {
-            Plugin::from_path_filtered(path, |tag| &tag == Landscape::TAG || &tag == Static::TAG)
-                .map_err(|error| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("failed to load terrain from {}: {error}", path.display()),
-                    )
-                })
+            Plugin::from_path_filtered(path, |tag| {
+                &tag == Landscape::TAG || &tag == Static::TAG || &tag == Cell::TAG
+            })
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "failed to load unclip context from {}: {error}",
+                        path.display()
+                    ),
+                )
+            })
         })
         .collect()
 }
@@ -911,6 +1268,249 @@ fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTreeSet<CellC
     Ok(cells)
 }
 
+fn target_reference_static_ids(plugin: &Plugin) -> BTreeSet<String> {
+    plugin
+        .objects_of_type::<Cell>()
+        .filter(|cell| cell.is_exterior())
+        .flat_map(|cell| cell.references.values())
+        .filter(|reference| reference.deleted != Some(true))
+        .map(|reference| reference.id.to_lowercase())
+        .collect()
+}
+
+#[derive(Clone)]
+struct StaticOccluder {
+    id: String,
+    cell: [i32; 2],
+    reference_key: [u32; 2],
+    bounds: WorldAabb,
+}
+
+#[derive(Default)]
+struct StaticOccluderIndex {
+    occluders: Vec<StaticOccluder>,
+}
+
+impl StaticOccluderIndex {
+    fn candidates_for(&self, bounds: WorldAabb) -> Vec<&StaticOccluder> {
+        self.occluders
+            .iter()
+            .filter(|occluder| occluder.bounds.intersects_xy(bounds))
+            .collect()
+    }
+
+    fn bounds_for(&self, bounds: WorldAabb) -> Vec<WorldAabb> {
+        self.candidates_for(bounds)
+            .into_iter()
+            .map(|occluder| occluder.bounds)
+            .collect()
+    }
+}
+
+enum StaticBoundsAction<'a> {
+    None,
+    Delete {
+        ratio: f32,
+        occluder: &'a StaticOccluder,
+    },
+    Move {
+        ratio: f32,
+        occluder: &'a StaticOccluder,
+    },
+    Blocked {
+        ratio: f32,
+    },
+}
+
+fn decide_static_bounds_action(
+    grass_bounds: WorldAabb,
+    static_occluders: &StaticOccluderIndex,
+) -> StaticBoundsAction<'_> {
+    let candidates = static_occluders.candidates_for(grass_bounds);
+    if let Some(occluder) = candidates
+        .iter()
+        .copied()
+        .find(|occluder| occluder.bounds.contains(grass_bounds))
+    {
+        return StaticBoundsAction::Delete {
+            ratio: 1.0,
+            occluder,
+        };
+    }
+
+    let candidate_bounds = candidates
+        .iter()
+        .map(|occluder| occluder.bounds)
+        .collect::<Vec<_>>();
+    let ratio = static_bounds_occlusion_ratio(grass_bounds, &candidate_bounds);
+    if ratio <= f32::EPSILON {
+        return StaticBoundsAction::None;
+    }
+    let Some(occluder) = primary_occluder(grass_bounds, &candidates) else {
+        return StaticBoundsAction::None;
+    };
+    if ratio <= STATIC_BOUNDS_OCCLUSION_RELOCATE_LIMIT {
+        return StaticBoundsAction::Move { ratio, occluder };
+    }
+
+    StaticBoundsAction::Blocked { ratio }
+}
+
+fn primary_occluder<'a>(
+    grass_bounds: WorldAabb,
+    occluders: &[&'a StaticOccluder],
+) -> Option<&'a StaticOccluder> {
+    occluders
+        .iter()
+        .copied()
+        .filter_map(|occluder| {
+            grass_bounds
+                .intersection(occluder.bounds)
+                .map(|intersection| (occluder, intersection.volume()))
+        })
+        .max_by(|(_, left), (_, right)| left.total_cmp(right))
+        .map(|(occluder, _)| occluder)
+}
+
+fn static_bounds_occlusion_ratio(grass_bounds: WorldAabb, occluders: &[WorldAabb]) -> f32 {
+    let grass_volume = grass_bounds.volume();
+    if grass_volume <= f32::EPSILON {
+        return 0.0;
+    }
+
+    let intersections = occluders
+        .iter()
+        .filter_map(|occluder| grass_bounds.intersection(*occluder))
+        .collect::<Vec<_>>();
+    let occluded = union_volume(&intersections);
+
+    (occluded / grass_volume).min(1.0)
+}
+
+fn union_volume(bounds: &[WorldAabb]) -> f32 {
+    if bounds.is_empty() {
+        return 0.0;
+    }
+
+    let mut xs = bounds
+        .iter()
+        .flat_map(|bounds| [bounds.min[0], bounds.max[0]])
+        .collect::<Vec<_>>();
+    let mut ys = bounds
+        .iter()
+        .flat_map(|bounds| [bounds.min[1], bounds.max[1]])
+        .collect::<Vec<_>>();
+    let mut zs = bounds
+        .iter()
+        .flat_map(|bounds| [bounds.min[2], bounds.max[2]])
+        .collect::<Vec<_>>();
+    sort_dedup_f32(&mut xs);
+    sort_dedup_f32(&mut ys);
+    sort_dedup_f32(&mut zs);
+
+    let mut volume = 0.0;
+    for x in xs.windows(2) {
+        for y in ys.windows(2) {
+            for z in zs.windows(2) {
+                let center = [
+                    (x[0] + x[1]) * 0.5,
+                    (y[0] + y[1]) * 0.5,
+                    (z[0] + z[1]) * 0.5,
+                ];
+                if bounds.iter().any(|bounds| bounds.contains_point(center)) {
+                    volume += (x[1] - x[0]) * (y[1] - y[0]) * (z[1] - z[0]);
+                }
+            }
+        }
+    }
+
+    volume
+}
+
+fn sort_dedup_f32(values: &mut Vec<f32>) {
+    values.sort_by(f32::total_cmp);
+    values.dedup_by(|left, right| (*left - *right).abs() <= f32::EPSILON);
+}
+
+fn translate_bounds_xy(bounds: WorldAabb, x: f32, y: f32) -> WorldAabb {
+    WorldAabb {
+        min: [bounds.min[0] + x, bounds.min[1] + y, bounds.min[2]],
+        max: [bounds.max[0] + x, bounds.max[1] + y, bounds.max[2]],
+    }
+}
+
+fn build_static_occluders(
+    active_plugins: &[Plugin],
+    active_cells: &BTreeSet<CellCoord>,
+    static_index: &StaticMeshIndex,
+    mesh_contacts: &mut MeshContactCache<'_>,
+    target_static_ids: &BTreeSet<String>,
+) -> StaticOccluderIndex {
+    let effective_refs = effective_active_refs(active_plugins, active_cells);
+    let mut occluders = Vec::new();
+
+    for (key, reference) in effective_refs {
+        if target_static_ids.contains(&reference.id.to_lowercase()) {
+            continue;
+        }
+
+        let Some(static_mesh) = static_index.get(&reference.id) else {
+            continue;
+        };
+        let Ok(geometry) = mesh_contacts.geometry(&static_mesh.mesh_path) else {
+            continue;
+        };
+
+        occluders.push(StaticOccluder {
+            id: reference.id.clone(),
+            cell: [key.cell.0, key.cell.1],
+            reference_key: [key.reference.0, key.reference.1],
+            bounds: geometry.bounds.world_aabb(
+                reference.translation,
+                reference.rotation,
+                reference.scale,
+            ),
+        });
+    }
+
+    StaticOccluderIndex { occluders }
+}
+
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+struct EffectiveRefKey {
+    cell: CellCoord,
+    reference: (u32, u32),
+}
+
+fn effective_active_refs(
+    active_plugins: &[Plugin],
+    active_cells: &BTreeSet<CellCoord>,
+) -> BTreeMap<EffectiveRefKey, tes3::esp::Reference> {
+    let mut refs = BTreeMap::new();
+
+    for plugin in active_plugins {
+        for cell in plugin.objects_of_type::<Cell>() {
+            if !cell.is_exterior() || !active_cells.contains(&cell.data.grid) {
+                continue;
+            }
+
+            for (reference_key, reference) in &cell.references {
+                let key = EffectiveRefKey {
+                    cell: reference.moved_cell.unwrap_or(cell.data.grid),
+                    reference: *reference_key,
+                };
+                if reference.deleted == Some(true) {
+                    refs.remove(&key);
+                } else {
+                    refs.insert(key, reference.clone());
+                }
+            }
+        }
+    }
+
+    refs
+}
+
 #[derive(Serialize)]
 struct StructuredSummaryReport<'a> {
     kind: &'static str,
@@ -949,6 +1549,20 @@ struct StructuredWriteAdjustmentRecord<'a> {
     r#type: &'static str,
     #[serde(flatten)]
     adjustment: &'a WriteAdjustment,
+}
+
+#[derive(Serialize)]
+struct StructuredWriteDeletionRecord<'a> {
+    r#type: &'static str,
+    #[serde(flatten)]
+    deletion: &'a WriteStaticBoundsDeletion,
+}
+
+#[derive(Serialize)]
+struct StructuredWriteMoveRecord<'a> {
+    r#type: &'static str,
+    #[serde(flatten)]
+    move_: &'a WriteStaticBoundsMove,
 }
 
 struct UnclipReportContext {
@@ -1006,8 +1620,13 @@ impl UnclipReportContext {
             refs_mesh_contact_above_terrain: inspection.refs_contact_above_terrain,
             refs_mesh_contact_below_terrain: inspection.refs_contact_below_terrain,
             refs_mesh_contact_missing_terrain: inspection.refs_contact_missing_terrain,
+            refs_static_bounds_occluded: inspection.refs_static_bounds_occluded,
+            refs_static_bounds_fully_occluded: inspection.refs_static_bounds_fully_occluded,
+            refs_static_bounds_lightly_occluded: inspection.refs_static_bounds_lightly_occluded,
+            refs_static_bounds_blocked: inspection.refs_static_bounds_blocked,
             origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
             mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
+            static_bounds_occlusion_relocate_limit: STATIC_BOUNDS_OCCLUSION_RELOCATE_LIMIT,
         }
     }
 }
@@ -1019,22 +1638,40 @@ struct WriteReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     backup_plugin: Option<String>,
     adjusted_refs: usize,
+    deleted_refs: usize,
+    moved_refs: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     adjustments: Vec<WriteAdjustment>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    deletions: Vec<WriteStaticBoundsDeletion>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    moves: Vec<WriteStaticBoundsMove>,
     #[serde(skip)]
     adjusted_ref_keys: BTreeSet<AdjustedRefKey>,
+    #[serde(skip)]
+    deleted_ref_keys: BTreeSet<AdjustedRefKey>,
+    #[serde(skip)]
+    moved_ref_keys: BTreeSet<AdjustedRefKey>,
 }
 
 impl WriteReport {
     fn not_written(destination_path: &std::path::Path, plan: WritePlan) -> Self {
         let adjusted_ref_keys = adjusted_ref_keys(&plan.adjustments);
+        let deleted_ref_keys = adjusted_ref_keys_from_deletions(&plan.deletions);
+        let moved_ref_keys = adjusted_ref_keys_from_moves(&plan.moves);
         Self {
             written: false,
             destination_plugin: destination_path.display().to_string(),
             backup_plugin: None,
             adjusted_refs: plan.adjusted_refs,
+            deleted_refs: plan.deleted_refs,
+            moved_refs: plan.moved_refs,
             adjustments: plan.adjustments,
+            deletions: plan.deletions,
+            moves: plan.moves,
             adjusted_ref_keys,
+            deleted_ref_keys,
+            moved_ref_keys,
         }
     }
 
@@ -1044,11 +1681,23 @@ impl WriteReport {
             destination_plugin: self.destination_plugin.clone(),
             backup_plugin: self.backup_plugin.clone(),
             adjusted_refs: self.adjusted_refs,
+            deleted_refs: self.deleted_refs,
+            moved_refs: self.moved_refs,
         }
     }
 
     fn is_adjusted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
         self.adjusted_ref_keys
+            .contains(&AdjustedRefKey::new(cell, key))
+    }
+
+    fn is_deleted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
+        self.deleted_ref_keys
+            .contains(&AdjustedRefKey::new(cell, key))
+    }
+
+    fn is_moved(&self, cell: CellCoord, key: (u32, u32)) -> bool {
+        self.moved_ref_keys
             .contains(&AdjustedRefKey::new(cell, key))
     }
 }
@@ -1060,12 +1709,24 @@ struct WriteSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     backup_plugin: Option<String>,
     adjusted_refs: usize,
+    deleted_refs: usize,
+    moved_refs: usize,
 }
 
 #[derive(Default)]
 struct WritePlan {
     adjusted_refs: usize,
+    deleted_refs: usize,
+    moved_refs: usize,
     adjustments: Vec<WriteAdjustment>,
+    deletions: Vec<WriteStaticBoundsDeletion>,
+    moves: Vec<WriteStaticBoundsMove>,
+}
+
+impl WritePlan {
+    const fn changed_refs(&self) -> usize {
+        self.adjusted_refs + self.deleted_refs + self.moved_refs
+    }
 }
 
 #[derive(Serialize)]
@@ -1078,6 +1739,30 @@ struct WriteAdjustment {
     applied_delta: f32,
     contact_position: [f32; 3],
     terrain_z: f32,
+}
+
+#[derive(Serialize)]
+struct WriteStaticBoundsDeletion {
+    cell: [i32; 2],
+    reference_key: [u32; 2],
+    id: String,
+    occlusion_ratio: f32,
+    occluder_id: String,
+    occluder_cell: [i32; 2],
+    occluder_reference_key: [u32; 2],
+}
+
+#[derive(Serialize)]
+struct WriteStaticBoundsMove {
+    cell: [i32; 2],
+    reference_key: [u32; 2],
+    id: String,
+    occlusion_ratio: f32,
+    old_position: [f32; 3],
+    new_position: [f32; 3],
+    occluder_id: String,
+    occluder_cell: [i32; 2],
+    occluder_reference_key: [u32; 2],
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -1109,6 +1794,28 @@ fn adjusted_ref_keys(adjustments: &[WriteAdjustment]) -> BTreeSet<AdjustedRefKey
         .collect()
 }
 
+fn adjusted_ref_keys_from_deletions(
+    deletions: &[WriteStaticBoundsDeletion],
+) -> BTreeSet<AdjustedRefKey> {
+    deletions
+        .iter()
+        .map(|deletion| AdjustedRefKey {
+            cell: deletion.cell,
+            reference_key: deletion.reference_key,
+        })
+        .collect()
+}
+
+fn adjusted_ref_keys_from_moves(moves: &[WriteStaticBoundsMove]) -> BTreeSet<AdjustedRefKey> {
+    moves
+        .iter()
+        .map(|move_| AdjustedRefKey {
+            cell: move_.cell,
+            reference_key: move_.reference_key,
+        })
+        .collect()
+}
+
 #[derive(Serialize)]
 struct UnclipSummary {
     target_exterior_cells: usize,
@@ -1129,8 +1836,13 @@ struct UnclipSummary {
     refs_mesh_contact_above_terrain: usize,
     refs_mesh_contact_below_terrain: usize,
     refs_mesh_contact_missing_terrain: usize,
+    refs_static_bounds_occluded: usize,
+    refs_static_bounds_fully_occluded: usize,
+    refs_static_bounds_lightly_occluded: usize,
+    refs_static_bounds_blocked: usize,
     origin_terrain_epsilon: f32,
     mesh_contact_terrain_epsilon: f32,
+    static_bounds_occlusion_relocate_limit: f32,
 }
 
 #[derive(Serialize)]
@@ -1149,6 +1861,8 @@ struct ReferenceInspection {
     mesh_contact_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mesh_contact: Option<MeshContactInspection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    static_bounds_occlusion: Option<StaticBoundsOcclusionInspection>,
 }
 
 #[derive(Serialize)]
@@ -1173,6 +1887,12 @@ struct MeshContactInspection {
     classification: &'static str,
 }
 
+#[derive(Serialize)]
+struct StaticBoundsOcclusionInspection {
+    status: &'static str,
+    ratio: f32,
+}
+
 #[derive(Default)]
 struct TerrainInspectionReport {
     refs: usize,
@@ -1187,6 +1907,10 @@ struct TerrainInspectionReport {
     refs_contact_above_terrain: usize,
     refs_contact_below_terrain: usize,
     refs_contact_missing_terrain: usize,
+    refs_static_bounds_occluded: usize,
+    refs_static_bounds_fully_occluded: usize,
+    refs_static_bounds_lightly_occluded: usize,
+    refs_static_bounds_blocked: usize,
 }
 
 fn inspect_target_refs(
@@ -1194,6 +1918,7 @@ fn inspect_target_refs(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
+    static_occluders: &StaticOccluderIndex,
     write: Option<&WriteReport>,
     mut reference_sink: impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<TerrainInspectionReport> {
@@ -1202,6 +1927,7 @@ fn inspect_target_refs(
         terrain,
         static_index,
         mesh_contacts,
+        static_occluders,
     };
 
     let mut cells = plugin
@@ -1235,12 +1961,14 @@ fn count_target_refs(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
+    static_occluders: &StaticOccluderIndex,
 ) -> TerrainInspectionReport {
     let mut report = TerrainInspectionReport::default();
     let mut context = ReferenceInspectionContext {
         terrain,
         static_index,
         mesh_contacts,
+        static_occluders,
     };
 
     let mut cells = plugin
@@ -1254,7 +1982,7 @@ fn count_target_refs(
         references.sort_by_key(|(key, _)| **key);
 
         for (_, reference) in references {
-            count_reference(&mut report, &mut context, reference);
+            count_reference(&mut report, &mut context, cell.data.grid, reference);
         }
     }
 
@@ -1265,6 +1993,7 @@ struct ReferenceInspectionContext<'a, 'b> {
     terrain: &'a TerrainIndex,
     static_index: &'a StaticMeshIndex,
     mesh_contacts: &'a mut MeshContactCache<'b>,
+    static_occluders: &'a StaticOccluderIndex,
 }
 
 struct OriginDetails {
@@ -1285,7 +2014,16 @@ fn inspect_reference(
     report.refs += 1;
     if reference.deleted == Some(true) {
         report.refs_deleted += 1;
-        let inspection = deleted_reference_inspection(cell, key, reference);
+        let inspection = deleted_reference_inspection(
+            cell,
+            key,
+            reference,
+            if write.is_some_and(|write| write.is_deleted(cell, key)) {
+                "deleted_static_bounds_occluded"
+            } else {
+                "skipped_deleted_ref"
+            },
+        );
         return reference_sink(&inspection);
     }
 
@@ -1306,22 +2044,36 @@ fn inspect_reference(
             None
         }
     };
+    let static_bounds_occlusion = classify_static_bounds_occlusion(
+        report,
+        cell,
+        context.terrain,
+        reference,
+        &mesh_contact,
+        context.static_occluders,
+    );
     let origin = classify_origin(report, context.terrain, reference);
-    let inspection = reference_inspection(
+    let inspection = reference_inspection(&ReferenceInspectionInput {
         cell,
         key,
         reference,
-        &origin,
-        &mesh_contact,
-        contact_details.as_ref(),
-        write.is_some_and(|write| write.is_adjusted(cell, key)),
-    );
+        origin: &origin,
+        mesh_resolution: &mesh_contact,
+        contact_details: contact_details.as_ref(),
+        static_bounds_occlusion: static_bounds_occlusion.as_ref(),
+        write: WriteStatusEvidence {
+            adjusted: write.is_some_and(|write| write.is_adjusted(cell, key)),
+            deleted: write.is_some_and(|write| write.is_deleted(cell, key)),
+            moved: write.is_some_and(|write| write.is_moved(cell, key)),
+        },
+    });
     reference_sink(&inspection)
 }
 
 fn count_reference(
     report: &mut TerrainInspectionReport,
     context: &mut ReferenceInspectionContext<'_, '_>,
+    cell: CellCoord,
     reference: &tes3::esp::Reference,
 ) {
     report.refs += 1;
@@ -1339,6 +2091,14 @@ fn count_reference(
     if let MeshContactResolution::Resolved { contact, .. } = &mesh_contact {
         let _ = classify_contact(report, context.terrain, reference, contact);
     }
+    let _ = classify_static_bounds_occlusion(
+        report,
+        cell,
+        context.terrain,
+        reference,
+        &mesh_contact,
+        context.static_occluders,
+    );
     let _ = classify_origin(report, context.terrain, reference);
 }
 
@@ -1373,32 +2133,56 @@ fn classify_origin(
     }
 }
 
-fn reference_inspection(
+struct ReferenceInspectionInput<'a, 'b> {
     cell: CellCoord,
     key: (u32, u32),
-    reference: &tes3::esp::Reference,
-    origin: &OriginDetails,
-    mesh_resolution: &MeshContactResolution<'_>,
-    contact_details: Option<&ContactDetails>,
-    was_adjusted: bool,
-) -> ReferenceInspection {
+    reference: &'a tes3::esp::Reference,
+    origin: &'a OriginDetails,
+    mesh_resolution: &'a MeshContactResolution<'b>,
+    contact_details: Option<&'a ContactDetails>,
+    static_bounds_occlusion: Option<&'a StaticBoundsOcclusionDetails>,
+    write: WriteStatusEvidence,
+}
+
+struct WriteStatusEvidence {
+    adjusted: bool,
+    deleted: bool,
+    moved: bool,
+}
+
+fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceInspection {
     ReferenceInspection {
-        cell: [cell.0, cell.1],
-        reference_key: [key.0, key.1],
-        id: reference.id.clone(),
+        cell: [input.cell.0, input.cell.1],
+        reference_key: [input.key.0, input.key.1],
+        id: input.reference.id.clone(),
         origin: OriginInspection {
-            position: reference.translation,
-            terrain_z: origin.terrain_z,
-            delta: origin.delta,
-            classification: origin.classification,
+            position: input.reference.translation,
+            terrain_z: input.origin.terrain_z,
+            delta: input.origin.delta,
+            classification: input.origin.classification,
         },
-        static_resolution: mesh_resolution.static_resolution_label(),
-        mesh_contact_status: mesh_resolution.mesh_contact_status_label(contact_details),
-        deleted: reference.deleted == Some(true),
-        write_status: write_status_label(reference, mesh_resolution, contact_details, was_adjusted),
-        static_mesh: mesh_resolution.static_mesh().map(static_mesh_inspection),
-        mesh_contact_error: mesh_resolution.mesh_contact_error().map(str::to_owned),
-        mesh_contact: contact_details.map(|contact| MeshContactInspection {
+        static_resolution: input.mesh_resolution.static_resolution_label(),
+        mesh_contact_status: input
+            .mesh_resolution
+            .mesh_contact_status_label(input.contact_details),
+        deleted: input.reference.deleted == Some(true),
+        write_status: write_status_label(
+            input.reference,
+            input.mesh_resolution,
+            input.contact_details,
+            input.write.adjusted,
+            input.write.deleted,
+            input.write.moved,
+        ),
+        static_mesh: input
+            .mesh_resolution
+            .static_mesh()
+            .map(static_mesh_inspection),
+        mesh_contact_error: input
+            .mesh_resolution
+            .mesh_contact_error()
+            .map(str::to_owned),
+        mesh_contact: input.contact_details.map(|contact| MeshContactInspection {
             position: contact.position,
             terrain_z: contact.terrain_z,
             delta: contact.delta,
@@ -1407,6 +2191,12 @@ fn reference_inspection(
                 ContactTerrainClassification::label,
             ),
         }),
+        static_bounds_occlusion: input.static_bounds_occlusion.map(|occlusion| {
+            StaticBoundsOcclusionInspection {
+                status: occlusion.status,
+                ratio: occlusion.ratio,
+            }
+        }),
     }
 }
 
@@ -1414,6 +2204,7 @@ fn deleted_reference_inspection(
     cell: CellCoord,
     key: (u32, u32),
     reference: &tes3::esp::Reference,
+    write_status: &'static str,
 ) -> ReferenceInspection {
     ReferenceInspection {
         cell: [cell.0, cell.1],
@@ -1422,7 +2213,7 @@ fn deleted_reference_inspection(
         static_resolution: "skipped_deleted_ref",
         mesh_contact_status: "skipped_deleted_ref",
         deleted: true,
-        write_status: "skipped_deleted_ref",
+        write_status,
         origin: OriginInspection {
             position: reference.translation,
             terrain_z: None,
@@ -1432,6 +2223,7 @@ fn deleted_reference_inspection(
         static_mesh: None,
         mesh_contact_error: None,
         mesh_contact: None,
+        static_bounds_occlusion: None,
     }
 }
 
@@ -1447,7 +2239,15 @@ fn write_status_label(
     mesh_resolution: &MeshContactResolution<'_>,
     contact_details: Option<&ContactDetails>,
     was_adjusted: bool,
+    was_deleted: bool,
+    was_moved: bool,
 ) -> &'static str {
+    if was_deleted {
+        return "deleted_static_bounds_occluded";
+    }
+    if was_moved {
+        return "moved_static_bounds_occluded";
+    }
     if was_adjusted {
         return "adjusted";
     }
@@ -1476,6 +2276,69 @@ struct ContactDetails {
     terrain_z: Option<f32>,
     delta: Option<f32>,
     classification: Option<ContactTerrainClassification>,
+}
+
+struct StaticBoundsOcclusionDetails {
+    status: &'static str,
+    ratio: f32,
+}
+
+fn classify_static_bounds_occlusion(
+    report: &mut TerrainInspectionReport,
+    cell: CellCoord,
+    terrain: &TerrainIndex,
+    reference: &tes3::esp::Reference,
+    mesh_resolution: &MeshContactResolution<'_>,
+    static_occluders: &StaticOccluderIndex,
+) -> Option<StaticBoundsOcclusionDetails> {
+    let MeshContactResolution::Resolved {
+        contact, bounds, ..
+    } = mesh_resolution
+    else {
+        return None;
+    };
+    let mut corrected_reference = reference.clone();
+    let contact_position =
+        contact.world_position(reference.translation, reference.rotation, reference.scale);
+    if let Some(terrain_z) = terrain.height_at(contact_position[0], contact_position[1]) {
+        corrected_reference.translation[2] -= contact_position[2] - terrain_z;
+    }
+    let corrected_bounds = bounds.world_aabb(
+        corrected_reference.translation,
+        corrected_reference.rotation,
+        corrected_reference.scale,
+    );
+    let action = decide_static_bounds_action(corrected_bounds, static_occluders);
+    let (status, ratio) = match action {
+        StaticBoundsAction::None => ("static_bounds_clear", 0.0),
+        StaticBoundsAction::Delete { ratio, .. } => {
+            report.refs_static_bounds_occluded += 1;
+            report.refs_static_bounds_fully_occluded += 1;
+            ("static_bounds_fully_occluded", ratio)
+        }
+        StaticBoundsAction::Move { ratio, .. }
+            if find_valid_relocation_position(
+                cell,
+                &corrected_reference,
+                contact,
+                *bounds,
+                terrain,
+                static_occluders,
+            )
+            .is_some() =>
+        {
+            report.refs_static_bounds_occluded += 1;
+            report.refs_static_bounds_lightly_occluded += 1;
+            ("static_bounds_lightly_occluded", ratio)
+        }
+        StaticBoundsAction::Move { ratio, .. } | StaticBoundsAction::Blocked { ratio } => {
+            report.refs_static_bounds_occluded += 1;
+            report.refs_static_bounds_blocked += 1;
+            ("static_bounds_blocked", ratio)
+        }
+    };
+
+    Some(StaticBoundsOcclusionDetails { status, ratio })
 }
 
 fn classify_contact(
@@ -1522,6 +2385,7 @@ enum MeshContactResolution<'a> {
     Resolved {
         static_mesh: &'a super::mesh::StaticMesh,
         contact: &'a super::mesh::MeshContact,
+        bounds: super::mesh::MeshAabb,
     },
     MissingContact {
         static_mesh: &'a super::mesh::StaticMesh,
@@ -1580,12 +2444,13 @@ fn resolve_ref_mesh_contact<'a>(
         return MeshContactResolution::UnresolvedStatic;
     };
 
-    match mesh_contacts.contact(&static_mesh.mesh_path) {
-        Ok(contact) => {
+    match mesh_contacts.geometry(&static_mesh.mesh_path) {
+        Ok(geometry) => {
             report.refs_with_mesh_contact += 1;
             MeshContactResolution::Resolved {
                 static_mesh,
-                contact,
+                contact: &geometry.contact,
+                bounds: geometry.bounds,
             }
         }
         Err(error) => {
@@ -1657,17 +2522,21 @@ fn classify_contact_delta(delta: f32) -> ContactTerrainClassification {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeSet,
         path::{Path, PathBuf},
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use tes3::esp::Reference;
+    use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
     use super::{
-        MeshContactResolution, WriteAdjustment, WritePlan, WriteReport, adjusted_ref_keys,
-        apply_contact_adjustment, deleted_reference_inspection, next_numbered_backup_path,
-        prepare_plugin_backup, replace_with_temp, write_status_label, write_write_summary_text,
+        MeshContactResolution, StaticBoundsAction, StaticOccluder, StaticOccluderIndex,
+        WriteAdjustment, WritePlan, WriteReport, adjusted_ref_keys, apply_contact_adjustment,
+        decide_static_bounds_action, deleted_reference_inspection, effective_active_refs,
+        next_numbered_backup_path, prepare_plugin_backup, replace_with_temp,
+        static_bounds_occlusion_ratio, write_status_label, write_write_summary_text,
     };
+    use crate::unclip::mesh::WorldAabb;
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -1821,8 +2690,14 @@ mod tests {
             destination_plugin: "plugin.omwaddon".to_owned(),
             backup_plugin: None,
             adjusted_refs: 1,
+            deleted_refs: 0,
+            moved_refs: 0,
             adjusted_ref_keys: adjusted_ref_keys(&adjustments),
+            deleted_ref_keys: BTreeSet::new(),
+            moved_ref_keys: BTreeSet::new(),
             adjustments,
+            deletions: Vec::new(),
+            moves: Vec::new(),
         };
         let mut with_adjustments = Vec::new();
         let mut without_adjustments = Vec::new();
@@ -1845,7 +2720,9 @@ mod tests {
                 &reference,
                 &MeshContactResolution::UnresolvedStatic,
                 None,
-                true
+                true,
+                false,
+                false
             ),
             "adjusted"
         );
@@ -1858,6 +2735,7 @@ mod tests {
             WritePlan {
                 adjusted_refs: 1,
                 adjustments: vec![write_adjustment()],
+                ..WritePlan::default()
             },
         );
 
@@ -1870,7 +2748,8 @@ mod tests {
         let mut reference = reference_at_z(10.0);
         reference.deleted = Some(true);
 
-        let inspection = deleted_reference_inspection((1, 2), (3, 4), &reference);
+        let inspection =
+            deleted_reference_inspection((1, 2), (3, 4), &reference, "skipped_deleted_ref");
 
         assert!(inspection.deleted);
         assert_eq!(inspection.static_resolution, "skipped_deleted_ref");
@@ -1878,6 +2757,105 @@ mod tests {
         assert_eq!(inspection.write_status, "skipped_deleted_ref");
         assert!(inspection.static_mesh.is_none());
         assert!(inspection.mesh_contact.is_none());
+    }
+
+    #[test]
+    fn static_bounds_occlusion_ratio_counts_intersection_volume() {
+        let grass = WorldAabb {
+            min: [0.0, 0.0, 0.0],
+            max: [10.0, 10.0, 10.0],
+        };
+        let occluder = WorldAabb {
+            min: [0.0, 0.0, 0.0],
+            max: [5.0, 10.0, 10.0],
+        };
+
+        assert_close(static_bounds_occlusion_ratio(grass, &[occluder]), 0.5);
+    }
+
+    #[test]
+    fn static_bounds_action_deletes_fully_contained_ref() {
+        let grass = WorldAabb {
+            min: [0.0, 0.0, 0.0],
+            max: [10.0, 10.0, 10.0],
+        };
+        let occluders = StaticOccluderIndex {
+            occluders: vec![static_occluder(WorldAabb {
+                min: [-1.0, -1.0, -1.0],
+                max: [11.0, 11.0, 11.0],
+            })],
+        };
+
+        match decide_static_bounds_action(grass, &occluders) {
+            StaticBoundsAction::Delete { ratio, occluder } => {
+                assert_close(ratio, 1.0);
+                assert_eq!(occluder.id, "rock");
+            }
+            StaticBoundsAction::None
+            | StaticBoundsAction::Move { .. }
+            | StaticBoundsAction::Blocked { .. } => panic!("expected delete"),
+        }
+    }
+
+    #[test]
+    fn static_bounds_action_moves_lightly_occluded_ref() {
+        let grass = WorldAabb {
+            min: [0.0, 0.0, 0.0],
+            max: [10.0, 10.0, 10.0],
+        };
+        let occluders = StaticOccluderIndex {
+            occluders: vec![static_occluder(WorldAabb {
+                min: [9.0, 0.0, 0.0],
+                max: [10.0, 10.0, 10.0],
+            })],
+        };
+
+        match decide_static_bounds_action(grass, &occluders) {
+            StaticBoundsAction::Move { ratio, .. } => {
+                assert_close(ratio, 0.1);
+            }
+            StaticBoundsAction::None
+            | StaticBoundsAction::Delete { .. }
+            | StaticBoundsAction::Blocked { .. } => panic!("expected move"),
+        }
+    }
+
+    #[test]
+    fn effective_active_refs_apply_later_deletions() {
+        let first = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_at_z(0.0),
+            )]))],
+        };
+        let deleted = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([((1, 2), deleted_ref())]))],
+        };
+
+        let refs = effective_active_refs(&[first, deleted], &BTreeSet::from([(0, 0)]));
+
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn effective_active_refs_key_moved_refs_by_original_cell() {
+        let mut moved = reference_at_z(0.0);
+        moved.moved_cell = Some((0, 0));
+        let mut deleted = deleted_ref();
+        deleted.moved_cell = Some((0, 0));
+        let first = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell_at(
+                (1, 0),
+                [((1, 2), moved)],
+            ))],
+        };
+        let second = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([((1, 2), deleted)]))],
+        };
+
+        let refs = effective_active_refs(&[first, second], &BTreeSet::from([(0, 0), (1, 0)]));
+
+        assert!(refs.is_empty());
     }
 
     fn reference_at_z(z: f32) -> Reference {
@@ -1898,6 +2876,42 @@ mod tests {
             applied_delta: 2.0,
             contact_position: [0.0, 0.0, 7.0],
             terrain_z: 9.0,
+        }
+    }
+
+    fn static_occluder(bounds: WorldAabb) -> StaticOccluder {
+        StaticOccluder {
+            id: "rock".to_owned(),
+            cell: [0, 0],
+            reference_key: [1, 2],
+            bounds,
+        }
+    }
+
+    fn exterior_cell(refs: impl IntoIterator<Item = ((u32, u32), Reference)>) -> Cell {
+        exterior_cell_at((0, 0), refs)
+    }
+
+    fn exterior_cell_at(
+        grid: (i32, i32),
+        refs: impl IntoIterator<Item = ((u32, u32), Reference)>,
+    ) -> Cell {
+        let mut cell = Cell {
+            data: CellData {
+                grid,
+                ..CellData::default()
+            },
+            ..Cell::default()
+        };
+        cell.references.extend(refs);
+        cell
+    }
+
+    fn deleted_ref() -> Reference {
+        Reference {
+            deleted: Some(true),
+            id: "rock".to_owned(),
+            ..Reference::default()
         }
     }
 

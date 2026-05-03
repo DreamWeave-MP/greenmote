@@ -55,6 +55,24 @@ pub struct MeshContact {
     pub vertices: Vec<[f32; 3]>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshAabb {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldAabb {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshGeometry {
+    pub contact: MeshContact,
+    pub bounds: MeshAabb,
+}
+
 impl MeshContact {
     #[must_use]
     pub fn world_position(
@@ -74,9 +92,102 @@ impl MeshContact {
     }
 }
 
+impl MeshAabb {
+    #[must_use]
+    pub fn world_aabb(
+        self,
+        translation: [f32; 3],
+        rotation: [f32; 3],
+        scale: Option<f32>,
+    ) -> WorldAabb {
+        // Match OpenMW's ESM-to-scene conversion: Z, then Y, then X, with negated axes.
+        let rotation = Mat3::from_euler(EulerRot::ZYX, -rotation[2], -rotation[1], -rotation[0]);
+        let scale = scale.unwrap_or(1.0);
+        let min = Vec3::from(self.min);
+        let max = Vec3::from(self.max);
+        let corners = [
+            Vec3::new(min.x, min.y, min.z),
+            Vec3::new(min.x, min.y, max.z),
+            Vec3::new(min.x, max.y, min.z),
+            Vec3::new(min.x, max.y, max.z),
+            Vec3::new(max.x, min.y, min.z),
+            Vec3::new(max.x, min.y, max.z),
+            Vec3::new(max.x, max.y, min.z),
+            Vec3::new(max.x, max.y, max.z),
+        ];
+
+        let mut world_min = Vec3::splat(f32::INFINITY);
+        let mut world_max = Vec3::splat(f32::NEG_INFINITY);
+        for corner in corners {
+            let world = rotation * (corner * scale) + Vec3::from(translation);
+            world_min = world_min.min(world);
+            world_max = world_max.max(world);
+        }
+
+        WorldAabb {
+            min: world_min.to_array(),
+            max: world_max.to_array(),
+        }
+    }
+}
+
+impl WorldAabb {
+    #[must_use]
+    pub fn volume(self) -> f32 {
+        let dx = (self.max[0] - self.min[0]).max(0.0);
+        let dy = (self.max[1] - self.min[1]).max(0.0);
+        let dz = (self.max[2] - self.min[2]).max(0.0);
+        dx * dy * dz
+    }
+
+    #[must_use]
+    pub fn contains(self, other: Self) -> bool {
+        self.min[0] <= other.min[0]
+            && self.min[1] <= other.min[1]
+            && self.min[2] <= other.min[2]
+            && self.max[0] >= other.max[0]
+            && self.max[1] >= other.max[1]
+            && self.max[2] >= other.max[2]
+    }
+
+    #[must_use]
+    pub fn intersects_xy(self, other: Self) -> bool {
+        self.min[0] < other.max[0]
+            && self.max[0] > other.min[0]
+            && self.min[1] < other.max[1]
+            && self.max[1] > other.min[1]
+    }
+
+    #[must_use]
+    pub fn intersection(self, other: Self) -> Option<Self> {
+        let min = [
+            self.min[0].max(other.min[0]),
+            self.min[1].max(other.min[1]),
+            self.min[2].max(other.min[2]),
+        ];
+        let max = [
+            self.max[0].min(other.max[0]),
+            self.max[1].min(other.max[1]),
+            self.max[2].min(other.max[2]),
+        ];
+
+        (min[0] < max[0] && min[1] < max[1] && min[2] < max[2]).then_some(Self { min, max })
+    }
+
+    #[must_use]
+    pub fn contains_point(self, point: [f32; 3]) -> bool {
+        self.min[0] <= point[0]
+            && self.min[1] <= point[1]
+            && self.min[2] <= point[2]
+            && self.max[0] >= point[0]
+            && self.max[1] >= point[1]
+            && self.max[2] >= point[2]
+    }
+}
+
 pub struct MeshContactCache<'a> {
     vfs: &'a VFS,
-    contacts: HashMap<String, io::Result<MeshContact>>,
+    meshes: HashMap<String, io::Result<MeshGeometry>>,
 }
 
 impl<'a> MeshContactCache<'a> {
@@ -84,24 +195,24 @@ impl<'a> MeshContactCache<'a> {
     pub fn new(vfs: &'a VFS) -> Self {
         Self {
             vfs,
-            contacts: HashMap::new(),
+            meshes: HashMap::new(),
         }
     }
 
-    pub fn contact(&mut self, mesh_path: &str) -> io::Result<&MeshContact> {
+    pub fn geometry(&mut self, mesh_path: &str) -> io::Result<&MeshGeometry> {
         let key = mesh_path.replace('/', "\\").to_lowercase();
-        if !self.contacts.contains_key(&key) {
-            let contact = self.load_contact(mesh_path);
-            self.contacts.insert(key.clone(), contact);
+        if !self.meshes.contains_key(&key) {
+            let geometry = self.load_geometry(mesh_path);
+            self.meshes.insert(key.clone(), geometry);
         }
 
-        self.contacts[&key].as_ref().map_or_else(
+        self.meshes[&key].as_ref().map_or_else(
             |error| Err(io::Error::new(error.kind(), error.to_string())),
             Ok,
         )
     }
 
-    fn load_contact(&self, mesh_path: &str) -> io::Result<MeshContact> {
+    fn load_geometry(&self, mesh_path: &str) -> io::Result<MeshGeometry> {
         let file = resolve_mesh(self.vfs, mesh_path)?;
         let mut reader = file.open()?;
         let mut bytes = Vec::new();
@@ -113,7 +224,7 @@ impl<'a> MeshContactCache<'a> {
             )
         })?;
 
-        lowest_contact(&stream).ok_or_else(|| {
+        mesh_geometry(&stream).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("mesh {mesh_path} has no triangle vertices"),
@@ -150,15 +261,32 @@ fn strip_meshes_prefix(mesh_path: &str) -> &str {
     }
 }
 
-fn lowest_contact(stream: &NiStream) -> Option<MeshContact> {
-    let mut lowest = Vec::new();
+fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
+    let mut vertices = Vec::new();
 
     for root in &stream.roots {
-        visit_object(stream, root.cast(), Affine3A::IDENTITY, &mut lowest);
+        visit_object(stream, root.cast(), Affine3A::IDENTITY, &mut vertices);
     }
 
-    (!lowest.is_empty()).then(|| MeshContact {
-        vertices: lowest.into_iter().map(|vertex| vertex.to_array()).collect(),
+    if vertices.is_empty() {
+        return None;
+    }
+
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for vertex in &vertices {
+        min = min.min(*vertex);
+        max = max.max(*vertex);
+    }
+
+    Some(MeshGeometry {
+        contact: MeshContact {
+            vertices: vertices.iter().map(glam::Vec3::to_array).collect(),
+        },
+        bounds: MeshAabb {
+            min: min.to_array(),
+            max: max.to_array(),
+        },
     })
 }
 
