@@ -1567,27 +1567,16 @@ fn inspect_target_refs(
         static_occluders,
     };
 
-    let mut cells = plugin
-        .objects_of_type::<Cell>()
-        .filter(|cell| cell.is_exterior())
-        .collect::<Vec<_>>();
-    cells.sort_by_key(|cell| cell.data.grid);
-
-    for cell in cells {
-        let mut references = cell.references.iter().collect::<Vec<_>>();
-        references.sort_by_key(|(key, _)| **key);
-
-        for (key, reference) in references {
-            inspect_reference(
-                &mut report,
-                &mut context,
-                cell.data.grid,
-                *key,
-                reference,
-                write,
-                &mut reference_sink,
-            )?;
-        }
+    for target_ref in sorted_exterior_refs(plugin) {
+        inspect_reference(
+            &mut report,
+            &mut context,
+            target_ref.cell,
+            target_ref.key,
+            target_ref.reference,
+            write,
+            &mut reference_sink,
+        )?;
     }
 
     Ok(report)
@@ -1608,22 +1597,47 @@ fn count_target_refs(
         static_occluders,
     };
 
+    for target_ref in sorted_exterior_refs(plugin) {
+        count_reference(
+            &mut report,
+            &mut context,
+            target_ref.cell,
+            target_ref.reference,
+        );
+    }
+
+    report
+}
+
+struct SortedReference<'a> {
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &'a tes3::esp::Reference,
+}
+
+fn sorted_exterior_refs(plugin: &Plugin) -> Vec<SortedReference<'_>> {
     let mut cells = plugin
         .objects_of_type::<Cell>()
         .filter(|cell| cell.is_exterior())
         .collect::<Vec<_>>();
     cells.sort_by_key(|cell| cell.data.grid);
 
+    let mut sorted = Vec::new();
     for cell in cells {
         let mut references = cell.references.iter().collect::<Vec<_>>();
         references.sort_by_key(|(key, _)| **key);
-
-        for (_, reference) in references {
-            count_reference(&mut report, &mut context, cell.data.grid, reference);
-        }
+        sorted.extend(
+            references
+                .into_iter()
+                .map(|(key, reference)| SortedReference {
+                    cell: cell.data.grid,
+                    key: *key,
+                    reference,
+                }),
+        );
     }
 
-    report
+    sorted
 }
 
 struct ReferenceInspectionContext<'a, 'b> {
