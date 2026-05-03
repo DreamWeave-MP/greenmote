@@ -64,19 +64,19 @@ pub struct UnclipArgs {
     #[arg(long = "orientation-epsilon", default_value_t = DEFAULT_ORIENTATION_EPSILON_DEGREES, value_parser = non_negative_f32)]
     pub orientation_epsilon: f32,
 
-    /// Include only target grass refs whose IDs match this case-insensitive regex. May be repeated.
+    /// Include only target grass refs whose full IDs match this case-insensitive regex. May be repeated.
     #[arg(long = "include-grass-id", value_name = "REGEX")]
     pub include_grass_ids: Vec<String>,
 
-    /// Exclude target grass refs whose IDs match this case-insensitive regex. May be repeated.
+    /// Exclude target grass refs whose full IDs match this case-insensitive regex. May be repeated.
     #[arg(long = "exclude-grass-id", value_name = "REGEX")]
     pub exclude_grass_ids: Vec<String>,
 
-    /// Include only static occluders whose IDs match this case-insensitive regex. May be repeated.
+    /// Include only static occluders whose full IDs match this case-insensitive regex. May be repeated.
     #[arg(long = "include-occluder-id", value_name = "REGEX")]
     pub include_occluder_ids: Vec<String>,
 
-    /// Exclude static occluders whose IDs match this case-insensitive regex. May be repeated.
+    /// Exclude static occluders whose full IDs match this case-insensitive regex. May be repeated.
     #[arg(long = "exclude-occluder-id", value_name = "REGEX")]
     pub exclude_occluder_ids: Vec<String>,
 }
@@ -277,7 +277,7 @@ fn compile_regexes(patterns: &[String]) -> Result<Vec<Regex>, String> {
     patterns
         .iter()
         .map(|pattern| {
-            RegexBuilder::new(pattern)
+            RegexBuilder::new(&format!(r"\A(?:{pattern})\z"))
                 .case_insensitive(true)
                 .build()
                 .map_err(|error| format!("{pattern:?}: {error}"))
@@ -331,19 +331,24 @@ mod tests {
 
     #[test]
     fn target_filter_matches_case_insensitive_regexes() {
-        let filter = IdFilter::new(&["^flora_grass_.*$".to_owned()], &[]).unwrap();
+        let filter = IdFilter::new(&["flora_grass_.*".to_owned()], &[]).unwrap();
 
         assert!(filter.includes("Flora_Grass_01"));
         assert!(!filter.includes("flora_bush_01"));
     }
 
     #[test]
+    fn target_filter_regexes_match_full_ids() {
+        let filter = IdFilter::new(&["grass".to_owned()], &[]).unwrap();
+
+        assert!(filter.includes("grass"));
+        assert!(!filter.includes("flora_grass_01"));
+    }
+
+    #[test]
     fn target_filter_exclude_wins_over_include() {
-        let filter = IdFilter::new(
-            &["^flora_.*$".to_owned()],
-            &["^flora_grass_bad_.+$".to_owned()],
-        )
-        .unwrap();
+        let filter =
+            IdFilter::new(&["flora_.*".to_owned()], &["flora_grass_bad_.+".to_owned()]).unwrap();
 
         assert!(filter.includes("flora_grass_good_1"));
         assert!(!filter.includes("flora_grass_bad_1"));
