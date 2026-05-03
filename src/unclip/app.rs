@@ -20,7 +20,8 @@ use super::{
     terrain::TerrainIndex,
     write_plan::{WritePlan, WriteReport, WriteStatusIndex},
     write_policy::{
-        apply_unclip_write_plan, find_valid_relocation_position, plan_unclip_adjustments,
+        RefTransform, apply_unclip_write_plan, find_valid_relocation_transform,
+        plan_unclip_adjustments,
     },
     writer::save_plugin_with_backup,
 };
@@ -67,26 +68,29 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         terrain.len(),
         missing_active_terrain_cells,
     );
+    let mut target_meshes = MeshContactCache::new(&vfs);
     let write_plan = if args.write {
-        let mut mesh_contacts = MeshContactCache::new(&vfs);
         Some(plan_unclip_adjustments(
             &target_plugin_data,
             &terrain,
             &target_static_index,
-            &mut mesh_contacts,
+            &mut target_meshes,
             &static_occluders,
         ))
     } else {
         None
     };
-    let write_status = write_plan.as_ref().map(WriteStatusIndex::from_plan);
+    let write_status = if args.instances {
+        write_plan.as_ref().map(WriteStatusIndex::from_plan)
+    } else {
+        None
+    };
 
-    let mut mesh_contacts = MeshContactCache::new(&vfs);
     let mut output = OutputContext {
         plugin: &target_plugin_data,
         terrain: &terrain,
         static_index: &target_static_index,
-        mesh_contacts: &mut mesh_contacts,
+        mesh_contacts: &mut target_meshes,
         static_occluders: &static_occluders,
         report: &report_context,
     };
@@ -457,10 +461,10 @@ struct EffectiveRefKey {
     reference: (u32, u32),
 }
 
-fn effective_active_refs(
-    active_plugins: &[Plugin],
+fn effective_active_refs<'a>(
+    active_plugins: &'a [Plugin],
     active_cells: &BTreeSet<CellCoord>,
-) -> BTreeMap<EffectiveRefKey, tes3::esp::Reference> {
+) -> BTreeMap<EffectiveRefKey, &'a tes3::esp::Reference> {
     let mut refs = BTreeMap::new();
 
     for plugin in active_plugins {
@@ -477,7 +481,7 @@ fn effective_active_refs(
                 if reference.deleted == Some(true) {
                     refs.remove(&key);
                 } else {
-                    refs.insert(key, reference.clone());
+                    refs.insert(key, reference);
                 }
             }
         }
@@ -871,17 +875,14 @@ fn classify_static_bounds_occlusion(
     else {
         return None;
     };
-    let mut corrected_reference = reference.clone();
+    let mut corrected_translation = reference.translation;
     let contact_position =
         contact.world_position(reference.translation, reference.rotation, reference.scale);
     if let Some(terrain_z) = terrain.height_at(contact_position[0], contact_position[1]) {
-        corrected_reference.translation[2] -= contact_position[2] - terrain_z;
+        corrected_translation[2] -= contact_position[2] - terrain_z;
     }
-    let corrected_bounds = bounds.world_aabb(
-        corrected_reference.translation,
-        corrected_reference.rotation,
-        corrected_reference.scale,
-    );
+    let corrected_bounds =
+        bounds.world_aabb(corrected_translation, reference.rotation, reference.scale);
     let action = decide_static_bounds_action(corrected_bounds, static_occluders);
     let (status, ratio) = match action {
         StaticBoundsAction::None => ("static_bounds_clear", 0.0),
@@ -891,9 +892,13 @@ fn classify_static_bounds_occlusion(
             ("static_bounds_fully_occluded", ratio)
         }
         StaticBoundsAction::Move { ratio, .. }
-            if find_valid_relocation_position(
+            if find_valid_relocation_transform(
                 cell,
-                &corrected_reference,
+                RefTransform {
+                    translation: corrected_translation,
+                    rotation: reference.rotation,
+                    scale: reference.scale,
+                },
                 contact,
                 *bounds,
                 terrain,
@@ -1151,7 +1156,8 @@ mod tests {
             objects: vec![TES3Object::Cell(exterior_cell([((1, 2), deleted_ref())]))],
         };
 
-        let refs = effective_active_refs(&[first, deleted], &BTreeSet::from([(0, 0)]));
+        let plugins = [first, deleted];
+        let refs = effective_active_refs(&plugins, &BTreeSet::from([(0, 0)]));
 
         assert!(refs.is_empty());
     }
@@ -1172,7 +1178,8 @@ mod tests {
             objects: vec![TES3Object::Cell(exterior_cell([((1, 2), deleted)]))],
         };
 
-        let refs = effective_active_refs(&[first, second], &BTreeSet::from([(0, 0), (1, 0)]));
+        let plugins = [first, second];
+        let refs = effective_active_refs(&plugins, &BTreeSet::from([(0, 0), (1, 0)]));
 
         assert!(refs.is_empty());
     }

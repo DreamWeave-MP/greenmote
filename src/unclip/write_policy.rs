@@ -185,6 +185,19 @@ struct StaticBoundsMoveCause<'a> {
     occluder: &'a StaticOccluder,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct RefTransform {
+    pub(crate) translation: [f32; 3],
+    pub(crate) rotation: [f32; 3],
+    pub(crate) scale: Option<f32>,
+}
+
+#[derive(Clone, Copy)]
+struct WriteTarget {
+    cell: CellCoord,
+    key: (u32, u32),
+}
+
 fn adjust_reference_for_terrain_and_static_bounds(
     cell: CellCoord,
     key: (u32, u32),
@@ -213,9 +226,6 @@ fn adjust_reference_for_terrain_and_static_bounds(
     if let Some(terrain_z) = terrain_z {
         corrected_translation[2] -= contact_position[2] - terrain_z;
     }
-    let mut corrected_reference = reference.clone();
-    corrected_reference.translation = corrected_translation;
-
     match decide_static_bounds_action(
         geometry
             .bounds
@@ -238,9 +248,13 @@ fn adjust_reference_for_terrain_and_static_bounds(
             ratio, occluder, ..
         } => {
             let Some(move_) = apply_static_bounds_move(
-                cell,
-                key,
-                &mut corrected_reference,
+                WriteTarget { cell, key },
+                reference,
+                RefTransform {
+                    translation: corrected_translation,
+                    rotation: reference.rotation,
+                    scale: reference.scale,
+                },
                 geometry,
                 terrain,
                 static_occluders,
@@ -264,28 +278,27 @@ fn adjust_reference_for_terrain_and_static_bounds(
 }
 
 fn apply_static_bounds_move(
-    cell: CellCoord,
-    key: (u32, u32),
-    reference: &mut tes3::esp::Reference,
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    transform: RefTransform,
     geometry: &MeshGeometry,
     terrain: &TerrainIndex,
     static_occluders: &StaticOccluderIndex,
     cause: StaticBoundsMoveCause<'_>,
 ) -> Option<WriteStaticBoundsMove> {
-    let old_position = reference.translation;
-    let new_position = find_valid_relocation_position(
-        cell,
-        reference,
+    let old_position = transform.translation;
+    let new_position = find_valid_relocation_transform(
+        target.cell,
+        transform,
         &geometry.contact,
         geometry.bounds,
         terrain,
         static_occluders,
     )?;
-    reference.translation = new_position;
 
     Some(WriteStaticBoundsMove {
-        cell: [cell.0, cell.1],
-        reference_key: [key.0, key.1],
+        cell: [target.cell.0, target.cell.1],
+        reference_key: [target.key.0, target.key.1],
         id: reference.id.clone(),
         occlusion_ratio: cause.ratio,
         old_position,
@@ -296,17 +309,21 @@ fn apply_static_bounds_move(
     })
 }
 
-pub(crate) fn find_valid_relocation_position(
+pub(crate) fn find_valid_relocation_transform(
     cell: CellCoord,
-    reference: &tes3::esp::Reference,
+    transform: RefTransform,
     contact: &MeshContact,
     bounds: MeshAabb,
     terrain: &TerrainIndex,
     static_occluders: &StaticOccluderIndex,
 ) -> Option<[f32; 3]> {
-    let original = [reference.translation[0], reference.translation[1]];
-    let grass_bounds =
-        bounds.world_aabb(reference.translation, reference.rotation, reference.scale);
+    let RefTransform {
+        translation,
+        rotation,
+        scale,
+    } = transform;
+    let original = [translation[0], translation[1]];
+    let grass_bounds = bounds.world_aabb(translation, rotation, scale);
 
     for step in 1..=RELOCATION_STEPS {
         let radius = f32::from(step) * RELOCATION_STEP;
@@ -332,15 +349,13 @@ pub(crate) fn find_valid_relocation_position(
                 continue;
             }
 
-            let mut candidate_translation = reference.translation;
+            let mut candidate_translation = translation;
             candidate_translation[0] = candidate_xy[0];
             candidate_translation[1] = candidate_xy[1];
-            let contact_position =
-                contact.world_position(candidate_translation, reference.rotation, reference.scale);
+            let contact_position = contact.world_position(candidate_translation, rotation, scale);
             let terrain_z = terrain.height_at(contact_position[0], contact_position[1])?;
             candidate_translation[2] -= contact_position[2] - terrain_z;
-            let final_bounds =
-                bounds.world_aabb(candidate_translation, reference.rotation, reference.scale);
+            let final_bounds = bounds.world_aabb(candidate_translation, rotation, scale);
             if static_bounds_occlusion_ratio(
                 final_bounds,
                 &static_occluders.bounds_for(final_bounds),

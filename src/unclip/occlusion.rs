@@ -1,4 +1,8 @@
-use super::mesh::WorldAabb;
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::{cells::CellCoord, mesh::WorldAabb};
+
+const CELL_SIZE: f32 = 8192.0;
 
 #[derive(Clone)]
 pub(crate) struct StaticOccluder {
@@ -11,16 +15,30 @@ pub(crate) struct StaticOccluder {
 #[derive(Default)]
 pub(crate) struct StaticOccluderIndex {
     occluders: Vec<StaticOccluder>,
+    cells: BTreeMap<CellCoord, Vec<usize>>,
 }
 
 impl StaticOccluderIndex {
     pub(crate) fn new(occluders: Vec<StaticOccluder>) -> Self {
-        Self { occluders }
+        let mut cells = BTreeMap::<CellCoord, Vec<usize>>::new();
+        for (index, occluder) in occluders.iter().enumerate() {
+            for cell in cells_for_bounds(occluder.bounds) {
+                cells.entry(cell).or_default().push(index);
+            }
+        }
+        Self { occluders, cells }
     }
 
     pub(crate) fn candidates_for(&self, bounds: WorldAabb) -> Vec<&StaticOccluder> {
-        self.occluders
-            .iter()
+        let mut indices = BTreeSet::new();
+        for cell in cells_for_bounds(bounds) {
+            if let Some(cell_indices) = self.cells.get(&cell) {
+                indices.extend(cell_indices.iter().copied());
+            }
+        }
+        indices
+            .into_iter()
+            .filter_map(|index| self.occluders.get(index))
             .filter(|occluder| occluder.bounds.intersects_xy(bounds))
             .collect()
     }
@@ -31,6 +49,26 @@ impl StaticOccluderIndex {
             .map(|occluder| occluder.bounds)
             .collect()
     }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn cells_for_bounds(bounds: WorldAabb) -> Vec<CellCoord> {
+    let min_x = cell_coord(bounds.min[0]);
+    let min_y = cell_coord(bounds.min[1]);
+    let max_x = cell_coord(bounds.max[0] - f32::EPSILON);
+    let max_y = cell_coord(bounds.max[1] - f32::EPSILON);
+    let mut cells = Vec::new();
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            cells.push((x, y));
+        }
+    }
+    cells
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn cell_coord(position: f32) -> i32 {
+    (position / CELL_SIZE).floor() as i32
 }
 
 pub(crate) enum StaticBoundsAction<'a> {
@@ -232,6 +270,35 @@ mod tests {
             }
             StaticBoundsAction::None | StaticBoundsAction::Delete { .. } => panic!("expected move"),
         }
+    }
+
+    #[test]
+    fn static_occluder_index_finds_cross_cell_occluders() {
+        let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
+            [8190.0, 0.0, 0.0],
+            [8200.0, 10.0, 10.0],
+        ))]);
+
+        assert_eq!(
+            occluders
+                .candidates_for(aabb([8195.0, 0.0, 0.0], [8205.0, 10.0, 10.0]))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn static_occluder_index_ignores_distant_cells() {
+        let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
+            [0.0, 0.0, 0.0],
+            [10.0, 10.0, 10.0],
+        ))]);
+
+        assert!(
+            occluders
+                .candidates_for(aabb([8192.0, 0.0, 0.0], [8202.0, 10.0, 10.0]))
+                .is_empty()
+        );
     }
 
     fn aabb(min: [f32; 3], max: [f32; 3]) -> WorldAabb {
