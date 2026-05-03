@@ -76,6 +76,11 @@ impl SettingsUiState {
             .map(Path::to_owned)
     }
 
+    pub(super) fn log_path(&self) -> Option<PathBuf> {
+        self.log_directory()
+            .map(|directory| directory.join(crate::groundcover::LOG_NAME))
+    }
+
     pub(super) fn replace_saved_config(
         &mut self,
         path: PathBuf,

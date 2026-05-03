@@ -305,13 +305,13 @@ impl GreenmoteApp {
 
             if ui
                 .add_enabled(
-                    actions_enabled && self.settings.log_directory().is_some(),
-                    egui::Button::new("Open log dir"),
+                    actions_enabled && self.settings.log_path().is_some(),
+                    egui::Button::new("Open log"),
                 )
                 .clicked()
-                && let Some(log_directory) = self.settings.log_directory()
+                && let Some(log_path) = self.settings.log_path()
             {
-                self.open_directory(&log_directory, "log");
+                self.open_file(&log_path, "log");
             }
         });
     }
@@ -555,7 +555,7 @@ impl GreenmoteApp {
             return;
         }
 
-        match open_directory_native(directory) {
+        match open_path_native(directory) {
             Ok(()) => self.set_status(format!(
                 "Requested opening {label} directory: {}",
                 directory.display()
@@ -563,6 +563,27 @@ impl GreenmoteApp {
             Err(error) => self.set_status(format!(
                 "Failed to open {label} directory {}: {error}",
                 directory.display()
+            )),
+        }
+    }
+
+    fn open_file(&mut self, file: &Path, label: &str) {
+        if !file.is_file() {
+            self.set_status(format!(
+                "Cannot open {label} file because it does not exist: {}",
+                file.display()
+            ));
+            return;
+        }
+
+        match open_path_native(file) {
+            Ok(()) => self.set_status(format!(
+                "Requested opening {label} file: {}",
+                file.display()
+            )),
+            Err(error) => self.set_status(format!(
+                "Failed to open {label} file {}: {error}",
+                file.display()
             )),
         }
     }
@@ -711,15 +732,15 @@ fn finite_widget_extent(extent: f32) -> f32 {
     }
 }
 
-struct DirectoryOpenCommand {
+struct OpenCommand {
     program: &'static str,
     args: Vec<OsString>,
 }
 
-fn open_directory_native(path: &Path) -> io::Result<()> {
+fn open_path_native(path: &Path) -> io::Result<()> {
     let mut last_error = None;
 
-    for candidate in directory_open_commands(path) {
+    for candidate in path_open_commands(path) {
         let mut command = Command::new(candidate.program);
         command.args(&candidate.args);
         match command.spawn() {
@@ -736,44 +757,43 @@ fn open_directory_native(path: &Path) -> io::Result<()> {
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "no directory opener available")
-    }))
+    Err(last_error
+        .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no path opener available")))
 }
 
 #[cfg(target_os = "windows")]
-fn directory_open_commands(path: &Path) -> Vec<DirectoryOpenCommand> {
-    vec![DirectoryOpenCommand {
+fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
+    vec![OpenCommand {
         program: "explorer",
         args: vec![path.as_os_str().to_owned()],
     }]
 }
 
 #[cfg(target_os = "macos")]
-fn directory_open_commands(path: &Path) -> Vec<DirectoryOpenCommand> {
-    vec![DirectoryOpenCommand {
+fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
+    vec![OpenCommand {
         program: "open",
         args: vec![path.as_os_str().to_owned()],
     }]
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn directory_open_commands(path: &Path) -> Vec<DirectoryOpenCommand> {
+fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
     let path = path.as_os_str().to_owned();
     vec![
-        DirectoryOpenCommand {
+        OpenCommand {
             program: "xdg-open",
             args: vec![path.clone()],
         },
-        DirectoryOpenCommand {
+        OpenCommand {
             program: "gio",
             args: vec![OsString::from("open"), path.clone()],
         },
-        DirectoryOpenCommand {
+        OpenCommand {
             program: "kde-open5",
             args: vec![path.clone()],
         },
-        DirectoryOpenCommand {
+        OpenCommand {
             program: "kde-open",
             args: vec![path],
         },
@@ -787,7 +807,7 @@ mod tests {
     use super::{ConvertRunOptions, ConvertUiState};
 
     #[cfg(all(unix, not(target_os = "macos")))]
-    use super::directory_open_commands;
+    use super::path_open_commands;
 
     #[test]
     fn settings_save_preserves_unrelated_transient_run_options() {
@@ -864,9 +884,9 @@ mod tests {
 
     #[test]
     #[cfg(all(unix, not(target_os = "macos")))]
-    fn linux_directory_open_commands_use_paths_not_file_urls() {
+    fn linux_path_open_commands_use_paths_not_file_urls() {
         let path = Path::new("/tmp/greenmote output/log");
-        let commands = directory_open_commands(path);
+        let commands = path_open_commands(path);
 
         assert_eq!(commands[0].program, "xdg-open");
         assert_eq!(commands[0].args, vec![path.as_os_str().to_owned()]);
