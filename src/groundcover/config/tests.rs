@@ -144,7 +144,10 @@ dry_run = false
 
     let config = GroundcoverConfig::get(args, &dir.path, default_output_directory).unwrap();
 
-    assert_eq!(config.groundcover_output, "gc.omwaddon");
+    assert_eq!(
+        crate::groundcover::GROUNDCOVER_PLUGIN_NAME,
+        "groundcover.omwaddon"
+    );
     assert_eq!(config.output_directory, PathBuf::from("out"));
     assert!(config.dry_run);
     assert!(config.is_ignored_plugin_name("Generated.omwaddon"));
@@ -170,6 +173,29 @@ groundcover_output = "gc.omwaddon"
     let config = GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
 
     assert_eq!(config.output_directory, default_output_directory);
+}
+
+#[test]
+fn deprecated_output_names_are_not_resaved() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[convert]
+groundcover_output = "gc.omwaddon"
+deleted_output = "deleted_gc.omwaddon"
+"#,
+    )
+    .unwrap();
+    let config =
+        GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local")).unwrap();
+
+    config.save_for_edit(&config_path).unwrap();
+
+    let contents = read_to_string(config_path).unwrap();
+    assert!(!contents.contains("groundcover_output"));
+    assert!(!contents.contains("deleted_output"));
 }
 
 #[test]
@@ -242,7 +268,10 @@ dry_run = true
 
     let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
 
-    assert_eq!(config.groundcover_output, default::groundcover_output());
+    assert_eq!(
+        crate::groundcover::GROUNDCOVER_PLUGIN_NAME,
+        "groundcover.omwaddon"
+    );
     assert!(!config.dry_run);
     assert!(!config.is_ignored_plugin_name("LegacyGenerated.omwaddon"));
 }

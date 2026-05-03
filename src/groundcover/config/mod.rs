@@ -23,12 +23,6 @@ pub struct GroundcoverConfig {
     #[serde(default = "default::output_directory")]
     pub output_directory: PathBuf,
 
-    #[serde(default = "default::groundcover_output")]
-    pub groundcover_output: String,
-
-    #[serde(default = "default::deleted_output")]
-    pub deleted_output: String,
-
     #[serde(default = "default::grass_ids")]
     pub grass_ids: Vec<String>,
 
@@ -70,8 +64,6 @@ impl GroundcoverConfig {
     pub(super) fn with_output_directory(output_directory: PathBuf) -> Self {
         Self {
             output_directory,
-            groundcover_output: default::groundcover_output(),
-            deleted_output: default::deleted_output(),
             grass_ids: default::grass_ids(),
             exclude: default::exclude(),
             ignored_plugins: default::ignored_plugins(),

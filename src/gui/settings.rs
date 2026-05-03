@@ -26,8 +26,6 @@ pub(super) struct SettingsUiState {
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsDraft {
     output_directory: String,
-    groundcover_output: String,
-    deleted_output: String,
     grass_ids: String,
     exclude: String,
     ignored_plugins: String,
@@ -163,20 +161,6 @@ impl GreenmoteApp {
     }
 
     fn show_convert_settings(&mut self, ui: &mut egui::Ui) {
-        setting_text_field(
-            ui,
-            "Groundcover output plugin",
-            &mut self.settings.draft.groundcover_output,
-            &mut self.settings.dirty,
-        );
-        setting_text_field(
-            ui,
-            "Deleted refs output plugin",
-            &mut self.settings.draft.deleted_output,
-            &mut self.settings.dirty,
-        );
-
-        ui.add_space(8.0);
         setting_multiline_text(
             ui,
             "Grass ID patterns",
@@ -310,8 +294,6 @@ impl SettingsDraft {
         let run_options = ConvertRunOptions::from_config(config);
         Self {
             output_directory: path_to_string(&config.output_directory),
-            groundcover_output: config.groundcover_output.clone(),
-            deleted_output: config.deleted_output.clone(),
             grass_ids: vec_to_lines(&config.grass_ids),
             exclude: vec_to_lines(&config.exclude),
             ignored_plugins: vec_to_lines(&config.ignored_plugins),
@@ -324,12 +306,6 @@ impl SettingsDraft {
     fn to_config(&self) -> GroundcoverConfig {
         let mut config = GroundcoverConfig::default();
         config.output_directory = PathBuf::from(self.output_directory.trim());
-        self.groundcover_output
-            .trim()
-            .clone_into(&mut config.groundcover_output);
-        self.deleted_output
-            .trim()
-            .clone_into(&mut config.deleted_output);
         config.grass_ids = lines_to_vec(&self.grass_ids);
         config.exclude = lines_to_vec(&self.exclude);
         config.ignored_plugins = lines_to_vec(&self.ignored_plugins);

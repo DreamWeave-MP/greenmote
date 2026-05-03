@@ -1,20 +1,8 @@
 use std::path::PathBuf;
 
-use crate::groundcover::{DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME};
-
 #[must_use]
 pub fn output_directory() -> PathBuf {
     openmw_config::default_data_local_path()
-}
-
-#[must_use]
-pub fn groundcover_output() -> String {
-    GROUNDCOVER_PLUGIN_NAME.to_owned()
-}
-
-#[must_use]
-pub fn deleted_output() -> String {
-    DELETED_PLUGIN_NAME.to_owned()
 }
 
 #[must_use]

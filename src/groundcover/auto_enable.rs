@@ -6,7 +6,7 @@ use std::{
 
 use openmw_config::OpenMWConfiguration;
 
-use crate::groundcover::GroundcoverConfig;
+use crate::groundcover::{DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME, GroundcoverConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputEnablement {
@@ -45,21 +45,15 @@ pub fn validate_output_directory(
     }
 }
 
-pub fn status(
-    config: &OpenMWConfiguration,
-    groundcover_config: &GroundcoverConfig,
-) -> OutputEnablement {
+pub fn status(config: &OpenMWConfiguration) -> OutputEnablement {
     OutputEnablement {
-        groundcover_enabled: config.has_groundcover_file(&groundcover_config.groundcover_output),
-        deleted_enabled: config.has_content_file(&groundcover_config.deleted_output),
+        groundcover_enabled: config.has_groundcover_file(GROUNDCOVER_PLUGIN_NAME),
+        deleted_enabled: config.has_content_file(DELETED_PLUGIN_NAME),
     }
 }
 
-pub fn outputs(
-    config: &mut OpenMWConfiguration,
-    groundcover_config: &GroundcoverConfig,
-) -> io::Result<AutoEnableResult> {
-    let status = status(config, groundcover_config);
+pub fn outputs(config: &mut OpenMWConfiguration) -> io::Result<AutoEnableResult> {
+    let status = status(config);
     if !status.has_missing_outputs() {
         return Ok(AutoEnableResult {
             backup: None,
@@ -73,13 +67,13 @@ pub fn outputs(
 
     if !status.groundcover_enabled {
         config
-            .add_groundcover_file(&groundcover_config.groundcover_output)
+            .add_groundcover_file(GROUNDCOVER_PLUGIN_NAME)
             .map_err(to_io_error)?;
     }
 
     if !status.deleted_enabled {
         config
-            .add_content_file(&groundcover_config.deleted_output)
+            .add_content_file(DELETED_PLUGIN_NAME)
             .map_err(to_io_error)?;
     }
 

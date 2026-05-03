@@ -2,7 +2,9 @@ use std::{fs::create_dir_all, io};
 
 use tes3::esp::TES3Object;
 
-use crate::groundcover::{GroundcoverConfig, progress::CancellationToken};
+use crate::groundcover::{
+    DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME, GroundcoverConfig, progress::CancellationToken,
+};
 
 use super::BuiltPlugins;
 
@@ -28,10 +30,10 @@ pub fn save_plugins(
 
     built
         .groundcover_plugin
-        .save_path(config.output_directory.join(&config.groundcover_output))?;
+        .save_path(config.output_directory.join(GROUNDCOVER_PLUGIN_NAME))?;
     built
         .deleted_plugin
-        .save_path(config.output_directory.join(&config.deleted_output))?;
+        .save_path(config.output_directory.join(DELETED_PLUGIN_NAME))?;
 
     Ok(())
 }

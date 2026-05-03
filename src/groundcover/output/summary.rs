@@ -1,6 +1,8 @@
 use std::io::{self, Write};
 
-use crate::groundcover::{GroundcoverConfig, mesh, plan::ConversionPlan};
+use crate::groundcover::{
+    DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME, GroundcoverConfig, mesh, plan::ConversionPlan,
+};
 
 #[derive(Debug)]
 pub struct RunSummary {
@@ -31,16 +33,13 @@ pub fn write_summary(
         "# groundcover output: {}",
         config
             .output_directory
-            .join(&config.groundcover_output)
+            .join(GROUNDCOVER_PLUGIN_NAME)
             .display()
     )?;
     writeln!(
         writer,
         "# deleted output: {}",
-        config
-            .output_directory
-            .join(&config.deleted_output)
-            .display()
+        config.output_directory.join(DELETED_PLUGIN_NAME).display()
     )?;
     writeln!(writer, "# content files: {}", summary.content_files)?;
     writeln!(writer, "# loaded plugins: {}", summary.loaded_plugins)?;

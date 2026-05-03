@@ -4,7 +4,8 @@ use openmw_config::OpenMWConfiguration;
 use vfstool_lib::VFS;
 
 use crate::groundcover::{
-    GroundcoverArgs, GroundcoverConfig, LOG_NAME, auto_enable, load, mesh, openmw, output,
+    DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME, GroundcoverArgs, GroundcoverConfig, LOG_NAME,
+    auto_enable, load, mesh, openmw, output,
     plan::{ConversionPlan, build_static_conversion_plan, scan_cells_parallel},
     progress::{self, CancellationToken, ConversionPhase, EventSink},
 };
@@ -65,7 +66,7 @@ fn run_loaded_config(
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
     check_cancelled(cancellation)?;
-    let initial_enablement = auto_enable::status(&openmw_config, config);
+    let initial_enablement = auto_enable::status(&openmw_config);
 
     validate_auto_enable(&openmw_config, config, initial_enablement)?;
     check_cancelled(cancellation)?;
@@ -311,8 +312,8 @@ fn run_auto_enable(
     }
 
     progress::emit_phase(events, ConversionPhase::AutoEnabling);
-    let result = auto_enable::outputs(openmw_config, config)?;
-    print_auto_enable_result(stdout, config, &result)
+    let result = auto_enable::outputs(openmw_config)?;
+    print_auto_enable_result(stdout, &result)
 }
 
 fn build_run_summary(
@@ -396,14 +397,14 @@ fn print_success(
     writeln!(
         writer,
         "Generated {} and {} in {}",
-        config.groundcover_output,
-        config.deleted_output,
+        GROUNDCOVER_PLUGIN_NAME,
+        DELETED_PLUGIN_NAME,
         config.output_directory.display()
     )?;
     writeln!(writer, "Copied {copied_meshes} meshes under Meshes/grass")?;
     writeln!(writer, "Wrote log to {}", log_path.display())?;
     if !config.auto_enable {
-        print_manual_enablement_guidance(writer, config, enablement)?;
+        print_manual_enablement_guidance(writer, enablement)?;
     }
 
     Ok(())
@@ -411,7 +412,6 @@ fn print_success(
 
 fn print_auto_enable_result(
     writer: &mut dyn Write,
-    config: &GroundcoverConfig,
     result: &auto_enable::AutoEnableResult,
 ) -> io::Result<()> {
     let Some(backup) = &result.backup else {
@@ -426,20 +426,20 @@ fn print_auto_enable_result(
         (true, true) => writeln!(
             writer,
             "Updated OpenMW config with {} as groundcover= and {} as content=; backup saved at {}",
-            config.groundcover_output,
-            config.deleted_output,
+            GROUNDCOVER_PLUGIN_NAME,
+            DELETED_PLUGIN_NAME,
             backup.display()
         ),
         (true, false) => writeln!(
             writer,
             "Updated OpenMW config with {} as groundcover=; backup saved at {}",
-            config.groundcover_output,
+            GROUNDCOVER_PLUGIN_NAME,
             backup.display()
         ),
         (false, true) => writeln!(
             writer,
             "Updated OpenMW config with {} as content=; backup saved at {}",
-            config.deleted_output,
+            DELETED_PLUGIN_NAME,
             backup.display()
         ),
         (false, false) => unreachable!("auto-enable backup without added outputs is meaningless"),
@@ -448,7 +448,6 @@ fn print_auto_enable_result(
 
 fn print_manual_enablement_guidance(
     writer: &mut dyn Write,
-    config: &GroundcoverConfig,
     enablement: auto_enable::OutputEnablement,
 ) -> io::Result<()> {
     match (enablement.groundcover_enabled, enablement.deleted_enabled) {
@@ -458,18 +457,15 @@ fn print_manual_enablement_guidance(
         ),
         (false, false) => writeln!(
             writer,
-            "Add {} as groundcover= and {} as content= in openmw.cfg.",
-            config.groundcover_output, config.deleted_output
+            "Add {GROUNDCOVER_PLUGIN_NAME} as groundcover= and {DELETED_PLUGIN_NAME} as content= in openmw.cfg."
         ),
         (false, true) => writeln!(
             writer,
-            "Add {} as groundcover= in openmw.cfg.",
-            config.groundcover_output
+            "Add {GROUNDCOVER_PLUGIN_NAME} as groundcover= in openmw.cfg."
         ),
         (true, false) => writeln!(
             writer,
-            "Add {} as content= in openmw.cfg.",
-            config.deleted_output
+            "Add {DELETED_PLUGIN_NAME} as content= in openmw.cfg."
         ),
     }
 }

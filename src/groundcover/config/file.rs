@@ -28,11 +28,11 @@ pub(super) struct GroundcoverConfigFile {
 // command mode into TOML is how a config file starts lying to its owner.
 #[allow(clippy::struct_excessive_bools)]
 struct ConvertConfigFile {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    groundcover_output: Option<String>,
+    #[serde(rename = "groundcover_output", default, skip_serializing)]
+    _groundcover_output: Option<String>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    deleted_output: Option<String>,
+    #[serde(rename = "deleted_output", default, skip_serializing)]
+    _deleted_output: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grass_ids: Option<Vec<String>>,
@@ -59,8 +59,8 @@ impl GroundcoverConfigFile {
             output_directory: Some(config.output_directory.clone()),
             validate_config: None,
             convert: ConvertConfigFile {
-                groundcover_output: Some(config.groundcover_output.clone()),
-                deleted_output: Some(config.deleted_output.clone()),
+                _groundcover_output: None,
+                _deleted_output: None,
                 grass_ids: Some(config.grass_ids.clone()),
                 exclude: Some(config.exclude.clone()),
                 ignored_plugins: Some(config.ignored_plugins.clone()),
@@ -86,12 +86,6 @@ impl GroundcoverConfigFile {
                 file.output_directory,
                 default_output_directory,
             ),
-            groundcover_output: convert
-                .groundcover_output
-                .unwrap_or_else(default::groundcover_output),
-            deleted_output: convert
-                .deleted_output
-                .unwrap_or_else(default::deleted_output),
             grass_ids: convert.grass_ids.unwrap_or_else(default::grass_ids),
             exclude: convert.exclude.unwrap_or_else(default::exclude),
             ignored_plugins: convert
