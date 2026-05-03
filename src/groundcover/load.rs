@@ -1,5 +1,7 @@
 use std::{
+    collections::HashSet,
     fs::metadata,
+    hash::BuildHasher,
     io,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
@@ -11,7 +13,7 @@ use vfstool_lib::VFS;
 
 use crate::groundcover::{
     GENERATED_PLUGIN_AUTHOR, GENERATED_PLUGIN_DESCRIPTION, GroundcoverConfig, plan::LoadedPlugin,
-    progress::CancellationToken,
+    progress::CancellationToken, records,
 };
 
 #[derive(Clone, Debug)]
@@ -24,6 +26,13 @@ pub struct SourcePlugin {
 pub struct PluginLoadResult {
     pub plugins: Vec<LoadedPlugin>,
     pub skipped_generated: Vec<SkippedGeneratedPlugin>,
+    pub warnings: Vec<PluginLoadWarning>,
+}
+
+pub struct CellScanLoadResult {
+    pub loaded_plugins: usize,
+    pub loaded_load_indices: Vec<usize>,
+    pub cell_plans: Vec<crate::groundcover::plan::PluginCellPlan>,
     pub warnings: Vec<PluginLoadWarning>,
 }
 
@@ -79,20 +88,65 @@ pub fn resolve_source_plugins(
         .collect()
 }
 
-pub fn load_plugins_for_cell_scanning(
-    sources: Vec<SourcePlugin>,
-    progress: &(dyn Fn(usize, usize) + Sync),
-    cancellation: &CancellationToken,
-) -> io::Result<PluginLoadResult> {
-    load_plugins_matching(sources, PluginLoadMode::Cells, progress, cancellation)
-}
-
 pub fn load_plugins_for_static_planning(
     sources: Vec<SourcePlugin>,
     progress: &(dyn Fn(usize, usize) + Sync),
     cancellation: &CancellationToken,
 ) -> io::Result<PluginLoadResult> {
     load_plugins_matching(sources, PluginLoadMode::Statics, progress, cancellation)
+}
+
+pub fn load_and_scan_plugins_for_cell_planning<S: BuildHasher + Sync>(
+    sources: Vec<SourcePlugin>,
+    matched_static_ids: &HashSet<String, S>,
+    progress: &(dyn Fn(usize, usize) + Sync),
+    cancellation: &CancellationToken,
+) -> io::Result<CellScanLoadResult> {
+    let total = sources.len();
+    let completed = AtomicUsize::new(0);
+
+    let mut scanned = sources
+        .into_par_iter()
+        .map(|source| {
+            let result = if cancellation.is_cancelled() {
+                Err(PluginLoadError::Cancelled(cancelled_error()))
+            } else {
+                load_and_scan_one_plugin(&source, matched_static_ids)
+            };
+
+            let load_index = source.load_index;
+            let current = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            progress(current, total);
+            (load_index, result)
+        })
+        .collect::<Vec<_>>();
+
+    scanned.sort_by_key(|(load_index, _result)| *load_index);
+
+    let mut loaded_plugins = 0;
+    let mut loaded_load_indices = Vec::new();
+    let mut cell_plans = Vec::new();
+    let mut warnings = Vec::new();
+
+    for (_load_index, result) in scanned {
+        match result {
+            Ok(Some(cell_plan)) => {
+                loaded_plugins += 1;
+                loaded_load_indices.push(cell_plan.load_index);
+                cell_plans.push(cell_plan);
+            }
+            Ok(None) => {}
+            Err(PluginLoadError::Warning(warning)) => warnings.push(warning),
+            Err(PluginLoadError::Cancelled(error)) => return Err(error),
+        }
+    }
+
+    Ok(CellScanLoadResult {
+        loaded_plugins,
+        loaded_load_indices,
+        cell_plans,
+        warnings,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -183,6 +237,51 @@ enum PluginLoadOutcome {
 enum PluginLoadError {
     Warning(PluginLoadWarning),
     Cancelled(io::Error),
+}
+
+fn load_and_scan_one_plugin<S: BuildHasher>(
+    source: &SourcePlugin,
+    matched_static_ids: &HashSet<String, S>,
+) -> Result<Option<crate::groundcover::plan::PluginCellPlan>, PluginLoadError> {
+    let plugin = match load_one_plugin(source, PluginLoadMode::Cells) {
+        Ok(RawPluginLoadOutcome::Loaded(plugin)) => plugin,
+        Ok(RawPluginLoadOutcome::SkippedGenerated) => return Ok(None),
+        Err(error) => {
+            return Err(PluginLoadError::Warning(PluginLoadWarning {
+                plugin_path: source.plugin_path.clone(),
+                error,
+            }));
+        }
+    };
+    let source_master = crate::groundcover::plan::MasterSpec::from_path(&source.plugin_path);
+    let header_masters =
+        plugin
+            .objects_of_type::<Header>()
+            .next()
+            .map_or_else(Vec::new, |header| {
+                header
+                    .masters
+                    .iter()
+                    .map(|(name, size)| crate::groundcover::plan::MasterSpec {
+                        name: name.clone(),
+                        size: *size,
+                    })
+                    .collect()
+            });
+    let (groundcover_cells, deleted_cells, touched_refs, used_static_ids) =
+        records::process_exterior_cells(&plugin, matched_static_ids);
+
+    Ok(Some(crate::groundcover::plan::PluginCellPlan {
+        load_index: source.load_index,
+        plugin_name: source.plugin_name.clone(),
+        plugin_path: source.plugin_path.clone(),
+        source_master,
+        header_masters,
+        groundcover_cells,
+        deleted_cells,
+        touched_refs,
+        used_static_ids,
+    }))
 }
 
 fn cancelled_error() -> io::Error {

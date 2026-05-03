@@ -6,7 +6,7 @@ use vfstool_lib::VFS;
 use crate::groundcover::{
     DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME, GroundcoverArgs, GroundcoverConfig, LOG_NAME,
     auto_enable, load, mesh, openmw, output,
-    plan::{ConversionPlan, build_static_conversion_plan, scan_cells_parallel},
+    plan::{ConversionPlan, build_static_conversion_plan},
     progress::{self, CancellationToken, ConversionPhase, EventSink},
 };
 
@@ -104,34 +104,23 @@ fn run_loaded_config(
         (static_plugins.len(), Vec::new())
     } else {
         progress::emit_phase(events, ConversionPhase::LoadingCellPlugins);
-        let cell_load = load::load_plugins_for_cell_scanning(
-            sources,
-            &|current, total| {
-                progress::emit_progress(
-                    events,
-                    ConversionPhase::LoadingCellPlugins,
-                    current,
-                    total,
-                );
-            },
-            cancellation,
-        )?;
-        write_load_warnings(stderr, &cell_load.warnings)?;
-        check_cancelled(cancellation)?;
-        let cell_plugins = cell_load.plugins;
-        ensure_static_sources_loaded_for_cell_scanning(&static_plan, &cell_plugins)?;
-        check_cancelled(cancellation)?;
         progress::emit_phase(events, ConversionPhase::ScanningCells);
-        let cell_plans = scan_cells_parallel(
-            &cell_plugins,
+        let cell_scan = load::load_and_scan_plugins_for_cell_planning(
+            sources,
             &static_plan.matched_static_ids,
             &|current, total| {
                 progress::emit_progress(events, ConversionPhase::ScanningCells, current, total);
             },
             cancellation,
         )?;
+        write_load_warnings(stderr, &cell_scan.warnings)?;
         check_cancelled(cancellation)?;
-        (cell_plugins.len(), cell_plans)
+        ensure_static_sources_loaded_for_cell_scanning(
+            &static_plan,
+            &cell_scan.loaded_load_indices,
+        )?;
+        check_cancelled(cancellation)?;
+        (cell_scan.loaded_plugins, cell_scan.cell_plans)
     };
     let plan = static_plan.with_cell_plans(cell_plans);
     check_cancelled(cancellation)?;
@@ -361,12 +350,9 @@ fn write_load_warnings(
 
 fn ensure_static_sources_loaded_for_cell_scanning(
     static_plan: &crate::groundcover::plan::StaticConversionPlan,
-    cell_plugins: &[crate::groundcover::plan::LoadedPlugin],
+    cell_load_indices: &[usize],
 ) -> io::Result<()> {
-    let cell_load_indices = cell_plugins
-        .iter()
-        .map(|plugin| plugin.load_index)
-        .collect::<HashSet<_>>();
+    let cell_load_indices = cell_load_indices.iter().copied().collect::<HashSet<_>>();
     let missing = static_plan
         .static_plans
         .iter()
