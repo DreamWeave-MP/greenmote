@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use tes3::esp::{Landscape, LandscapeFlags};
 
@@ -29,6 +29,18 @@ impl TerrainIndex {
         }
 
         Self { lands }
+    }
+
+    #[must_use]
+    pub fn from_landscapes_in_cells<'a>(
+        landscapes: impl IntoIterator<Item = &'a Landscape>,
+        cells: &BTreeSet<CellCoord>,
+    ) -> Self {
+        Self::from_landscapes(
+            landscapes
+                .into_iter()
+                .filter(|landscape| cells.contains(&landscape.grid)),
+        )
     }
 
     #[must_use]
@@ -158,5 +170,28 @@ mod tests {
         let terrain = TerrainIndex::from_landscapes([&base, &texture_only]);
 
         assert!((terrain.height_at(0.0, 0.0).unwrap_or_default() - 40.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn terrain_index_decodes_only_requested_cells() {
+        let mut included = Landscape {
+            grid: (0, 0),
+            landscape_flags: LandscapeFlags::USES_VERTEX_HEIGHTS_AND_NORMALS,
+            ..Landscape::default()
+        };
+        included.vertex_heights.offset = 5.0;
+        let excluded = Landscape {
+            grid: (1, 0),
+            landscape_flags: LandscapeFlags::USES_VERTEX_HEIGHTS_AND_NORMALS,
+            ..Landscape::default()
+        };
+
+        let terrain = TerrainIndex::from_landscapes_in_cells(
+            [&included, &excluded],
+            &BTreeSet::from([(0, 0)]),
+        );
+
+        assert!(terrain.has_cell((0, 0)));
+        assert!(!terrain.has_cell((1, 0)));
     }
 }

@@ -40,13 +40,14 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         &context_plugins,
         (!target_is_active).then_some(&target_plugin_data),
     );
-    let terrain = TerrainIndex::from_landscapes(
+    let target_cells = target_exterior_cells(&target_plugin_data);
+    let active_cells = active_cells(&target_cells)?;
+    let terrain = TerrainIndex::from_landscapes_in_cells(
         context_plugins
             .iter()
             .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
+        &active_cells,
     );
-    let target_cells = target_exterior_cells(&target_plugin_data);
-    let active_cells = active_cells(&target_cells)?;
     let target_static_ids = target_reference_static_ids(&target_plugin_data);
     let mut context_meshes = MeshContactCache::new(&vfs);
     let static_occluders = build_static_occluders(
