@@ -52,7 +52,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
             .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
         &active_cells,
     );
-    let target_static_ids = target_reference_static_ids(&target_plugin_data);
+    let target_static_ids = target_reference_static_ids(&target_plugin_data, &policy);
     let mut context_meshes = MeshBoundsCache::new(&vfs);
     let static_occluders = build_static_occluders(
         &context_plugins,
@@ -430,12 +430,13 @@ fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTreeSet<CellC
     Ok(cells)
 }
 
-fn target_reference_static_ids(plugin: &Plugin) -> BTreeSet<String> {
+fn target_reference_static_ids(plugin: &Plugin, policy: &UnclipPolicy) -> BTreeSet<String> {
     plugin
         .objects_of_type::<Cell>()
         .filter(|cell| cell.is_exterior())
         .flat_map(|cell| cell.references.values())
         .filter(|reference| reference.deleted != Some(true))
+        .filter(|reference| policy.target_filter.includes(&reference.id))
         .map(|reference| reference.id.to_lowercase())
         .collect()
 }
@@ -1147,14 +1148,14 @@ mod tests {
 
     use crate::unclip::{
         UnclipArgs,
-        args::WriteActionArg,
+        args::{RelocationPolicy, TargetFilter, UnclipPolicy, WriteActionArg, WriteActions},
         model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
 
     use super::{
         MeshContactResolution, deleted_reference_inspection, effective_active_refs,
-        write_output_footer, write_status_label,
+        target_reference_static_ids, write_output_footer, write_status_label,
     };
 
     #[test]
@@ -1232,6 +1233,22 @@ mod tests {
     }
 
     #[test]
+    fn target_static_ids_follow_target_filter() {
+        let plugin = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([
+                ((1, 2), reference_with_id("flora_grass_01")),
+                ((3, 4), reference_with_id("terrain_rock_01")),
+            ]))],
+        };
+        let policy = test_policy_with_filter(&["flora_*"], &[]);
+
+        let ids = target_reference_static_ids(&plugin, &policy);
+
+        assert!(ids.contains("flora_grass_01"));
+        assert!(!ids.contains("terrain_rock_01"));
+    }
+
+    #[test]
     fn structured_instance_footer_writes_changes_before_summary() {
         let args = UnclipArgs {
             openmw_cfg: None,
@@ -1281,6 +1298,39 @@ mod tests {
             id: "grass".to_owned(),
             translation: [0.0, 0.0, z],
             ..Reference::default()
+        }
+    }
+
+    fn reference_with_id(id: &str) -> Reference {
+        Reference {
+            id: id.to_owned(),
+            ..Reference::default()
+        }
+    }
+
+    fn test_policy_with_filter(include_ids: &[&str], exclude_ids: &[&str]) -> UnclipPolicy {
+        UnclipPolicy {
+            write_actions: WriteActions {
+                terrain_z: true,
+                static_delete: true,
+                static_move: true,
+            },
+            contact_epsilon: 0.5,
+            origin_epsilon: 0.5,
+            relocation: RelocationPolicy {
+                step: 32.0,
+                steps: 8,
+            },
+            target_filter: TargetFilter::new(
+                &include_ids
+                    .iter()
+                    .map(|pattern| (*pattern).to_owned())
+                    .collect::<Vec<_>>(),
+                &exclude_ids
+                    .iter()
+                    .map(|pattern| (*pattern).to_owned())
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 
