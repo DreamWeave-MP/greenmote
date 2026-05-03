@@ -238,7 +238,7 @@ fn write_reference_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary)
     )?;
     writeln!(
         stdout,
-        "  matching target filter: {}",
+        "  matching grass id filter: {}",
         summary.target_refs_matching_filter
     )?;
     writeln!(
@@ -339,16 +339,30 @@ fn write_policy_summary_text(
     if policy.has_target_filter() {
         writeln!(
             stdout,
-            "  include ids: {}",
-            pattern_list(&policy.include_ids)
+            "  include grass ids: {}",
+            pattern_list(&policy.include_grass_ids)
         )?;
         writeln!(
             stdout,
-            "  exclude ids: {}",
-            pattern_list(&policy.exclude_ids)
+            "  exclude grass ids: {}",
+            pattern_list(&policy.exclude_grass_ids)
         )?;
     } else {
-        writeln!(stdout, "  target filter: none")?;
+        writeln!(stdout, "  grass id filter: none")?;
+    }
+    if policy.has_occluder_filter() {
+        writeln!(
+            stdout,
+            "  include occluder ids: {}",
+            pattern_list(&policy.include_occluder_ids)
+        )?;
+        writeln!(
+            stdout,
+            "  exclude occluder ids: {}",
+            pattern_list(&policy.exclude_occluder_ids)
+        )?;
+    } else {
+        writeln!(stdout, "  occluder id filter: none")?;
     }
     writeln!(
         stdout,
@@ -703,8 +717,10 @@ mod tests {
         assert!(output.contains(
             "\"write_actions\":[\"terrain-z\",\"static-delete\",\"static-move\",\"orient\"]"
         ));
-        assert!(output.contains("\"include_ids\":[]"));
-        assert!(output.contains("\"exclude_ids\":[]"));
+        assert!(output.contains("\"include_grass_ids\":[]"));
+        assert!(output.contains("\"exclude_grass_ids\":[]"));
+        assert!(output.contains("\"include_occluder_ids\":[]"));
+        assert!(output.contains("\"exclude_occluder_ids\":[]"));
     }
 
     #[test]

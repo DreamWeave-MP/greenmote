@@ -674,7 +674,7 @@ mod tests {
         plan_contact_adjustment, record_reference_change,
     };
     use crate::unclip::{
-        args::{RelocationPolicy, TargetFilter, UnclipPolicy, WriteActions},
+        args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
         write_plan::{WriteOrientation, WritePlan, WriteStaticBoundsDeletion},
     };
 
@@ -824,7 +824,8 @@ mod tests {
                 step: 32.0,
                 steps: 8,
             },
-            target_filter: TargetFilter::new(&[], &[]),
+            target_filter: IdFilter::new(&[], &[]).unwrap(),
+            occluder_filter: IdFilter::new(&[], &[]).unwrap(),
         }
     }
 

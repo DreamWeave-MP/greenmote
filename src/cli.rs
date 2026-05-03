@@ -139,10 +139,14 @@ mod tests {
             "12",
             "--orientation-epsilon",
             "3.5",
-            "--include-id",
-            "flora_grass_*",
-            "--exclude-id",
-            "flora_grass_bad_*",
+            "--include-grass-id",
+            "^flora_grass_.*$",
+            "--exclude-grass-id",
+            "^flora_grass_bad_.*$",
+            "--include-occluder-id",
+            "^terrain_.*$",
+            "--exclude-occluder-id",
+            "^terrain_tree_huge$",
         ]);
 
         let Some(Command::Unclip(args)) = cli.command else {
@@ -161,6 +165,8 @@ mod tests {
         assert_close(policy.orientation_epsilon_degrees, 3.5);
         assert!(policy.target_filter.includes("flora_grass_01"));
         assert!(!policy.target_filter.includes("flora_grass_bad_01"));
+        assert!(policy.occluder_filter.includes("terrain_rock_01"));
+        assert!(!policy.occluder_filter.includes("terrain_tree_huge"));
     }
 
     #[test]
@@ -182,6 +188,26 @@ mod tests {
             ]);
 
             assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn unclip_policy_rejects_invalid_regex_filters() {
+        for flag in ["--include-grass-id", "--exclude-occluder-id"] {
+            let cli = Cli::parse_from([
+                "greenmote",
+                "unclip",
+                "--plugin",
+                "groundcover.omwaddon",
+                flag,
+                "(",
+            ]);
+
+            let Some(Command::Unclip(args)) = cli.command else {
+                panic!("unclip command should parse before policy validation");
+            };
+
+            assert!(args.policy().is_err());
         }
     }
 

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
+use regex::{Regex, RegexBuilder};
 
 use super::model::{CONTACT_TERRAIN_EPSILON, ORIGIN_TERRAIN_EPSILON};
 
@@ -63,13 +64,21 @@ pub struct UnclipArgs {
     #[arg(long = "orientation-epsilon", default_value_t = DEFAULT_ORIENTATION_EPSILON_DEGREES, value_parser = non_negative_f32)]
     pub orientation_epsilon: f32,
 
-    /// Include only target refs whose IDs match this case-insensitive wildcard. May be repeated.
-    #[arg(long = "include-id", value_name = "PATTERN")]
-    pub include_ids: Vec<String>,
+    /// Include only target grass refs whose IDs match this case-insensitive regex. May be repeated.
+    #[arg(long = "include-grass-id", value_name = "REGEX")]
+    pub include_grass_ids: Vec<String>,
 
-    /// Exclude target refs whose IDs match this case-insensitive wildcard. May be repeated.
-    #[arg(long = "exclude-id", value_name = "PATTERN")]
-    pub exclude_ids: Vec<String>,
+    /// Exclude target grass refs whose IDs match this case-insensitive regex. May be repeated.
+    #[arg(long = "exclude-grass-id", value_name = "REGEX")]
+    pub exclude_grass_ids: Vec<String>,
+
+    /// Include only static occluders whose IDs match this case-insensitive regex. May be repeated.
+    #[arg(long = "include-occluder-id", value_name = "REGEX")]
+    pub include_occluder_ids: Vec<String>,
+
+    /// Exclude static occluders whose IDs match this case-insensitive regex. May be repeated.
+    #[arg(long = "exclude-occluder-id", value_name = "REGEX")]
+    pub exclude_occluder_ids: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -89,7 +98,8 @@ pub(crate) struct UnclipPolicy {
     pub(crate) origin_epsilon: f32,
     pub(crate) orientation_epsilon_degrees: f32,
     pub(crate) relocation: RelocationPolicy,
-    pub(crate) target_filter: TargetFilter,
+    pub(crate) target_filter: IdFilter,
+    pub(crate) occluder_filter: IdFilter,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -109,11 +119,11 @@ pub(crate) struct RelocationPolicy {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct TargetFilter {
+pub(crate) struct IdFilter {
     include_patterns: Vec<String>,
     exclude_patterns: Vec<String>,
-    normalized_includes: Vec<String>,
-    normalized_excludes: Vec<String>,
+    includes: Vec<Regex>,
+    excludes: Vec<Regex>,
 }
 
 impl UnclipArgs {
@@ -128,7 +138,10 @@ impl UnclipArgs {
                 step: self.relocation_step,
                 steps: self.relocation_steps,
             },
-            target_filter: TargetFilter::new(&self.include_ids, &self.exclude_ids),
+            target_filter: IdFilter::new(&self.include_grass_ids, &self.exclude_grass_ids)
+                .map_err(|error| format!("invalid grass id filter: {error}"))?,
+            occluder_filter: IdFilter::new(&self.include_occluder_ids, &self.exclude_occluder_ids)
+                .map_err(|error| format!("invalid occluder id filter: {error}"))?,
         })
     }
 }
@@ -234,36 +247,21 @@ impl WriteActions {
     }
 }
 
-impl TargetFilter {
-    pub(crate) fn new(include_ids: &[String], exclude_ids: &[String]) -> Self {
-        Self {
+impl IdFilter {
+    pub(crate) fn new(include_ids: &[String], exclude_ids: &[String]) -> Result<Self, String> {
+        Ok(Self {
             include_patterns: include_ids.to_vec(),
             exclude_patterns: exclude_ids.to_vec(),
-            normalized_includes: include_ids
-                .iter()
-                .map(|pattern| pattern.to_lowercase())
-                .collect(),
-            normalized_excludes: exclude_ids
-                .iter()
-                .map(|pattern| pattern.to_lowercase())
-                .collect(),
-        }
+            includes: compile_regexes(include_ids)?,
+            excludes: compile_regexes(exclude_ids)?,
+        })
     }
 
     pub(crate) fn includes(&self, id: &str) -> bool {
-        let id = id.to_lowercase();
-        if self
-            .normalized_excludes
-            .iter()
-            .any(|pattern| wildcard_matches(pattern, &id))
-        {
+        if self.excludes.iter().any(|pattern| pattern.is_match(id)) {
             return false;
         }
-        self.normalized_includes.is_empty()
-            || self
-                .normalized_includes
-                .iter()
-                .any(|pattern| wildcard_matches(pattern, &id))
+        self.includes.is_empty() || self.includes.iter().any(|pattern| pattern.is_match(id))
     }
 
     pub(crate) fn include_ids(&self) -> &[String] {
@@ -275,37 +273,16 @@ impl TargetFilter {
     }
 }
 
-fn wildcard_matches(pattern: &str, value: &str) -> bool {
-    let pattern = pattern.as_bytes();
-    let value = value.as_bytes();
-    let (mut pattern_index, mut value_index) = (0, 0);
-    let mut star = None;
-    let mut star_value_index = 0;
-
-    while value_index < value.len() {
-        if pattern_index < pattern.len()
-            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == value[value_index])
-        {
-            pattern_index += 1;
-            value_index += 1;
-        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-            star = Some(pattern_index);
-            pattern_index += 1;
-            star_value_index = value_index;
-        } else if let Some(star_index) = star {
-            pattern_index = star_index + 1;
-            star_value_index += 1;
-            value_index = star_value_index;
-        } else {
-            return false;
-        }
-    }
-
-    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
-        pattern_index += 1;
-    }
-
-    pattern_index == pattern.len()
+fn compile_regexes(patterns: &[String]) -> Result<Vec<Regex>, String> {
+    patterns
+        .iter()
+        .map(|pattern| {
+            RegexBuilder::new(pattern)
+                .case_insensitive(true)
+                .build()
+                .map_err(|error| format!("{pattern:?}: {error}"))
+        })
+        .collect()
 }
 
 fn non_negative_f32(value: &str) -> Result<f32, String> {
@@ -343,18 +320,18 @@ fn relocation_steps(value: &str) -> Result<u16, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::TargetFilter;
+    use super::IdFilter;
 
     #[test]
     fn target_filter_includes_all_without_include_patterns() {
-        let filter = TargetFilter::new(&[], &[]);
+        let filter = IdFilter::new(&[], &[]).unwrap();
 
         assert!(filter.includes("flora_grass_01"));
     }
 
     #[test]
-    fn target_filter_matches_case_insensitive_wildcards() {
-        let filter = TargetFilter::new(&["flora_grass_*".to_owned()], &[]);
+    fn target_filter_matches_case_insensitive_regexes() {
+        let filter = IdFilter::new(&["^flora_grass_.*$".to_owned()], &[]).unwrap();
 
         assert!(filter.includes("Flora_Grass_01"));
         assert!(!filter.includes("flora_bush_01"));
@@ -362,9 +339,18 @@ mod tests {
 
     #[test]
     fn target_filter_exclude_wins_over_include() {
-        let filter = TargetFilter::new(&["flora_*".to_owned()], &["flora_grass_bad_?".to_owned()]);
+        let filter = IdFilter::new(
+            &["^flora_.*$".to_owned()],
+            &["^flora_grass_bad_.+$".to_owned()],
+        )
+        .unwrap();
 
         assert!(filter.includes("flora_grass_good_1"));
         assert!(!filter.includes("flora_grass_bad_1"));
+    }
+
+    #[test]
+    fn target_filter_rejects_invalid_regex() {
+        assert!(IdFilter::new(&["(".to_owned()], &[]).is_err());
     }
 }

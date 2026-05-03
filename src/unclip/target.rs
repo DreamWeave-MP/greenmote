@@ -52,7 +52,7 @@ pub(crate) fn target_exterior_ref_count(plugin: &Plugin) -> usize {
 mod tests {
     use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
-    use crate::unclip::args::{RelocationPolicy, TargetFilter, UnclipPolicy, WriteActions};
+    use crate::unclip::args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions};
 
     use super::{target_exterior_cells, target_exterior_ref_count, target_reference_static_ids};
 
@@ -64,7 +64,7 @@ mod tests {
                 ((3, 4), reference_with_id("terrain_rock_01")),
             ]))],
         };
-        let policy = test_policy_with_filter(&["flora_*"], &[]);
+        let policy = test_policy_with_filter(&["^flora_.*"], &[]);
 
         let ids = target_reference_static_ids(&plugin, &policy);
 
@@ -101,7 +101,7 @@ mod tests {
                 )),
             ],
         };
-        let policy = test_policy_with_filter(&["flora_*"], &[]);
+        let policy = test_policy_with_filter(&["^flora_.*"], &[]);
 
         assert_eq!(
             target_exterior_cells(&plugin, &policy),
@@ -126,7 +126,7 @@ mod tests {
                 step: 32.0,
                 steps: 8,
             },
-            target_filter: TargetFilter::new(
+            target_filter: IdFilter::new(
                 &include_ids
                     .iter()
                     .map(|pattern| (*pattern).to_owned())
@@ -135,7 +135,9 @@ mod tests {
                     .iter()
                     .map(|pattern| (*pattern).to_owned())
                     .collect::<Vec<_>>(),
-            ),
+            )
+            .unwrap(),
+            occluder_filter: IdFilter::new(&[], &[]).unwrap(),
         }
     }
 

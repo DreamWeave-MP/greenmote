@@ -57,6 +57,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         &active_static_index,
         &mut context_meshes,
         &target_static_ids,
+        &policy.occluder_filter,
     );
     let missing_active_terrain_cells = active_cells
         .iter()
@@ -348,8 +349,10 @@ mod tests {
             relocation_step: 32.0,
             relocation_steps: 8,
             orientation_epsilon: 1.0,
-            include_ids: Vec::new(),
-            exclude_ids: Vec::new(),
+            include_grass_ids: Vec::new(),
+            exclude_grass_ids: Vec::new(),
+            include_occluder_ids: Vec::new(),
+            exclude_occluder_ids: Vec::new(),
         };
         let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
         context.write = Some(WriteReport::not_written(

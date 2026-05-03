@@ -98,8 +98,10 @@ pub(crate) struct UnclipPolicySummary {
     pub(crate) orientation_epsilon_degrees: f32,
     pub(crate) relocation_step: f32,
     pub(crate) relocation_steps: u16,
-    pub(crate) include_ids: Vec<String>,
-    pub(crate) exclude_ids: Vec<String>,
+    pub(crate) include_grass_ids: Vec<String>,
+    pub(crate) exclude_grass_ids: Vec<String>,
+    pub(crate) include_occluder_ids: Vec<String>,
+    pub(crate) exclude_occluder_ids: Vec<String>,
 }
 
 impl UnclipPolicySummary {
@@ -111,13 +113,19 @@ impl UnclipPolicySummary {
             orientation_epsilon_degrees: policy.orientation_epsilon_degrees,
             relocation_step: policy.relocation.step,
             relocation_steps: policy.relocation.steps,
-            include_ids: policy.target_filter.include_ids().to_vec(),
-            exclude_ids: policy.target_filter.exclude_ids().to_vec(),
+            include_grass_ids: policy.target_filter.include_ids().to_vec(),
+            exclude_grass_ids: policy.target_filter.exclude_ids().to_vec(),
+            include_occluder_ids: policy.occluder_filter.include_ids().to_vec(),
+            exclude_occluder_ids: policy.occluder_filter.exclude_ids().to_vec(),
         }
     }
 
     pub(crate) const fn has_target_filter(&self) -> bool {
-        !self.include_ids.is_empty() || !self.exclude_ids.is_empty()
+        !self.include_grass_ids.is_empty() || !self.exclude_grass_ids.is_empty()
+    }
+
+    pub(crate) const fn has_occluder_filter(&self) -> bool {
+        !self.include_occluder_ids.is_empty() || !self.exclude_occluder_ids.is_empty()
     }
 }
 
@@ -138,8 +146,10 @@ impl UnclipReportContext {
                 orientation_epsilon_degrees: 1.0,
                 relocation_step: 32.0,
                 relocation_steps: 8,
-                include_ids: Vec::new(),
-                exclude_ids: Vec::new(),
+                include_grass_ids: Vec::new(),
+                exclude_grass_ids: Vec::new(),
+                include_occluder_ids: Vec::new(),
+                exclude_occluder_ids: Vec::new(),
             },
             write_requested: false,
             write: None,

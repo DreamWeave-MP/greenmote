@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tes3::esp::{Cell, Plugin};
 
 use super::{
+    args::IdFilter,
     cells::CellCoord,
     mesh::{MeshBoundsCache, StaticMeshIndex},
     occlusion::{StaticOccluder, StaticOccluderIndex},
@@ -14,13 +15,19 @@ pub(crate) fn build_static_occluders(
     static_index: &StaticMeshIndex,
     mesh_bounds: &mut MeshBoundsCache<'_>,
     target_static_ids: &BTreeSet<String>,
+    occluder_filter: &IdFilter,
 ) -> StaticOccluderIndex {
     let effective_refs = effective_active_refs(active_plugins, active_cells);
     let mut occluders = Vec::new();
 
     for (key, reference) in effective_refs {
         let reference_id_key = reference.id.to_lowercase();
-        if target_static_ids.contains(&reference_id_key) {
+        if !should_include_occluder(
+            &reference.id,
+            &reference_id_key,
+            target_static_ids,
+            occluder_filter,
+        ) {
             continue;
         }
 
@@ -40,6 +47,15 @@ pub(crate) fn build_static_occluders(
     }
 
     StaticOccluderIndex::new(occluders)
+}
+
+fn should_include_occluder(
+    reference_id: &str,
+    reference_id_key: &str,
+    target_static_ids: &BTreeSet<String>,
+    occluder_filter: &IdFilter,
+) -> bool {
+    !target_static_ids.contains(reference_id_key) && occluder_filter.includes(reference_id)
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -83,7 +99,9 @@ mod tests {
 
     use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
-    use super::effective_active_refs;
+    use crate::unclip::args::IdFilter;
+
+    use super::{effective_active_refs, should_include_occluder};
 
     #[test]
     fn effective_active_refs_apply_later_deletions() {
@@ -123,6 +141,25 @@ mod tests {
         let refs = effective_active_refs(&plugins, &BTreeSet::from([(0, 0), (1, 0)]));
 
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn occluder_filter_excludes_matching_static_refs() {
+        let target_static_ids = BTreeSet::new();
+        let filter = IdFilter::new(&[], &["^tree_huge$".to_owned()]).unwrap();
+
+        assert!(!should_include_occluder(
+            "tree_huge",
+            "tree_huge",
+            &target_static_ids,
+            &filter
+        ));
+        assert!(should_include_occluder(
+            "terrain_rock",
+            "terrain_rock",
+            &target_static_ids,
+            &filter
+        ));
     }
 
     fn reference_at_z(z: f32) -> Reference {
