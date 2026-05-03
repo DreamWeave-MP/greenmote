@@ -159,6 +159,20 @@ impl WriteActions {
     pub(crate) const fn any_enabled(self) -> bool {
         self.terrain_z || self.static_delete || self.static_move
     }
+
+    pub(crate) fn enabled_names(self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.terrain_z {
+            names.push("terrain-z");
+        }
+        if self.static_delete {
+            names.push("static-delete");
+        }
+        if self.static_move {
+            names.push("static-move");
+        }
+        names
+    }
 }
 
 impl TargetFilter {
@@ -189,6 +203,14 @@ impl TargetFilter {
                 .include_ids
                 .iter()
                 .any(|pattern| wildcard_matches(pattern, &id))
+    }
+
+    pub(crate) fn include_ids(&self) -> &[String] {
+        &self.include_ids
+    }
+
+    pub(crate) fn exclude_ids(&self) -> &[String] {
+        &self.exclude_ids
     }
 }
 

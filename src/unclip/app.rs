@@ -69,11 +69,11 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     let mut report_context = UnclipReportContext::new(
         &target_plugin.source_path,
         target_cells.len(),
+        target_exterior_ref_count(&target_plugin_data),
         active_cells.len(),
         terrain.len(),
         missing_active_terrain_cells,
-        policy.origin_epsilon,
-        policy.contact_epsilon,
+        &policy,
     );
     let mut target_meshes = MeshContactCache::new(&vfs);
     let write_plan = if args.write {
@@ -584,6 +584,14 @@ fn sorted_exterior_cells(plugin: &Plugin) -> Vec<&Cell> {
         .collect::<Vec<_>>();
     cells.sort_by_key(|cell| cell.data.grid);
     cells
+}
+
+fn target_exterior_ref_count(plugin: &Plugin) -> usize {
+    plugin
+        .objects_of_type::<Cell>()
+        .filter(|cell| cell.is_exterior())
+        .map(|cell| cell.references.len())
+        .sum()
 }
 
 struct ReferenceInspectionContext<'a, 'b> {
@@ -1166,8 +1174,8 @@ mod tests {
     use super::{
         ContactDetails, MeshContactResolution, OriginDetails, ReferenceInspectionInput,
         StaticBoundsOcclusionDetails, WriteStatusEvidence, deleted_reference_inspection,
-        effective_active_refs, target_reference_static_ids, write_output_footer,
-        write_status_label,
+        effective_active_refs, target_exterior_ref_count, target_reference_static_ids,
+        write_output_footer, write_status_label,
     };
 
     #[test]
@@ -1317,6 +1325,21 @@ mod tests {
 
         assert!(ids.contains("flora_grass_01"));
         assert!(!ids.contains("terrain_rock_01"));
+    }
+
+    #[test]
+    fn target_exterior_ref_count_includes_filtered_and_deleted_refs() {
+        let mut deleted = reference_with_id("flora_deleted");
+        deleted.deleted = Some(true);
+        let plugin = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([
+                ((1, 2), reference_with_id("flora_grass_01")),
+                ((3, 4), reference_with_id("terrain_rock_01")),
+                ((5, 6), deleted),
+            ]))],
+        };
+
+        assert_eq!(target_exterior_ref_count(&plugin), 3);
     }
 
     #[test]

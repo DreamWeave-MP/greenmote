@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::{cells::CellCoord, write_plan::WriteReport};
+use super::{args::UnclipPolicy, cells::CellCoord, write_plan::WriteReport};
 
 pub(crate) const ORIGIN_TERRAIN_EPSILON: f32 = 0.5;
 pub(crate) const CONTACT_TERRAIN_EPSILON: f32 = 0.5;
@@ -8,11 +8,11 @@ pub(crate) const CONTACT_TERRAIN_EPSILON: f32 = 0.5;
 pub(crate) struct UnclipReportContext {
     pub(crate) target_plugin: String,
     target_exterior_cells: usize,
+    target_refs_total: usize,
     active_cells: usize,
     loaded_terrain_cells_total: usize,
     missing_active_terrain_cells: Vec<CellCoord>,
-    origin_epsilon: f32,
-    contact_epsilon: f32,
+    policy: UnclipPolicySummary,
     pub(crate) write: Option<WriteReport>,
 }
 
@@ -20,22 +20,26 @@ impl UnclipReportContext {
     pub(crate) fn new(
         target_plugin_path: &std::path::Path,
         target_exterior_cells: usize,
+        target_refs_total: usize,
         active_cells: usize,
         loaded_terrain_cells_total: usize,
         missing_active_terrain_cells: Vec<CellCoord>,
-        origin_epsilon: f32,
-        contact_epsilon: f32,
+        policy: &UnclipPolicy,
     ) -> Self {
         Self {
             target_plugin: target_plugin_path.display().to_string(),
             target_exterior_cells,
+            target_refs_total,
             active_cells,
             loaded_terrain_cells_total,
             missing_active_terrain_cells,
-            origin_epsilon,
-            contact_epsilon,
+            policy: UnclipPolicySummary::from_policy(policy),
             write: None,
         }
+    }
+
+    pub(crate) const fn policy(&self) -> &UnclipPolicySummary {
+        &self.policy
     }
 
     pub(crate) fn missing_active_terrain_cells(&self) -> Vec<[i32; 2]> {
@@ -47,32 +51,63 @@ impl UnclipReportContext {
 
     pub(crate) fn summary(&self, inspection: &TerrainInspectionReport) -> UnclipSummary {
         let active_terrain_cells_missing = self.missing_active_terrain_cells.len();
+        let target_refs_matching_filter = inspection.refs;
         UnclipSummary {
             target_exterior_cells: self.target_exterior_cells,
+            target_refs_total: self.target_refs_total,
+            target_refs_matching_filter,
+            target_refs_filtered_out: self.target_refs_total - target_refs_matching_filter,
             active_cells: self.active_cells,
             loaded_terrain_cells_total: self.loaded_terrain_cells_total,
             active_terrain_cells_loaded: self.active_cells - active_terrain_cells_missing,
             active_terrain_cells_missing,
-            refs: inspection.refs,
-            refs_actionable: inspection.refs - inspection.refs_deleted,
-            refs_deleted: inspection.refs_deleted,
-            refs_with_mesh_contact: inspection.refs_with_mesh_contact,
-            refs_without_resolved_static: inspection.refs_without_resolved_static,
-            refs_missing_mesh_contact: inspection.refs_missing_mesh_contact,
-            refs_with_terrain: inspection.refs_with_terrain,
-            refs_missing_terrain: inspection.refs_missing_terrain,
-            refs_origin_above_terrain: inspection.refs_above_terrain,
-            refs_origin_below_terrain: inspection.refs_below_terrain,
-            refs_mesh_contact_above_terrain: inspection.refs_contact_above_terrain,
-            refs_mesh_contact_below_terrain: inspection.refs_contact_below_terrain,
-            refs_mesh_contact_missing_terrain: inspection.refs_contact_missing_terrain,
-            refs_static_bounds_occluded: inspection.refs_static_bounds_occluded,
-            refs_static_bounds_fully_occluded: inspection.refs_static_bounds_fully_occluded,
-            refs_static_bounds_relocatable: inspection.refs_static_bounds_relocatable,
-            refs_static_bounds_blocked: inspection.refs_static_bounds_blocked,
-            origin_terrain_epsilon: self.origin_epsilon,
-            mesh_contact_terrain_epsilon: self.contact_epsilon,
+            filtered_refs_actionable: inspection.refs - inspection.refs_deleted,
+            filtered_refs_deleted: inspection.refs_deleted,
+            filtered_refs_with_mesh_contact: inspection.refs_with_mesh_contact,
+            filtered_refs_without_resolved_static: inspection.refs_without_resolved_static,
+            filtered_refs_missing_mesh_contact: inspection.refs_missing_mesh_contact,
+            filtered_refs_with_origin_terrain: inspection.refs_with_terrain,
+            filtered_refs_missing_origin_terrain: inspection.refs_missing_terrain,
+            filtered_refs_origin_above_terrain: inspection.refs_above_terrain,
+            filtered_refs_origin_below_terrain: inspection.refs_below_terrain,
+            filtered_refs_mesh_contact_above_terrain: inspection.refs_contact_above_terrain,
+            filtered_refs_mesh_contact_below_terrain: inspection.refs_contact_below_terrain,
+            filtered_refs_mesh_contact_missing_terrain: inspection.refs_contact_missing_terrain,
+            filtered_refs_static_bounds_occluded: inspection.refs_static_bounds_occluded,
+            filtered_refs_static_bounds_fully_occluded: inspection
+                .refs_static_bounds_fully_occluded,
+            filtered_refs_static_bounds_relocatable: inspection.refs_static_bounds_relocatable,
+            filtered_refs_static_bounds_blocked: inspection.refs_static_bounds_blocked,
         }
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct UnclipPolicySummary {
+    pub(crate) write_actions: Vec<&'static str>,
+    pub(crate) origin_terrain_epsilon: f32,
+    pub(crate) mesh_contact_terrain_epsilon: f32,
+    pub(crate) relocation_step: f32,
+    pub(crate) relocation_steps: u16,
+    pub(crate) include_ids: Vec<String>,
+    pub(crate) exclude_ids: Vec<String>,
+}
+
+impl UnclipPolicySummary {
+    fn from_policy(policy: &UnclipPolicy) -> Self {
+        Self {
+            write_actions: policy.write_actions.enabled_names(),
+            origin_terrain_epsilon: policy.origin_epsilon,
+            mesh_contact_terrain_epsilon: policy.contact_epsilon,
+            relocation_step: policy.relocation.step,
+            relocation_steps: policy.relocation.steps,
+            include_ids: policy.target_filter.include_ids().to_vec(),
+            exclude_ids: policy.target_filter.exclude_ids().to_vec(),
+        }
+    }
+
+    pub(crate) const fn has_target_filter(&self) -> bool {
+        !self.include_ids.is_empty() || !self.exclude_ids.is_empty()
     }
 }
 
@@ -82,11 +117,19 @@ impl UnclipReportContext {
         Self {
             target_plugin: target_plugin.to_owned(),
             target_exterior_cells: 0,
+            target_refs_total: 0,
             active_cells: 0,
             loaded_terrain_cells_total: 0,
             missing_active_terrain_cells: Vec::new(),
-            origin_epsilon: ORIGIN_TERRAIN_EPSILON,
-            contact_epsilon: CONTACT_TERRAIN_EPSILON,
+            policy: UnclipPolicySummary {
+                write_actions: vec!["terrain-z", "static-delete", "static-move"],
+                origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
+                mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
+                relocation_step: 32.0,
+                relocation_steps: 8,
+                include_ids: Vec::new(),
+                exclude_ids: Vec::new(),
+            },
             write: None,
         }
     }
@@ -95,29 +138,29 @@ impl UnclipReportContext {
 #[derive(Serialize)]
 pub(crate) struct UnclipSummary {
     pub(crate) target_exterior_cells: usize,
+    pub(crate) target_refs_total: usize,
+    pub(crate) target_refs_matching_filter: usize,
+    pub(crate) target_refs_filtered_out: usize,
     pub(crate) active_cells: usize,
     pub(crate) loaded_terrain_cells_total: usize,
     pub(crate) active_terrain_cells_loaded: usize,
     pub(crate) active_terrain_cells_missing: usize,
-    pub(crate) refs: usize,
-    pub(crate) refs_actionable: usize,
-    pub(crate) refs_deleted: usize,
-    pub(crate) refs_with_mesh_contact: usize,
-    pub(crate) refs_without_resolved_static: usize,
-    pub(crate) refs_missing_mesh_contact: usize,
-    pub(crate) refs_with_terrain: usize,
-    pub(crate) refs_missing_terrain: usize,
-    pub(crate) refs_origin_above_terrain: usize,
-    pub(crate) refs_origin_below_terrain: usize,
-    pub(crate) refs_mesh_contact_above_terrain: usize,
-    pub(crate) refs_mesh_contact_below_terrain: usize,
-    pub(crate) refs_mesh_contact_missing_terrain: usize,
-    pub(crate) refs_static_bounds_occluded: usize,
-    pub(crate) refs_static_bounds_fully_occluded: usize,
-    pub(crate) refs_static_bounds_relocatable: usize,
-    pub(crate) refs_static_bounds_blocked: usize,
-    pub(crate) origin_terrain_epsilon: f32,
-    pub(crate) mesh_contact_terrain_epsilon: f32,
+    pub(crate) filtered_refs_actionable: usize,
+    pub(crate) filtered_refs_deleted: usize,
+    pub(crate) filtered_refs_with_mesh_contact: usize,
+    pub(crate) filtered_refs_without_resolved_static: usize,
+    pub(crate) filtered_refs_missing_mesh_contact: usize,
+    pub(crate) filtered_refs_with_origin_terrain: usize,
+    pub(crate) filtered_refs_missing_origin_terrain: usize,
+    pub(crate) filtered_refs_origin_above_terrain: usize,
+    pub(crate) filtered_refs_origin_below_terrain: usize,
+    pub(crate) filtered_refs_mesh_contact_above_terrain: usize,
+    pub(crate) filtered_refs_mesh_contact_below_terrain: usize,
+    pub(crate) filtered_refs_mesh_contact_missing_terrain: usize,
+    pub(crate) filtered_refs_static_bounds_occluded: usize,
+    pub(crate) filtered_refs_static_bounds_fully_occluded: usize,
+    pub(crate) filtered_refs_static_bounds_relocatable: usize,
+    pub(crate) filtered_refs_static_bounds_blocked: usize,
 }
 
 #[derive(Serialize)]
