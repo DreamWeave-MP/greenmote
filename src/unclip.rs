@@ -7,6 +7,7 @@ mod mesh;
 mod model;
 mod occlusion;
 mod report;
+mod static_occluders;
 mod target;
 mod terrain;
 mod write_plan;
