@@ -7,6 +7,7 @@ mod inspection;
 mod mesh;
 mod model;
 mod occlusion;
+mod orientation;
 mod report;
 mod setup;
 mod static_occluders;

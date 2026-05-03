@@ -8,8 +8,8 @@ use super::{
         UnclipSummary,
     },
     write_plan::{
-        WriteAdjustment, WriteReport, WriteStaticBoundsDeletion, WriteStaticBoundsMove,
-        WriteSummary,
+        WriteAdjustment, WriteOrientation, WriteReport, WriteStaticBoundsDeletion,
+        WriteStaticBoundsMove, WriteSummary,
     },
 };
 
@@ -42,7 +42,10 @@ pub(crate) fn write_instance_header(
     writeln!(stdout, "Unclip reference diagnostics")?;
     writeln!(stdout, "Target plugin: {}", context.target_plugin)?;
     if let Some(write) = &context.write
-        && (!write.adjustments.is_empty() || !write.deletions.is_empty() || !write.moves.is_empty())
+        && (!write.adjustments.is_empty()
+            || !write.deletions.is_empty()
+            || !write.moves.is_empty()
+            || !write.orientations.is_empty())
     {
         writeln!(stdout)?;
         writeln!(stdout, "Write changes")?;
@@ -114,6 +117,14 @@ pub(crate) fn write_structured_write_records(
             write_json(stdout, &record)?;
             writeln!(stdout)?;
         }
+        for orientation in &write.orientations {
+            let record = StructuredWriteOrientationRecord {
+                r#type: "write_orientation",
+                orientation,
+            };
+            write_json(stdout, &record)?;
+            writeln!(stdout)?;
+        }
     }
     Ok(())
 }
@@ -169,6 +180,7 @@ fn write_write_summary_text(
         writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
         writeln!(stdout, "Deleted refs: {}", write.deleted_refs)?;
         writeln!(stdout, "Moved refs: {}", write.moved_refs)?;
+        writeln!(stdout, "Oriented refs: {}", write.oriented_refs)?;
         if include_adjustments {
             write_change_lines(stdout, write)?;
         }
@@ -185,6 +197,9 @@ fn write_change_lines(stdout: &mut dyn Write, write: &WriteReport) -> io::Result
     }
     for move_ in &write.moves {
         write_static_bounds_move_text(stdout, move_)?;
+    }
+    for orientation in &write.orientations {
+        write_orientation_text(stdout, orientation)?;
     }
     Ok(())
 }
@@ -345,6 +360,11 @@ fn write_policy_summary_text(
         "  mesh contact terrain epsilon: {:.3}",
         policy.mesh_contact_terrain_epsilon
     )?;
+    writeln!(
+        stdout,
+        "  orientation epsilon: {:.3} degrees",
+        policy.orientation_epsilon_degrees
+    )?;
     writeln!(stdout, "  relocation step: {:.3}", policy.relocation_step)?;
     writeln!(stdout, "  relocation steps: {}", policy.relocation_steps)
 }
@@ -423,10 +443,12 @@ pub(crate) fn write_reference_text(
     if let Some(contact) = &reference.mesh_contact {
         writeln!(
             stdout,
-            "  contact: position={:?} terrain_z={} delta={} classification={}",
+            "  contact: position={:?} terrain_z={} terrain_normal={} delta={} orientation_angle={} classification={}",
             contact.position,
             optional_f32(contact.terrain_z),
+            optional_vec3(contact.terrain_normal),
             optional_f32(contact.delta),
+            optional_f32(contact.orientation_angle_degrees),
             contact.classification
         )?;
     }
@@ -491,6 +513,24 @@ fn write_static_bounds_move_text(
     )
 }
 
+fn write_orientation_text(
+    stdout: &mut dyn Write,
+    orientation: &WriteOrientation,
+) -> io::Result<()> {
+    writeln!(
+        stdout,
+        "ORIENT CELL {:?} REF {:?} {} angle={:.3} old_rotation={:?} new_rotation={:?} terrain_normal={:?} contact={:?}",
+        orientation.cell,
+        orientation.reference_key,
+        orientation.id,
+        orientation.angle_degrees,
+        orientation.old_rotation,
+        orientation.new_rotation,
+        orientation.terrain_normal,
+        orientation.contact_position
+    )
+}
+
 fn write_json(stdout: &mut dyn Write, value: &impl Serialize) -> io::Result<()> {
     serde_json::to_writer(stdout, value).map_err(|error| {
         if let Some(kind) = error.io_error_kind() {
@@ -503,6 +543,13 @@ fn write_json(stdout: &mut dyn Write, value: &impl Serialize) -> io::Result<()> 
 
 fn optional_f32(value: Option<f32>) -> String {
     value.map_or_else(|| "missing".to_owned(), |value| format!("{value:.3}"))
+}
+
+fn optional_vec3(value: Option<[f32; 3]>) -> String {
+    value.map_or_else(
+        || "missing".to_owned(),
+        |value| format!("[{:.3}, {:.3}, {:.3}]", value[0], value[1], value[2]),
+    )
 }
 
 #[derive(Serialize)]
@@ -563,6 +610,13 @@ struct StructuredWriteMoveRecord<'a> {
     r#type: &'static str,
     #[serde(flatten)]
     move_: &'a WriteStaticBoundsMove,
+}
+
+#[derive(Serialize)]
+struct StructuredWriteOrientationRecord<'a> {
+    r#type: &'static str,
+    #[serde(flatten)]
+    orientation: &'a WriteOrientation,
 }
 
 #[cfg(test)]
@@ -646,9 +700,9 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("\"policy\":"));
         assert!(output.contains("\"write_requested\":false"));
-        assert!(
-            output.contains("\"write_actions\":[\"terrain-z\",\"static-delete\",\"static-move\"]")
-        );
+        assert!(output.contains(
+            "\"write_actions\":[\"terrain-z\",\"static-delete\",\"static-move\",\"orient\"]"
+        ));
         assert!(output.contains("\"include_ids\":[]"));
         assert!(output.contains("\"exclude_ids\":[]"));
     }

@@ -341,11 +341,13 @@ mod tests {
                 WriteActionArg::TerrainZ,
                 WriteActionArg::StaticDelete,
                 WriteActionArg::StaticMove,
+                WriteActionArg::Orient,
             ],
             contact_epsilon: 0.5,
             origin_epsilon: 0.5,
             relocation_step: 32.0,
             relocation_steps: 8,
+            orientation_epsilon: 1.0,
             include_ids: Vec::new(),
             exclude_ids: Vec::new(),
         };

@@ -11,6 +11,7 @@ use super::{
         StaticBoundsOcclusionInspection, StaticMeshInspection, TerrainInspectionReport,
     },
     occlusion::{StaticBoundsAction, StaticOccluderIndex, decide_static_bounds_action},
+    orientation::orientation_angle_degrees,
     target::sorted_exterior_cells,
     terrain::TerrainIndex,
     write_plan::WriteStatusIndex,
@@ -173,6 +174,7 @@ fn inspect_reference(
             actions: context.policy.write_actions,
         },
         contact_epsilon: context.policy.contact_epsilon,
+        orientation_epsilon_degrees: context.policy.orientation_epsilon_degrees,
     });
     reference_sink(&inspection)
 }
@@ -263,6 +265,7 @@ struct ReferenceInspectionInput<'a, 'b> {
     static_bounds_occlusion: Option<&'a StaticBoundsOcclusionDetails>,
     write: WriteStatusEvidence,
     contact_epsilon: f32,
+    orientation_epsilon_degrees: f32,
 }
 
 fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceInspection {
@@ -293,7 +296,9 @@ fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceIn
         mesh_contact: input.contact_details.map(|contact| MeshContactInspection {
             position: contact.position,
             terrain_z: contact.terrain_z,
+            terrain_normal: contact.terrain_normal,
             delta: contact.delta,
+            orientation_angle_degrees: contact.orientation_angle_degrees,
             classification: contact.classification.map_or(
                 "mesh_contact_missing_terrain",
                 ContactTerrainClassification::label,
@@ -313,11 +318,15 @@ fn write_status_input(input: &ReferenceInspectionInput<'_, '_>) -> WriteStatusIn
         reference_deleted: input.reference.deleted == Some(true),
         mesh_status: input.mesh_resolution.write_status_mesh_status(),
         contact_delta: input.contact_details.and_then(|contact| contact.delta),
+        orientation_angle_degrees: input
+            .contact_details
+            .and_then(|contact| contact.orientation_angle_degrees),
         static_bounds_status: input
             .static_bounds_occlusion
             .map(|occlusion| occlusion.status),
         write: input.write,
         contact_epsilon: input.contact_epsilon,
+        orientation_epsilon_degrees: input.orientation_epsilon_degrees,
     }
 }
 
@@ -358,7 +367,9 @@ fn static_mesh_inspection(static_mesh: &StaticMesh) -> StaticMeshInspection {
 struct ContactDetails {
     position: [f32; 3],
     terrain_z: Option<f32>,
+    terrain_normal: Option<[f32; 3]>,
     delta: Option<f32>,
+    orientation_angle_degrees: Option<f32>,
     classification: Option<ContactTerrainClassification>,
 }
 
@@ -437,17 +448,23 @@ fn classify_contact(
 ) -> ContactDetails {
     let position =
         contact.world_position(reference.translation, reference.rotation, reference.scale);
-    let terrain_z = terrain.height_at(position[0], position[1]);
+    let terrain_sample = terrain.sample_at(position[0], position[1]);
+    let terrain_z = terrain_sample.map(|sample| sample.height);
+    let terrain_normal = terrain_sample.map(|sample| sample.normal);
     let delta = terrain_z.map(|terrain_z| position[2] - terrain_z);
     let classification = delta.map(|delta| classify_counted_contact_delta(report, delta, epsilon));
     if terrain_z.is_none() {
         report.refs_contact_missing_terrain += 1;
     }
+    let orientation_angle_degrees =
+        terrain_normal.and_then(|normal| orientation_angle_degrees(reference.rotation, normal));
 
     ContactDetails {
         position,
         terrain_z,
+        terrain_normal,
         delta,
+        orientation_angle_degrees,
         classification,
     }
 }

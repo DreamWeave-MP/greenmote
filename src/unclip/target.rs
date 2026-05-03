@@ -118,13 +118,10 @@ mod tests {
 
     fn test_policy_with_filter(include_ids: &[&str], exclude_ids: &[&str]) -> UnclipPolicy {
         UnclipPolicy {
-            write_actions: WriteActions {
-                terrain_z: true,
-                static_delete: true,
-                static_move: true,
-            },
+            write_actions: WriteActions::all(),
             contact_epsilon: 0.5,
             origin_epsilon: 0.5,
+            orientation_epsilon_degrees: 1.0,
             relocation: RelocationPolicy {
                 step: 32.0,
                 steps: 8,

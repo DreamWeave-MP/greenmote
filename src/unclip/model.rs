@@ -95,6 +95,7 @@ pub(crate) struct UnclipPolicySummary {
     pub(crate) write_actions: Vec<&'static str>,
     pub(crate) origin_terrain_epsilon: f32,
     pub(crate) mesh_contact_terrain_epsilon: f32,
+    pub(crate) orientation_epsilon_degrees: f32,
     pub(crate) relocation_step: f32,
     pub(crate) relocation_steps: u16,
     pub(crate) include_ids: Vec<String>,
@@ -107,6 +108,7 @@ impl UnclipPolicySummary {
             write_actions: policy.write_actions.enabled_names(),
             origin_terrain_epsilon: policy.origin_epsilon,
             mesh_contact_terrain_epsilon: policy.contact_epsilon,
+            orientation_epsilon_degrees: policy.orientation_epsilon_degrees,
             relocation_step: policy.relocation.step,
             relocation_steps: policy.relocation.steps,
             include_ids: policy.target_filter.include_ids().to_vec(),
@@ -130,9 +132,10 @@ impl UnclipReportContext {
             loaded_terrain_cells_total: 0,
             missing_active_terrain_cells: Vec::new(),
             policy: UnclipPolicySummary {
-                write_actions: vec!["terrain-z", "static-delete", "static-move"],
+                write_actions: vec!["terrain-z", "static-delete", "static-move", "orient"],
                 origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
                 mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
+                orientation_epsilon_degrees: 1.0,
                 relocation_step: 32.0,
                 relocation_steps: 8,
                 include_ids: Vec::new(),
@@ -210,7 +213,9 @@ pub(crate) struct StaticMeshInspection {
 pub(crate) struct MeshContactInspection {
     pub(crate) position: [f32; 3],
     pub(crate) terrain_z: Option<f32>,
+    pub(crate) terrain_normal: Option<[f32; 3]>,
     pub(crate) delta: Option<f32>,
+    pub(crate) orientation_angle_degrees: Option<f32>,
     pub(crate) classification: &'static str,
 }
 

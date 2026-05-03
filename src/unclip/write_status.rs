@@ -5,8 +5,10 @@ pub(crate) struct WriteStatusInput {
     pub(crate) mesh_status: MeshResolutionStatus,
     pub(crate) contact_delta: Option<f32>,
     pub(crate) static_bounds_status: Option<&'static str>,
+    pub(crate) orientation_angle_degrees: Option<f32>,
     pub(crate) write: WriteStatusEvidence,
     pub(crate) contact_epsilon: f32,
+    pub(crate) orientation_epsilon_degrees: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -29,6 +31,7 @@ pub(crate) enum WritePlanEvidence {
     Adjusted,
     Deleted,
     Moved,
+    Oriented,
 }
 
 pub(crate) fn write_plan_evidence(
@@ -45,6 +48,8 @@ pub(crate) fn write_plan_evidence(
         WritePlanEvidence::Moved
     } else if write.is_adjusted(cell, key) {
         WritePlanEvidence::Adjusted
+    } else if write.is_oriented(cell, key) {
+        WritePlanEvidence::Oriented
     } else {
         WritePlanEvidence::Unchanged
     }
@@ -55,6 +60,7 @@ pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
         WritePlanEvidence::Deleted => return "deleted_static_bounds_occluded",
         WritePlanEvidence::Moved => return "moved_static_bounds_occluded",
         WritePlanEvidence::Adjusted => return "adjusted",
+        WritePlanEvidence::Oriented => return "oriented_to_terrain",
         WritePlanEvidence::NotPlanned | WritePlanEvidence::Unchanged => {}
     }
     if input.reference_deleted {
@@ -62,12 +68,12 @@ pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
     }
     if let Some(occlusion) = input.static_bounds_status {
         match occlusion {
-            "static_bounds_fully_occluded" if input.write.actions.static_delete => {
+            "static_bounds_fully_occluded" if input.write.actions.static_delete() => {
                 if matches!(input.write.plan, WritePlanEvidence::NotPlanned) {
                     return "would_delete_static_bounds_occluded";
                 }
             }
-            "static_bounds_relocatable" if input.write.actions.static_move => {
+            "static_bounds_relocatable" if input.write.actions.static_move() => {
                 if matches!(input.write.plan, WritePlanEvidence::NotPlanned) {
                     return "would_move_static_bounds_occluded";
                 }
@@ -78,17 +84,20 @@ pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
     if let Some(status) = terrain_write_status(input) {
         return status;
     }
+    if let Some(status) = orientation_write_status(input) {
+        return status;
+    }
     if let Some(occlusion) = input.static_bounds_status {
         return match occlusion {
-            "static_bounds_fully_occluded" if !input.write.actions.static_delete => {
+            "static_bounds_fully_occluded" if !input.write.actions.static_delete() => {
                 "skipped_static_delete_disabled"
             }
             "static_bounds_relocatable" | "static_bounds_blocked"
-                if !input.write.actions.static_move =>
+                if !input.write.actions.static_move() =>
             {
                 "skipped_static_move_disabled"
             }
-            "static_bounds_blocked" if input.write.actions.static_move => {
+            "static_bounds_blocked" if input.write.actions.static_move() => {
                 "static_bounds_blocked_no_relocation"
             }
             _ => mesh_resolution_write_status(input),
@@ -106,15 +115,38 @@ fn terrain_write_status(input: &WriteStatusInput) -> Option<&'static str> {
         if delta.abs() <= input.contact_epsilon {
             return None;
         }
-        if !input.write.actions.terrain_z {
+        if !input.write.actions.terrain_z() {
             return Some("skipped_terrain_z_disabled");
         }
         Some(match input.write.plan {
             WritePlanEvidence::NotPlanned => "would_adjust_terrain_z",
             WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
-            WritePlanEvidence::Adjusted | WritePlanEvidence::Deleted | WritePlanEvidence::Moved => {
-                unreachable!("handled before terrain status")
-            }
+            WritePlanEvidence::Adjusted
+            | WritePlanEvidence::Deleted
+            | WritePlanEvidence::Moved
+            | WritePlanEvidence::Oriented => unreachable!("handled before terrain status"),
+        })
+    })
+}
+
+fn orientation_write_status(input: &WriteStatusInput) -> Option<&'static str> {
+    let MeshResolutionStatus::Resolved = input.mesh_status else {
+        return None;
+    };
+    input.orientation_angle_degrees.and_then(|angle| {
+        if angle <= input.orientation_epsilon_degrees {
+            return None;
+        }
+        if !input.write.actions.orient() {
+            return Some("skipped_orient_disabled");
+        }
+        Some(match input.write.plan {
+            WritePlanEvidence::NotPlanned => "would_orient_to_terrain",
+            WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
+            WritePlanEvidence::Adjusted
+            | WritePlanEvidence::Deleted
+            | WritePlanEvidence::Moved
+            | WritePlanEvidence::Oriented => unreachable!("handled before orientation status"),
         })
     })
 }
@@ -150,7 +182,7 @@ mod tests {
     fn write_status_reports_disabled_terrain_adjustment() {
         let mut input = base_input(MeshResolutionStatus::Resolved);
         input.contact_delta = Some(10.0);
-        input.write.actions.terrain_z = false;
+        input.write.actions.disable_terrain_z();
 
         assert_eq!(write_status_label(&input), "skipped_terrain_z_disabled");
     }
@@ -158,8 +190,8 @@ mod tests {
     #[test]
     fn write_status_reports_disabled_static_actions() {
         let mut input = base_input(MeshResolutionStatus::UnresolvedStatic);
-        input.write.actions.static_delete = false;
-        input.write.actions.static_move = false;
+        input.write.actions.disable_static_delete();
+        input.write.actions.disable_static_move();
         input.static_bounds_status = Some("static_bounds_fully_occluded");
 
         assert_eq!(write_status_label(&input), "skipped_static_delete_disabled");
@@ -188,7 +220,7 @@ mod tests {
         let mut input = base_input(MeshResolutionStatus::Resolved);
         input.contact_delta = Some(10.0);
         input.static_bounds_status = Some("static_bounds_fully_occluded");
-        input.write.actions.static_delete = false;
+        input.write.actions.disable_static_delete();
 
         assert_eq!(write_status_label(&input), "would_adjust_terrain_z");
     }
@@ -202,12 +234,27 @@ mod tests {
         assert_eq!(write_status_label(&input), "skipped_write_plan_unchanged");
     }
 
+    #[test]
+    fn write_status_reports_orientation_candidates() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.orientation_angle_degrees = Some(12.0);
+
+        assert_eq!(write_status_label(&input), "would_orient_to_terrain");
+        input.write.actions.disable_orient();
+        assert_eq!(write_status_label(&input), "skipped_orient_disabled");
+    }
+
+    #[test]
+    fn write_status_prefers_oriented_plan_evidence() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.orientation_angle_degrees = Some(12.0);
+        input.write.plan = WritePlanEvidence::Oriented;
+
+        assert_eq!(write_status_label(&input), "oriented_to_terrain");
+    }
+
     const fn test_write_actions() -> WriteActions {
-        WriteActions {
-            terrain_z: true,
-            static_delete: true,
-            static_move: true,
-        }
+        WriteActions::all()
     }
 
     fn base_input(mesh_status: MeshResolutionStatus) -> WriteStatusInput {
@@ -215,12 +262,14 @@ mod tests {
             reference_deleted: false,
             mesh_status,
             contact_delta: None,
+            orientation_angle_degrees: None,
             static_bounds_status: None,
             write: WriteStatusEvidence {
                 plan: WritePlanEvidence::NotPlanned,
                 actions: test_write_actions(),
             },
             contact_epsilon: 0.5,
+            orientation_epsilon_degrees: 1.0,
         }
     }
 }

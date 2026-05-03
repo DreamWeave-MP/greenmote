@@ -10,8 +10,12 @@ use super::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
         translate_bounds_xy,
     },
+    orientation::{OrientationResult, orientation_to_terrain},
     terrain::TerrainIndex,
-    write_plan::{WriteAdjustment, WritePlan, WriteStaticBoundsDeletion, WriteStaticBoundsMove},
+    write_plan::{
+        WriteAdjustment, WriteOrientation, WritePlan, WriteStaticBoundsDeletion,
+        WriteStaticBoundsMove,
+    },
 };
 
 const CELL_SIZE: f32 = 8192.0;
@@ -126,6 +130,15 @@ pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
                 reference.translation = move_.new_position;
             }
         }
+
+        for orientation in &changes.orientations {
+            if let Some(reference) = cell
+                .references
+                .get_mut(&(orientation.reference_key[0], orientation.reference_key[1]))
+            {
+                reference.rotation = orientation.new_rotation;
+            }
+        }
     }
 }
 
@@ -134,6 +147,7 @@ struct CellWriteChanges<'a> {
     adjustments: Vec<&'a WriteAdjustment>,
     deletions: Vec<&'a WriteStaticBoundsDeletion>,
     moves: Vec<&'a WriteStaticBoundsMove>,
+    orientations: Vec<&'a WriteOrientation>,
 }
 
 struct WriteChangesByCell<'a> {
@@ -160,6 +174,13 @@ impl<'a> WriteChangesByCell<'a> {
         for move_ in &plan.moves {
             cells.entry(move_.cell).or_default().moves.push(move_);
         }
+        for orientation in &plan.orientations {
+            cells
+                .entry(orientation.cell)
+                .or_default()
+                .orientations
+                .push(orientation);
+        }
         Self { cells }
     }
 
@@ -171,26 +192,39 @@ impl<'a> WriteChangesByCell<'a> {
 fn record_reference_change(change: WriteReferenceChange, plan: &mut WritePlan) {
     match change {
         WriteReferenceChange::None => {}
-        WriteReferenceChange::AdjustZ(adjustment) => {
-            plan.adjusted_refs += 1;
-            plan.adjustments.push(adjustment);
-        }
-        WriteReferenceChange::Delete(deletion) => {
-            plan.deleted_refs += 1;
-            plan.deletions.push(deletion);
-        }
-        WriteReferenceChange::Move(move_) => {
-            plan.moved_refs += 1;
-            plan.moves.push(move_);
+        WriteReferenceChange::Changes(changes) => {
+            let changes = *changes;
+            if let Some(adjustment) = changes.adjustment {
+                plan.adjusted_refs += 1;
+                plan.adjustments.push(adjustment);
+            }
+            if let Some(deletion) = changes.deletion {
+                plan.deleted_refs += 1;
+                plan.deletions.push(deletion);
+            }
+            if let Some(move_) = changes.move_ {
+                plan.moved_refs += 1;
+                plan.moves.push(move_);
+            }
+            if let Some(orientation) = changes.orientation {
+                plan.oriented_refs += 1;
+                plan.orientations.push(orientation);
+            }
         }
     }
 }
 
 enum WriteReferenceChange {
     None,
-    AdjustZ(WriteAdjustment),
-    Delete(WriteStaticBoundsDeletion),
-    Move(WriteStaticBoundsMove),
+    Changes(Box<WriteReferenceChanges>),
+}
+
+#[derive(Default)]
+struct WriteReferenceChanges {
+    adjustment: Option<WriteAdjustment>,
+    deletion: Option<WriteStaticBoundsDeletion>,
+    move_: Option<WriteStaticBoundsMove>,
+    orientation: Option<WriteOrientation>,
 }
 
 #[derive(Clone, Copy)]
@@ -221,6 +255,15 @@ fn adjust_reference_for_terrain_and_static_bounds(
     if reference.deleted == Some(true) {
         return WriteReferenceChange::None;
     }
+    let terrain = context.terrain;
+    let static_occluders = context.static_occluders;
+    let policy = context.policy;
+    let target = WriteTarget { cell, key };
+    let orientation_context = OrientationPlanningContext {
+        terrain,
+        static_occluders,
+        policy,
+    };
     let Some(static_mesh) = context.static_index.get(&reference.id) else {
         return WriteReferenceChange::None;
     };
@@ -232,83 +275,198 @@ fn adjust_reference_for_terrain_and_static_bounds(
         geometry
             .contact
             .world_position(reference.translation, reference.rotation, reference.scale);
-    let terrain_z = context
-        .terrain
-        .height_at(contact_position[0], contact_position[1]);
+    let terrain_z = terrain.height_at(contact_position[0], contact_position[1]);
+    let adjustment_context = AdjustmentOrientationContext {
+        target,
+        reference,
+        contact_position,
+        terrain_z,
+        policy,
+        geometry,
+        orientation: orientation_context,
+    };
     let mut corrected_translation = reference.translation;
     if let Some(terrain_z) = terrain_z {
         corrected_translation[2] -= contact_position[2] - terrain_z;
     }
-    match decide_static_bounds_action(
+    let mut changes = WriteReferenceChanges::default();
+    let mut final_translation = reference.translation;
+    let static_bounds_action = decide_static_bounds_action(
         geometry
             .bounds
             .world_aabb(corrected_translation, reference.rotation, reference.scale),
-        context.static_occluders,
-    ) {
-        StaticBoundsAction::Delete { ratio, occluder }
-            if context.policy.write_actions.static_delete =>
-        {
-            return WriteReferenceChange::Delete(WriteStaticBoundsDeletion {
-                cell: [cell.0, cell.1],
-                reference_key: [key.0, key.1],
-                id: reference.id.clone(),
-                occlusion_ratio: ratio,
-                occluder_id: occluder.id.clone(),
-                occluder_cell: occluder.cell,
-                occluder_reference_key: occluder.reference_key,
-            });
+        static_occluders,
+    );
+    match static_bounds_action {
+        StaticBoundsAction::Delete { ratio, occluder } if policy.write_actions.static_delete() => {
+            changes.deletion = Some(static_bounds_deletion(
+                cell, key, reference, ratio, occluder,
+            ));
+            return changes_to_result(changes);
         }
         StaticBoundsAction::Move {
             ratio, occluder, ..
-        } if context.policy.write_actions.static_move => {
-            let Some(move_) = apply_static_bounds_move(
-                WriteTarget { cell, key },
+        } if policy.write_actions.static_move() => {
+            let Some(move_) = try_static_bounds_move(
+                target,
                 reference,
-                RefTransform {
-                    translation: corrected_translation,
-                    rotation: reference.rotation,
-                    scale: reference.scale,
-                },
+                corrected_translation,
                 MoveSearchContext {
                     geometry,
-                    terrain: context.terrain,
-                    static_occluders: context.static_occluders,
-                    relocation: context.policy.relocation,
+                    terrain,
+                    static_occluders,
+                    relocation: policy.relocation,
                 },
                 StaticBoundsMoveCause { ratio, occluder },
             ) else {
-                let Some(terrain_z) = terrain_z else {
-                    return WriteReferenceChange::None;
-                };
-                return plan_contact_adjustment(
-                    cell,
-                    key,
-                    reference,
-                    contact_position,
-                    terrain_z,
-                    context.policy,
-                )
-                .map_or(WriteReferenceChange::None, WriteReferenceChange::AdjustZ);
+                return finish_with_terrain_and_orientation(
+                    changes,
+                    final_translation,
+                    adjustment_context,
+                );
             };
-            return WriteReferenceChange::Move(move_);
+            final_translation = move_.new_position;
+            changes.move_ = Some(move_);
         }
         StaticBoundsAction::None
         | StaticBoundsAction::Delete { .. }
         | StaticBoundsAction::Move { .. } => {}
     }
 
-    let Some(terrain_z) = terrain_z else {
-        return WriteReferenceChange::None;
-    };
-    plan_contact_adjustment(
-        cell,
-        key,
+    if changes.move_.is_none() {
+        return finish_with_terrain_and_orientation(changes, final_translation, adjustment_context);
+    }
+    plan_orientation_to_changes(
+        &mut changes,
+        target,
         reference,
-        contact_position,
-        terrain_z,
+        final_translation,
+        geometry,
+        orientation_context,
+    );
+    changes_to_result(changes)
+}
+
+#[derive(Clone, Copy)]
+struct AdjustmentOrientationContext<'a> {
+    target: WriteTarget,
+    reference: &'a tes3::esp::Reference,
+    contact_position: [f32; 3],
+    terrain_z: Option<f32>,
+    policy: &'a UnclipPolicy,
+    geometry: &'a MeshGeometry,
+    orientation: OrientationPlanningContext<'a>,
+}
+
+fn finish_with_terrain_and_orientation(
+    mut changes: WriteReferenceChanges,
+    mut final_translation: [f32; 3],
+    context: AdjustmentOrientationContext<'_>,
+) -> WriteReferenceChange {
+    apply_terrain_adjustment_to_changes(
+        &mut changes,
+        &mut final_translation,
+        context.target,
+        context.reference,
+        context.contact_position,
+        context.terrain_z,
         context.policy,
+    );
+    plan_orientation_to_changes(
+        &mut changes,
+        context.target,
+        context.reference,
+        final_translation,
+        context.geometry,
+        context.orientation,
+    );
+    changes_to_result(changes)
+}
+
+fn plan_orientation_to_changes(
+    changes: &mut WriteReferenceChanges,
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    final_translation: [f32; 3],
+    geometry: &MeshGeometry,
+    context: OrientationPlanningContext<'_>,
+) {
+    changes.orientation =
+        plan_reference_orientation(target, reference, final_translation, geometry, context);
+}
+
+fn static_bounds_deletion(
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &tes3::esp::Reference,
+    ratio: f32,
+    occluder: &StaticOccluder,
+) -> WriteStaticBoundsDeletion {
+    WriteStaticBoundsDeletion {
+        cell: [cell.0, cell.1],
+        reference_key: [key.0, key.1],
+        id: reference.id.clone(),
+        occlusion_ratio: ratio,
+        occluder_id: occluder.id.clone(),
+        occluder_cell: occluder.cell,
+        occluder_reference_key: occluder.reference_key,
+    }
+}
+
+fn try_static_bounds_move(
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    corrected_translation: [f32; 3],
+    search: MoveSearchContext<'_>,
+    cause: StaticBoundsMoveCause<'_>,
+) -> Option<WriteStaticBoundsMove> {
+    apply_static_bounds_move(
+        target,
+        reference,
+        RefTransform {
+            translation: corrected_translation,
+            rotation: reference.rotation,
+            scale: reference.scale,
+        },
+        search,
+        cause,
     )
-    .map_or(WriteReferenceChange::None, WriteReferenceChange::AdjustZ)
+}
+
+fn apply_terrain_adjustment_to_changes(
+    changes: &mut WriteReferenceChanges,
+    final_translation: &mut [f32; 3],
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    contact_position: [f32; 3],
+    terrain_z: Option<f32>,
+    policy: &UnclipPolicy,
+) {
+    if let Some(terrain_z) = terrain_z
+        && let Some(adjustment) = plan_contact_adjustment(
+            target.cell,
+            target.key,
+            reference,
+            contact_position,
+            terrain_z,
+            policy,
+        )
+    {
+        final_translation[2] = adjustment.new_z;
+        changes.adjustment = Some(adjustment);
+    }
+}
+
+fn changes_to_result(changes: WriteReferenceChanges) -> WriteReferenceChange {
+    if changes.adjustment.is_none()
+        && changes.deletion.is_none()
+        && changes.move_.is_none()
+        && changes.orientation.is_none()
+    {
+        WriteReferenceChange::None
+    } else {
+        WriteReferenceChange::Changes(Box::new(changes))
+    }
 }
 
 fn apply_static_bounds_move(
@@ -421,7 +579,7 @@ fn plan_contact_adjustment(
     terrain_z: f32,
     policy: &UnclipPolicy,
 ) -> Option<WriteAdjustment> {
-    if !policy.write_actions.terrain_z {
+    if !policy.write_actions.terrain_z() {
         return None;
     }
     let contact_delta = contact_position[2] - terrain_z;
@@ -442,17 +600,82 @@ fn plan_contact_adjustment(
     })
 }
 
+fn plan_reference_orientation(
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    translation: [f32; 3],
+    geometry: &MeshGeometry,
+    context: OrientationPlanningContext<'_>,
+) -> Option<WriteOrientation> {
+    if !context.policy.write_actions.orient() {
+        return None;
+    }
+    let contact_position =
+        geometry
+            .contact
+            .world_position(translation, reference.rotation, reference.scale);
+    let terrain_sample = context
+        .terrain
+        .sample_at(contact_position[0], contact_position[1])?;
+    let orientation = orientation_to_terrain(
+        reference.rotation,
+        terrain_sample.normal,
+        context.policy.orientation_epsilon_degrees,
+    )?;
+    if orientation_blocks_static_bounds(
+        translation,
+        reference.scale,
+        geometry.bounds,
+        orientation,
+        context.static_occluders,
+    ) {
+        return None;
+    }
+
+    Some(WriteOrientation {
+        cell: [target.cell.0, target.cell.1],
+        reference_key: [target.key.0, target.key.1],
+        id: reference.id.clone(),
+        old_rotation: reference.rotation,
+        new_rotation: orientation.new_rotation,
+        terrain_normal: orientation.terrain_normal,
+        angle_degrees: orientation.angle_degrees,
+        contact_position,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct OrientationPlanningContext<'a> {
+    terrain: &'a TerrainIndex,
+    static_occluders: &'a StaticOccluderIndex,
+    policy: &'a UnclipPolicy,
+}
+
+fn orientation_blocks_static_bounds(
+    translation: [f32; 3],
+    scale: Option<f32>,
+    bounds: MeshAabb,
+    orientation: OrientationResult,
+    static_occluders: &StaticOccluderIndex,
+) -> bool {
+    static_occluders.intersects_volume(bounds.world_aabb(
+        translation,
+        orientation.new_rotation,
+        scale,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
     use super::{
-        WriteReferenceChange, apply_unclip_write_plan, plan_contact_adjustment,
-        record_reference_change,
+        WriteReferenceChange, WriteReferenceChanges, apply_unclip_write_plan,
+        plan_contact_adjustment, record_reference_change,
     };
     use crate::unclip::{
         args::{RelocationPolicy, TargetFilter, UnclipPolicy, WriteActions},
-        write_plan::{WritePlan, WriteStaticBoundsDeletion},
+        write_plan::{WriteOrientation, WritePlan, WriteStaticBoundsDeletion},
     };
 
     #[test]
@@ -522,15 +745,18 @@ mod tests {
         let mut plan = WritePlan::default();
 
         record_reference_change(
-            WriteReferenceChange::Delete(WriteStaticBoundsDeletion {
-                cell: [1, 2],
-                reference_key: [3, 4],
-                id: "grass".to_owned(),
-                occlusion_ratio: 1.0,
-                occluder_id: "rock".to_owned(),
-                occluder_cell: [1, 2],
-                occluder_reference_key: [5, 6],
-            }),
+            WriteReferenceChange::Changes(Box::new(WriteReferenceChanges {
+                deletion: Some(WriteStaticBoundsDeletion {
+                    cell: [1, 2],
+                    reference_key: [3, 4],
+                    id: "grass".to_owned(),
+                    occlusion_ratio: 1.0,
+                    occluder_id: "rock".to_owned(),
+                    occluder_cell: [1, 2],
+                    occluder_reference_key: [5, 6],
+                }),
+                ..WriteReferenceChanges::default()
+            })),
             &mut plan,
         );
 
@@ -540,6 +766,44 @@ mod tests {
         };
         assert_eq!(plan.deleted_refs, 1);
         assert!(!cell.references.contains_key(&(3, 4)));
+    }
+
+    #[test]
+    fn orientation_write_changes_update_rotation() {
+        let mut plugin = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (3, 4),
+                reference_at_z(10.0),
+            )]))],
+        };
+        let mut plan = WritePlan::default();
+
+        record_reference_change(
+            WriteReferenceChange::Changes(Box::new(WriteReferenceChanges {
+                orientation: Some(WriteOrientation {
+                    cell: [1, 2],
+                    reference_key: [3, 4],
+                    id: "grass".to_owned(),
+                    old_rotation: [0.0, 0.0, 0.0],
+                    new_rotation: [0.1, 0.2, 0.0],
+                    terrain_normal: [0.0, 0.2, 0.98],
+                    angle_degrees: 10.0,
+                    contact_position: [0.0, 0.0, 10.0],
+                }),
+                ..WriteReferenceChanges::default()
+            })),
+            &mut plan,
+        );
+
+        apply_unclip_write_plan(&mut plugin, &plan);
+        let TES3Object::Cell(cell) = &plugin.objects[0] else {
+            unreachable!("test plugin should contain a CELL")
+        };
+        let reference = cell.references.get(&(3, 4)).unwrap();
+        assert_eq!(plan.oriented_refs, 1);
+        assert_close(reference.rotation[0], 0.1);
+        assert_close(reference.rotation[1], 0.2);
+        assert_close(reference.rotation[2], 0.0);
     }
 
     fn reference_at_z(z: f32) -> Reference {
@@ -552,13 +816,10 @@ mod tests {
 
     fn test_policy() -> UnclipPolicy {
         UnclipPolicy {
-            write_actions: WriteActions {
-                terrain_z: true,
-                static_delete: true,
-                static_move: true,
-            },
+            write_actions: WriteActions::all(),
             contact_epsilon: 0.5,
             origin_epsilon: 0.5,
+            orientation_epsilon_degrees: 1.0,
             relocation: RelocationPolicy {
                 step: 32.0,
                 steps: 8,

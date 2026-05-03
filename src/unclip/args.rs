@@ -6,6 +6,7 @@ use super::model::{CONTACT_TERRAIN_EPSILON, ORIGIN_TERRAIN_EPSILON};
 
 const DEFAULT_RELOCATION_STEP: f32 = 32.0;
 const DEFAULT_RELOCATION_STEPS: u16 = 8;
+const DEFAULT_ORIENTATION_EPSILON_DEGREES: f32 = 1.0;
 
 #[derive(Parser, Clone, Debug)]
 #[command(
@@ -29,7 +30,7 @@ pub struct UnclipArgs {
     #[arg(long = "structured")]
     pub structured: bool,
 
-    /// Back up and replace the target plugin with adjusted reference Z positions.
+    /// Back up and replace the target plugin with planned unclipping changes.
     #[arg(long = "write")]
     pub write: bool,
 
@@ -38,7 +39,7 @@ pub struct UnclipArgs {
         long = "write-actions",
         value_enum,
         value_delimiter = ',',
-        default_values_t = [WriteActionArg::TerrainZ, WriteActionArg::StaticDelete, WriteActionArg::StaticMove],
+        default_values_t = [WriteActionArg::TerrainZ, WriteActionArg::StaticDelete, WriteActionArg::StaticMove, WriteActionArg::Orient],
     )]
     pub write_actions: Vec<WriteActionArg>,
 
@@ -58,6 +59,10 @@ pub struct UnclipArgs {
     #[arg(long = "relocation-steps", default_value_t = DEFAULT_RELOCATION_STEPS, value_parser = relocation_steps)]
     pub relocation_steps: u16,
 
+    /// Maximum tilt angle in degrees treated as already aligned to terrain.
+    #[arg(long = "orientation-epsilon", default_value_t = DEFAULT_ORIENTATION_EPSILON_DEGREES, value_parser = non_negative_f32)]
+    pub orientation_epsilon: f32,
+
     /// Include only target refs whose IDs match this case-insensitive wildcard. May be repeated.
     #[arg(long = "include-id", value_name = "PATTERN")]
     pub include_ids: Vec<String>,
@@ -74,6 +79,7 @@ pub enum WriteActionArg {
     TerrainZ,
     StaticDelete,
     StaticMove,
+    Orient,
 }
 
 #[derive(Clone, Debug)]
@@ -81,16 +87,20 @@ pub(crate) struct UnclipPolicy {
     pub(crate) write_actions: WriteActions,
     pub(crate) contact_epsilon: f32,
     pub(crate) origin_epsilon: f32,
+    pub(crate) orientation_epsilon_degrees: f32,
     pub(crate) relocation: RelocationPolicy,
     pub(crate) target_filter: TargetFilter,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WriteActions {
-    pub(crate) terrain_z: bool,
-    pub(crate) static_delete: bool,
-    pub(crate) static_move: bool,
+    flags: u8,
 }
+
+const WRITE_TERRAIN_Z: u8 = 1 << 0;
+const WRITE_STATIC_DELETE: u8 = 1 << 1;
+const WRITE_STATIC_MOVE: u8 = 1 << 2;
+const WRITE_ORIENT: u8 = 1 << 3;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RelocationPolicy {
@@ -113,6 +123,7 @@ impl UnclipArgs {
             write_actions,
             contact_epsilon: self.contact_epsilon,
             origin_epsilon: self.origin_epsilon,
+            orientation_epsilon_degrees: self.orientation_epsilon,
             relocation: RelocationPolicy {
                 step: self.relocation_step,
                 steps: self.relocation_steps,
@@ -133,45 +144,91 @@ impl WriteActions {
                 "write action 'all' or 'none' cannot be combined with other actions".to_owned(),
             );
         }
-        let mut write_actions = Self {
-            terrain_z: false,
-            static_delete: false,
-            static_move: false,
-        };
+        let mut write_actions = Self::empty();
         for action in actions {
             match action {
                 WriteActionArg::All => {
-                    write_actions.terrain_z = true;
-                    write_actions.static_delete = true;
-                    write_actions.static_move = true;
+                    write_actions = Self::all();
                 }
                 WriteActionArg::None => {
-                    write_actions.terrain_z = false;
-                    write_actions.static_delete = false;
-                    write_actions.static_move = false;
+                    write_actions = Self::empty();
                 }
-                WriteActionArg::TerrainZ => write_actions.terrain_z = true,
-                WriteActionArg::StaticDelete => write_actions.static_delete = true,
-                WriteActionArg::StaticMove => write_actions.static_move = true,
+                WriteActionArg::TerrainZ => write_actions.enable(WRITE_TERRAIN_Z),
+                WriteActionArg::StaticDelete => write_actions.enable(WRITE_STATIC_DELETE),
+                WriteActionArg::StaticMove => write_actions.enable(WRITE_STATIC_MOVE),
+                WriteActionArg::Orient => write_actions.enable(WRITE_ORIENT),
             }
         }
         Ok(write_actions)
     }
 
+    pub(crate) const fn empty() -> Self {
+        Self { flags: 0 }
+    }
+
+    pub(crate) const fn all() -> Self {
+        Self {
+            flags: WRITE_TERRAIN_Z | WRITE_STATIC_DELETE | WRITE_STATIC_MOVE | WRITE_ORIENT,
+        }
+    }
+
+    fn enable(&mut self, flag: u8) {
+        self.flags |= flag;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disable_terrain_z(&mut self) {
+        self.flags &= !WRITE_TERRAIN_Z;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disable_static_delete(&mut self) {
+        self.flags &= !WRITE_STATIC_DELETE;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disable_static_move(&mut self) {
+        self.flags &= !WRITE_STATIC_MOVE;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disable_orient(&mut self) {
+        self.flags &= !WRITE_ORIENT;
+    }
+
+    pub(crate) const fn terrain_z(self) -> bool {
+        self.flags & WRITE_TERRAIN_Z != 0
+    }
+
+    pub(crate) const fn static_delete(self) -> bool {
+        self.flags & WRITE_STATIC_DELETE != 0
+    }
+
+    pub(crate) const fn static_move(self) -> bool {
+        self.flags & WRITE_STATIC_MOVE != 0
+    }
+
+    pub(crate) const fn orient(self) -> bool {
+        self.flags & WRITE_ORIENT != 0
+    }
+
     pub(crate) const fn any_enabled(self) -> bool {
-        self.terrain_z || self.static_delete || self.static_move
+        self.flags != 0
     }
 
     pub(crate) fn enabled_names(self) -> Vec<&'static str> {
         let mut names = Vec::new();
-        if self.terrain_z {
+        if self.terrain_z() {
             names.push("terrain-z");
         }
-        if self.static_delete {
+        if self.static_delete() {
             names.push("static-delete");
         }
-        if self.static_move {
+        if self.static_move() {
             names.push("static-move");
+        }
+        if self.orient() {
+            names.push("orient");
         }
         names
     }

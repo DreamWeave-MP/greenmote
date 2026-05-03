@@ -15,12 +15,15 @@ pub(crate) struct WriteReport {
     pub(crate) adjusted_refs: usize,
     pub(crate) deleted_refs: usize,
     pub(crate) moved_refs: usize,
+    pub(crate) oriented_refs: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) adjustments: Vec<WriteAdjustment>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) deletions: Vec<WriteStaticBoundsDeletion>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) moves: Vec<WriteStaticBoundsMove>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) orientations: Vec<WriteOrientation>,
 }
 
 impl WriteReport {
@@ -62,9 +65,11 @@ impl WriteReport {
             adjusted_refs: plan.adjusted_refs,
             deleted_refs: plan.deleted_refs,
             moved_refs: plan.moved_refs,
+            oriented_refs: plan.oriented_refs,
             adjustments: plan.adjustments,
             deletions: plan.deletions,
             moves: plan.moves,
+            orientations: plan.orientations,
         }
     }
 
@@ -77,6 +82,7 @@ impl WriteReport {
             adjusted_refs: self.adjusted_refs,
             deleted_refs: self.deleted_refs,
             moved_refs: self.moved_refs,
+            oriented_refs: self.oriented_refs,
         }
     }
 }
@@ -92,6 +98,7 @@ pub(crate) struct WriteSummary {
     pub(crate) adjusted_refs: usize,
     pub(crate) deleted_refs: usize,
     pub(crate) moved_refs: usize,
+    pub(crate) oriented_refs: usize,
 }
 
 #[derive(Default)]
@@ -99,14 +106,16 @@ pub(crate) struct WritePlan {
     pub(crate) adjusted_refs: usize,
     pub(crate) deleted_refs: usize,
     pub(crate) moved_refs: usize,
+    pub(crate) oriented_refs: usize,
     pub(crate) adjustments: Vec<WriteAdjustment>,
     pub(crate) deletions: Vec<WriteStaticBoundsDeletion>,
     pub(crate) moves: Vec<WriteStaticBoundsMove>,
+    pub(crate) orientations: Vec<WriteOrientation>,
 }
 
 impl WritePlan {
     pub(crate) const fn changed_refs(&self) -> usize {
-        self.adjusted_refs + self.deleted_refs + self.moved_refs
+        self.adjusted_refs + self.deleted_refs + self.moved_refs + self.oriented_refs
     }
 
     fn sort_records(&mut self) {
@@ -116,6 +125,8 @@ impl WritePlan {
             .sort_by_key(|deletion| (deletion.cell, deletion.reference_key));
         self.moves
             .sort_by_key(|move_| (move_.cell, move_.reference_key));
+        self.orientations
+            .sort_by_key(|orientation| (orientation.cell, orientation.reference_key));
     }
 }
 
@@ -153,6 +164,18 @@ pub(crate) struct WriteStaticBoundsMove {
     pub(crate) occluder_id: String,
     pub(crate) occluder_cell: [i32; 2],
     pub(crate) occluder_reference_key: [u32; 2],
+}
+
+#[derive(Serialize)]
+pub(crate) struct WriteOrientation {
+    pub(crate) cell: [i32; 2],
+    pub(crate) reference_key: [u32; 2],
+    pub(crate) id: String,
+    pub(crate) old_rotation: [f32; 3],
+    pub(crate) new_rotation: [f32; 3],
+    pub(crate) terrain_normal: [f32; 3],
+    pub(crate) angle_degrees: f32,
+    pub(crate) contact_position: [f32; 3],
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -206,10 +229,23 @@ fn adjusted_ref_keys_from_moves(moves: &[WriteStaticBoundsMove]) -> BTreeSet<Adj
         .collect()
 }
 
+fn adjusted_ref_keys_from_orientations(
+    orientations: &[WriteOrientation],
+) -> BTreeSet<AdjustedRefKey> {
+    orientations
+        .iter()
+        .map(|orientation| AdjustedRefKey {
+            cell: orientation.cell,
+            reference_key: orientation.reference_key,
+        })
+        .collect()
+}
+
 pub(crate) struct WriteStatusIndex {
     adjusted: BTreeSet<AdjustedRefKey>,
     deleted: BTreeSet<AdjustedRefKey>,
     moved: BTreeSet<AdjustedRefKey>,
+    oriented: BTreeSet<AdjustedRefKey>,
 }
 
 impl WriteStatusIndex {
@@ -218,6 +254,7 @@ impl WriteStatusIndex {
             adjusted: adjusted_ref_keys(&plan.adjustments),
             deleted: adjusted_ref_keys_from_deletions(&plan.deletions),
             moved: adjusted_ref_keys_from_moves(&plan.moves),
+            oriented: adjusted_ref_keys_from_orientations(&plan.orientations),
         }
     }
 
@@ -232,6 +269,10 @@ impl WriteStatusIndex {
     pub(crate) fn is_moved(&self, cell: CellCoord, key: (u32, u32)) -> bool {
         self.moved.contains(&AdjustedRefKey::new(cell, key))
     }
+
+    pub(crate) fn is_oriented(&self, cell: CellCoord, key: (u32, u32)) -> bool {
+        self.oriented.contains(&AdjustedRefKey::new(cell, key))
+    }
 }
 
 #[cfg(test)]
@@ -239,7 +280,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        WriteAdjustment, WritePlan, WriteReport, WriteStaticBoundsDeletion, WriteStatusIndex,
+        WriteAdjustment, WriteOrientation, WritePlan, WriteReport, WriteStaticBoundsDeletion,
+        WriteStatusIndex,
     };
 
     #[test]
@@ -253,6 +295,19 @@ mod tests {
 
         assert!(index.is_adjusted((1, 2), (3, 4)));
         assert!(!index.is_adjusted((1, 2), (3, 5)));
+    }
+
+    #[test]
+    fn write_status_index_tracks_oriented_refs() {
+        let plan = WritePlan {
+            oriented_refs: 1,
+            orientations: vec![write_orientation_at([1, 2], [3, 4])],
+            ..WritePlan::default()
+        };
+        let index = WriteStatusIndex::from_plan(&plan);
+
+        assert!(index.is_oriented((1, 2), (3, 4)));
+        assert!(!index.is_oriented((1, 2), (3, 5)));
     }
 
     #[test]
@@ -308,6 +363,19 @@ mod tests {
             occluder_id: "rock".to_owned(),
             occluder_cell: [0, 0],
             occluder_reference_key: [1, 0],
+        }
+    }
+
+    fn write_orientation_at(cell: [i32; 2], reference_key: [u32; 2]) -> WriteOrientation {
+        WriteOrientation {
+            cell,
+            reference_key,
+            id: "grass".to_owned(),
+            old_rotation: [0.0, 0.0, 0.0],
+            new_rotation: [0.1, 0.2, 0.0],
+            terrain_normal: [0.0, 0.2, 0.98],
+            angle_degrees: 10.0,
+            contact_position: [0.0, 0.0, 10.0],
         }
     }
 }

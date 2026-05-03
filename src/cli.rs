@@ -117,6 +117,7 @@ mod tests {
         assert_close(args.origin_epsilon, 0.5);
         assert_close(args.relocation_step, 32.0);
         assert_eq!(args.relocation_steps, 8);
+        assert_close(args.orientation_epsilon, 1.0);
     }
 
     #[test]
@@ -127,7 +128,7 @@ mod tests {
             "--plugin",
             "groundcover.omwaddon",
             "--write-actions",
-            "terrain-z,static-move",
+            "terrain-z,static-move,orient",
             "--contact-epsilon",
             "1.25",
             "--origin-epsilon",
@@ -136,6 +137,8 @@ mod tests {
             "64",
             "--relocation-steps",
             "12",
+            "--orientation-epsilon",
+            "3.5",
             "--include-id",
             "flora_grass_*",
             "--exclude-id",
@@ -147,13 +150,15 @@ mod tests {
         };
 
         let policy = args.policy().unwrap();
-        assert!(policy.write_actions.terrain_z);
-        assert!(!policy.write_actions.static_delete);
-        assert!(policy.write_actions.static_move);
+        assert!(policy.write_actions.terrain_z());
+        assert!(!policy.write_actions.static_delete());
+        assert!(policy.write_actions.static_move());
+        assert!(policy.write_actions.orient());
         assert_close(policy.contact_epsilon, 1.25);
         assert_close(policy.origin_epsilon, 2.5);
         assert_close(policy.relocation.step, 64.0);
         assert_eq!(policy.relocation.steps, 12);
+        assert_close(policy.orientation_epsilon_degrees, 3.5);
         assert!(policy.target_filter.includes("flora_grass_01"));
         assert!(!policy.target_filter.includes("flora_grass_bad_01"));
     }
@@ -165,6 +170,7 @@ mod tests {
             ["--origin-epsilon", "nan"],
             ["--relocation-step", "0"],
             ["--relocation-steps", "0"],
+            ["--orientation-epsilon", "-1"],
         ] {
             let result = Cli::command().try_get_matches_from([
                 "greenmote",
