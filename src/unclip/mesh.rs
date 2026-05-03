@@ -190,6 +190,11 @@ pub struct MeshContactCache<'a> {
     meshes: HashMap<String, io::Result<MeshGeometry>>,
 }
 
+pub struct MeshBoundsCache<'a> {
+    vfs: &'a VFS,
+    meshes: HashMap<String, io::Result<MeshAabb>>,
+}
+
 impl<'a> MeshContactCache<'a> {
     #[must_use]
     pub fn new(vfs: &'a VFS) -> Self {
@@ -233,6 +238,49 @@ impl<'a> MeshContactCache<'a> {
     }
 }
 
+impl<'a> MeshBoundsCache<'a> {
+    #[must_use]
+    pub fn new(vfs: &'a VFS) -> Self {
+        Self {
+            vfs,
+            meshes: HashMap::new(),
+        }
+    }
+
+    pub fn bounds(&mut self, mesh_path: &str) -> io::Result<MeshAabb> {
+        let key = mesh_path.replace('/', "\\").to_lowercase();
+        if !self.meshes.contains_key(&key) {
+            let bounds = self.load_bounds(mesh_path);
+            self.meshes.insert(key.clone(), bounds);
+        }
+
+        self.meshes[&key].as_ref().map_or_else(
+            |error| Err(io::Error::new(error.kind(), error.to_string())),
+            |bounds| Ok(*bounds),
+        )
+    }
+
+    fn load_bounds(&self, mesh_path: &str) -> io::Result<MeshAabb> {
+        let file = resolve_mesh(self.vfs, mesh_path)?;
+        let mut reader = file.open()?;
+        let mut bytes = Vec::new();
+        io::Read::read_to_end(&mut reader, &mut bytes)?;
+        let stream = NiStream::from_bytes(&bytes).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to load mesh {mesh_path}: {error}"),
+            )
+        })?;
+
+        mesh_bounds(&stream).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("mesh {mesh_path} has no triangle vertices"),
+            )
+        })
+    }
+}
+
 fn resolve_mesh(vfs: &VFS, mesh_path: &str) -> io::Result<VfsFile> {
     let relative_mesh_path = strip_meshes_prefix(mesh_path);
     let backslash_key = format!("Meshes\\{}", relative_mesh_path.replace('/', "\\"));
@@ -262,39 +310,75 @@ fn strip_meshes_prefix(mesh_path: &str) -> &str {
 }
 
 fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
-    let mut vertices = Vec::new();
-
-    for root in &stream.roots {
-        visit_object(stream, root.cast(), Affine3A::IDENTITY, &mut vertices);
-    }
-
-    if vertices.is_empty() {
-        return None;
-    }
-
-    let mut min = Vec3::splat(f32::INFINITY);
-    let mut max = Vec3::splat(f32::NEG_INFINITY);
-    for vertex in &vertices {
-        min = min.min(*vertex);
-        max = max.max(*vertex);
-    }
+    let accumulated = collect_mesh(stream, true)?;
+    let vertices = accumulated.vertices.unwrap_or_default();
 
     Some(MeshGeometry {
         contact: MeshContact {
             vertices: vertices.iter().map(glam::Vec3::to_array).collect(),
         },
         bounds: MeshAabb {
-            min: min.to_array(),
-            max: max.to_array(),
+            min: accumulated.min.to_array(),
+            max: accumulated.max.to_array(),
         },
     })
+}
+
+fn mesh_bounds(stream: &NiStream) -> Option<MeshAabb> {
+    let accumulated = collect_mesh(stream, false)?;
+
+    Some(MeshAabb {
+        min: accumulated.min.to_array(),
+        max: accumulated.max.to_array(),
+    })
+}
+
+struct MeshAccumulator {
+    vertices: Option<Vec<Vec3>>,
+    min: Vec3,
+    max: Vec3,
+    has_vertices: bool,
+}
+
+impl MeshAccumulator {
+    fn new(store_vertices: bool) -> Self {
+        Self {
+            vertices: store_vertices.then(Vec::new),
+            min: Vec3::splat(f32::INFINITY),
+            max: Vec3::splat(f32::NEG_INFINITY),
+            has_vertices: false,
+        }
+    }
+
+    fn include(&mut self, vertex: Vec3) {
+        self.has_vertices = true;
+        self.min = self.min.min(vertex);
+        self.max = self.max.max(vertex);
+        if let Some(vertices) = &mut self.vertices {
+            vertices.push(vertex);
+        }
+    }
+}
+
+fn collect_mesh(stream: &NiStream, store_vertices: bool) -> Option<MeshAccumulator> {
+    let mut accumulated = MeshAccumulator::new(store_vertices);
+
+    for root in &stream.roots {
+        visit_object(stream, root.cast(), Affine3A::IDENTITY, &mut accumulated);
+    }
+
+    if !accumulated.has_vertices {
+        return None;
+    }
+
+    Some(accumulated)
 }
 
 fn visit_object(
     stream: &NiStream,
     link: NiLink<NiAVObject>,
     parent_transform: Affine3A,
-    lowest: &mut Vec<Vec3>,
+    mesh: &mut MeshAccumulator,
 ) {
     if link.is_null() {
         return;
@@ -306,7 +390,7 @@ fn visit_object(
         }
         let transform = parent_transform * node.base.transform();
         for child in &node.children {
-            visit_object(stream, *child, transform, lowest);
+            visit_object(stream, *child, transform, mesh);
         }
     } else if let Some(shape) = stream.get_as::<_, NiTriShape>(link) {
         if shape.base.base.base.base.name == "RootCollisionNode"
@@ -320,7 +404,7 @@ fn visit_object(
                 &data.base.base,
                 data.triangles.iter().flatten().copied(),
                 transform,
-                lowest,
+                mesh,
             );
         }
     } else if let Some(strips) = stream.get_as::<_, NiTriStrips>(link) {
@@ -335,7 +419,7 @@ fn visit_object(
                 &data.base.base,
                 data.strips.iter().copied(),
                 transform,
-                lowest,
+                mesh,
             );
         }
     }
@@ -345,11 +429,11 @@ fn include_vertices(
     data: &NiGeometryData,
     indices: impl IntoIterator<Item = u16>,
     transform: Affine3A,
-    lowest: &mut Vec<Vec3>,
+    mesh: &mut MeshAccumulator,
 ) {
     for index in indices {
         if let Some(vertex) = data.vertices.get(usize::from(index)) {
-            lowest.push(transform.transform_point3(*vertex));
+            mesh.include(transform.transform_point3(*vertex));
         }
     }
 }

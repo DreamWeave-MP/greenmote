@@ -7,7 +7,7 @@ use crate::groundcover::openmw;
 use super::{
     UnclipArgs,
     cells::{CellCoord, active_grid},
-    mesh::{MeshContactCache, StaticMeshIndex},
+    mesh::{MeshBoundsCache, MeshContactCache, StaticMeshIndex},
     model::{
         CONTACT_TERRAIN_EPSILON, MeshContactInspection, ORIGIN_TERRAIN_EPSILON, OriginInspection,
         ReferenceInspection, StaticBoundsOcclusionInspection, StaticMeshInspection,
@@ -49,7 +49,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         &active_cells,
     );
     let target_static_ids = target_reference_static_ids(&target_plugin_data);
-    let mut context_meshes = MeshContactCache::new(&vfs);
+    let mut context_meshes = MeshBoundsCache::new(&vfs);
     let static_occluders = build_static_occluders(
         &context_plugins,
         &active_cells,
@@ -423,7 +423,7 @@ fn build_static_occluders(
     active_plugins: &[Plugin],
     active_cells: &BTreeSet<CellCoord>,
     static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshContactCache<'_>,
+    mesh_bounds: &mut MeshBoundsCache<'_>,
     target_static_ids: &BTreeSet<String>,
 ) -> StaticOccluderIndex {
     let effective_refs = effective_active_refs(active_plugins, active_cells);
@@ -437,7 +437,7 @@ fn build_static_occluders(
         let Some(static_mesh) = static_index.get(&reference.id) else {
             continue;
         };
-        let Ok(geometry) = mesh_contacts.geometry(&static_mesh.mesh_path) else {
+        let Ok(bounds) = mesh_bounds.bounds(&static_mesh.mesh_path) else {
             continue;
         };
 
@@ -445,11 +445,7 @@ fn build_static_occluders(
             id: reference.id.clone(),
             cell: [key.cell.0, key.cell.1],
             reference_key: [key.reference.0, key.reference.1],
-            bounds: geometry.bounds.world_aabb(
-                reference.translation,
-                reference.rotation,
-                reference.scale,
-            ),
+            bounds: bounds.world_aabb(reference.translation, reference.rotation, reference.scale),
         });
     }
 
