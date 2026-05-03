@@ -322,7 +322,8 @@ fn strip_meshes_prefix(mesh_path: &str) -> &str {
 
 fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
     let accumulated = collect_mesh(stream, true)?;
-    let vertices = accumulated.vertices.unwrap_or_default();
+    let mut vertices = accumulated.vertices.unwrap_or_default();
+    sort_dedup_vertices(&mut vertices);
 
     Some(MeshGeometry {
         contact: MeshContact {
@@ -333,6 +334,20 @@ fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
             max: accumulated.max.to_array(),
         },
     })
+}
+
+fn sort_dedup_vertices(vertices: &mut Vec<Vec3>) {
+    vertices.sort_by(|left, right| {
+        left.x
+            .total_cmp(&right.x)
+            .then_with(|| left.y.total_cmp(&right.y))
+            .then_with(|| left.z.total_cmp(&right.z))
+    });
+    vertices.dedup_by(|left, right| {
+        left.x.to_bits() == right.x.to_bits()
+            && left.y.to_bits() == right.y.to_bits()
+            && left.z.to_bits() == right.z.to_bits()
+    });
 }
 
 fn mesh_bounds(stream: &NiStream) -> Option<MeshAabb> {
@@ -481,5 +496,20 @@ mod tests {
             (contact.world_position([1.0, 2.0, 100.0], [0.0; 3], Some(2.0))[2] - 80.0).abs()
                 < f32::EPSILON
         );
+    }
+
+    #[test]
+    fn mesh_contact_vertices_deduplicate_exact_duplicates() {
+        let mut vertices = vec![
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 2.0, 3.0),
+        ];
+
+        sort_dedup_vertices(&mut vertices);
+
+        assert_eq!(vertices.len(), 2);
+        assert!(vertices.contains(&Vec3::new(0.0, 0.0, 0.0)));
+        assert!(vertices.contains(&Vec3::new(1.0, 2.0, 3.0)));
     }
 }
