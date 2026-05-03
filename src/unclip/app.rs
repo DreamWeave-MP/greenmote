@@ -24,6 +24,10 @@ use super::{
         RefTransform, apply_unclip_write_plan, find_valid_relocation_transform,
         plan_unclip_adjustments,
     },
+    write_status::{
+        MeshResolutionStatus, WriteStatusEvidence, WriteStatusInput, write_plan_evidence,
+        write_status_label,
+    },
     writer::save_plugin_with_backup,
 };
 
@@ -785,39 +789,6 @@ struct ReferenceInspectionInput<'a, 'b> {
     contact_epsilon: f32,
 }
 
-struct WriteStatusEvidence {
-    plan: WritePlanEvidence,
-    actions: super::args::WriteActions,
-}
-
-#[derive(Clone, Copy)]
-enum WritePlanEvidence {
-    NotPlanned,
-    Unchanged,
-    Adjusted,
-    Deleted,
-    Moved,
-}
-
-fn write_plan_evidence(
-    write: Option<&WriteStatusIndex>,
-    cell: CellCoord,
-    key: (u32, u32),
-) -> WritePlanEvidence {
-    let Some(write) = write else {
-        return WritePlanEvidence::NotPlanned;
-    };
-    if write.is_deleted(cell, key) {
-        WritePlanEvidence::Deleted
-    } else if write.is_moved(cell, key) {
-        WritePlanEvidence::Moved
-    } else if write.is_adjusted(cell, key) {
-        WritePlanEvidence::Adjusted
-    } else {
-        WritePlanEvidence::Unchanged
-    }
-}
-
 fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceInspection {
     ReferenceInspection {
         cell: [input.cell.0, input.cell.1],
@@ -834,7 +805,7 @@ fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceIn
             .mesh_resolution
             .mesh_contact_status_label(input.contact_details),
         deleted: input.reference.deleted == Some(true),
-        write_status: write_status_label(input),
+        write_status: write_status_label(&write_status_input(input)),
         static_mesh: input
             .mesh_resolution
             .static_mesh()
@@ -858,6 +829,19 @@ fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceIn
                 ratio: occlusion.ratio,
             }
         }),
+    }
+}
+
+fn write_status_input(input: &ReferenceInspectionInput<'_, '_>) -> WriteStatusInput {
+    WriteStatusInput {
+        reference_deleted: input.reference.deleted == Some(true),
+        mesh_status: input.mesh_resolution.write_status_mesh_status(),
+        contact_delta: input.contact_details.and_then(|contact| contact.delta),
+        static_bounds_status: input
+            .static_bounds_occlusion
+            .map(|occlusion| occlusion.status),
+        write: input.write,
+        contact_epsilon: input.contact_epsilon,
     }
 }
 
@@ -892,88 +876,6 @@ fn static_mesh_inspection(static_mesh: &super::mesh::StaticMesh) -> StaticMeshIn
     StaticMeshInspection {
         id: static_mesh.static_id.clone(),
         mesh: static_mesh.mesh_path.clone(),
-    }
-}
-
-fn write_status_label(input: &ReferenceInspectionInput<'_, '_>) -> &'static str {
-    match input.write.plan {
-        WritePlanEvidence::Deleted => return "deleted_static_bounds_occluded",
-        WritePlanEvidence::Moved => return "moved_static_bounds_occluded",
-        WritePlanEvidence::Adjusted => return "adjusted",
-        WritePlanEvidence::NotPlanned | WritePlanEvidence::Unchanged => {}
-    }
-    if input.reference.deleted == Some(true) {
-        return "skipped_deleted_ref";
-    }
-    if let Some(occlusion) = input.static_bounds_occlusion {
-        match occlusion.status {
-            "static_bounds_fully_occluded" if input.write.actions.static_delete => {
-                if matches!(input.write.plan, WritePlanEvidence::NotPlanned) {
-                    return "would_delete_static_bounds_occluded";
-                }
-            }
-            "static_bounds_relocatable" if input.write.actions.static_move => {
-                if matches!(input.write.plan, WritePlanEvidence::NotPlanned) {
-                    return "would_move_static_bounds_occluded";
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Some(status) = terrain_write_status(input) {
-        return status;
-    }
-    if let Some(occlusion) = input.static_bounds_occlusion {
-        return match occlusion.status {
-            "static_bounds_fully_occluded" if !input.write.actions.static_delete => {
-                "skipped_static_delete_disabled"
-            }
-            "static_bounds_relocatable" | "static_bounds_blocked"
-                if !input.write.actions.static_move =>
-            {
-                "skipped_static_move_disabled"
-            }
-            "static_bounds_blocked" if input.write.actions.static_move => {
-                "static_bounds_blocked_no_relocation"
-            }
-            _ => mesh_resolution_write_status(input),
-        };
-    }
-
-    mesh_resolution_write_status(input)
-}
-
-fn terrain_write_status(input: &ReferenceInspectionInput<'_, '_>) -> Option<&'static str> {
-    let MeshContactResolution::Resolved { .. } = input.mesh_resolution else {
-        return None;
-    };
-    input
-        .contact_details
-        .and_then(|details| match details.delta {
-            Some(delta) if delta.abs() > input.contact_epsilon && input.write.actions.terrain_z => {
-                Some("adjusted_or_adjustable")
-            }
-            Some(delta) if delta.abs() > input.contact_epsilon => {
-                Some("skipped_terrain_z_disabled")
-            }
-            Some(_) | None => None,
-        })
-}
-
-fn mesh_resolution_write_status(input: &ReferenceInspectionInput<'_, '_>) -> &'static str {
-    match input.mesh_resolution {
-        MeshContactResolution::UnresolvedStatic => "skipped_unresolved_static",
-        MeshContactResolution::MissingContact { .. } => "skipped_missing_mesh_contact",
-        MeshContactResolution::Resolved { .. } => {
-            input
-                .contact_details
-                .map_or("skipped_missing_contact_terrain", |details| {
-                    match details.delta {
-                        Some(_) => "skipped_within_epsilon",
-                        None => "skipped_missing_contact_terrain",
-                    }
-                })
-        }
     }
 }
 
@@ -1142,6 +1044,14 @@ impl<'a> MeshContactResolution<'a> {
             Self::Resolved { .. } | Self::UnresolvedStatic => None,
         }
     }
+
+    const fn write_status_mesh_status(&self) -> MeshResolutionStatus {
+        match self {
+            Self::Resolved { .. } => MeshResolutionStatus::Resolved,
+            Self::MissingContact { .. } => MeshResolutionStatus::MissingContact,
+            Self::UnresolvedStatic => MeshResolutionStatus::UnresolvedStatic,
+        }
+    }
 }
 
 fn resolve_ref_mesh_contact<'a>(
@@ -1230,164 +1140,19 @@ fn classify_contact_delta(delta: f32, epsilon: f32) -> ContactTerrainClassificat
 mod tests {
     use std::collections::BTreeSet;
 
-    use tes3::esp::{Cell, CellData, Plugin, Reference, Static, TES3Object};
+    use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
     use crate::unclip::{
         UnclipArgs,
         args::{RelocationPolicy, TargetFilter, UnclipPolicy, WriteActionArg, WriteActions},
-        mesh::{MeshAabb, MeshContact, StaticMeshIndex},
         model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
 
     use super::{
-        ContactDetails, MeshContactResolution, OriginDetails, ReferenceInspectionInput,
-        StaticBoundsOcclusionDetails, WritePlanEvidence, WriteStatusEvidence,
         deleted_reference_inspection, effective_active_refs, target_exterior_cells,
         target_exterior_ref_count, target_reference_static_ids, write_output_footer,
-        write_status_label,
     };
-
-    #[test]
-    fn write_status_prefers_adjusted_plan_evidence() {
-        let reference = reference_at_z(10.0);
-
-        let mesh_resolution = MeshContactResolution::UnresolvedStatic;
-        let mut input = base_write_status_input(&reference, &mesh_resolution);
-        input.write.plan = WritePlanEvidence::Adjusted;
-
-        assert_eq!(write_status_label(&input), "adjusted");
-    }
-
-    #[test]
-    fn write_status_reports_disabled_terrain_adjustment() {
-        let reference = reference_at_z(10.0);
-        let static_mesh_index = StaticMeshIndex::from_statics([&Static {
-            id: "grass".to_owned(),
-            mesh: "meshes\\grass.nif".to_owned(),
-            ..Static::default()
-        }]);
-        let static_mesh = static_mesh_index.get("grass").unwrap();
-        let contact = MeshContact {
-            vertices: vec![[0.0, 0.0, 0.0]],
-        };
-        let actions = WriteActions {
-            terrain_z: false,
-            static_delete: true,
-            static_move: true,
-        };
-
-        let mesh_resolution = MeshContactResolution::Resolved {
-            static_mesh,
-            contact: &contact,
-            bounds: MeshAabb {
-                min: [0.0, 0.0, 0.0],
-                max: [1.0, 1.0, 1.0],
-            },
-        };
-        let contact_details = ContactDetails {
-            position: [0.0, 0.0, 10.0],
-            terrain_z: Some(0.0),
-            delta: Some(10.0),
-            classification: None,
-        };
-        let mut input = base_write_status_input(&reference, &mesh_resolution);
-        input.contact_details = Some(&contact_details);
-        input.write.actions = actions;
-
-        assert_eq!(write_status_label(&input), "skipped_terrain_z_disabled");
-    }
-
-    #[test]
-    fn write_status_reports_disabled_static_actions() {
-        let reference = reference_at_z(10.0);
-        let actions = WriteActions {
-            terrain_z: true,
-            static_delete: false,
-            static_move: false,
-        };
-
-        let mesh_resolution = MeshContactResolution::UnresolvedStatic;
-        let fully_occluded = StaticBoundsOcclusionDetails {
-            status: "static_bounds_fully_occluded",
-            ratio: 1.0,
-        };
-        let mut input = base_write_status_input(&reference, &mesh_resolution);
-        input.static_bounds_occlusion = Some(&fully_occluded);
-        input.write.actions = actions;
-
-        assert_eq!(write_status_label(&input), "skipped_static_delete_disabled");
-        let relocatable = StaticBoundsOcclusionDetails {
-            status: "static_bounds_relocatable",
-            ratio: 0.5,
-        };
-        input.static_bounds_occlusion = Some(&relocatable);
-        assert_eq!(write_status_label(&input), "skipped_static_move_disabled");
-    }
-
-    #[test]
-    fn write_status_reports_dry_run_static_candidates() {
-        let reference = reference_at_z(10.0);
-        let mesh_resolution = MeshContactResolution::UnresolvedStatic;
-        let fully_occluded = StaticBoundsOcclusionDetails {
-            status: "static_bounds_fully_occluded",
-            ratio: 1.0,
-        };
-        let mut input = base_write_status_input(&reference, &mesh_resolution);
-        input.static_bounds_occlusion = Some(&fully_occluded);
-
-        assert_eq!(
-            write_status_label(&input),
-            "would_delete_static_bounds_occluded"
-        );
-        let relocatable = StaticBoundsOcclusionDetails {
-            status: "static_bounds_relocatable",
-            ratio: 0.5,
-        };
-        input.static_bounds_occlusion = Some(&relocatable);
-        assert_eq!(
-            write_status_label(&input),
-            "would_move_static_bounds_occluded"
-        );
-    }
-
-    #[test]
-    fn write_status_checks_terrain_after_disabled_static_action() {
-        let reference = reference_at_z(10.0);
-        let static_mesh_index = StaticMeshIndex::from_statics([&Static {
-            id: "grass".to_owned(),
-            mesh: "meshes\\grass.nif".to_owned(),
-            ..Static::default()
-        }]);
-        let static_mesh = static_mesh_index.get("grass").unwrap();
-        let contact = MeshContact {
-            vertices: vec![[0.0, 0.0, 0.0]],
-        };
-        let mesh_resolution = MeshContactResolution::Resolved {
-            static_mesh,
-            contact: &contact,
-            bounds: MeshAabb {
-                min: [0.0, 0.0, 0.0],
-                max: [1.0, 1.0, 1.0],
-            },
-        };
-        let contact_details = ContactDetails {
-            position: [0.0, 0.0, 10.0],
-            terrain_z: Some(0.0),
-            delta: Some(10.0),
-            classification: None,
-        };
-        let fully_occluded = StaticBoundsOcclusionDetails {
-            status: "static_bounds_fully_occluded",
-            ratio: 1.0,
-        };
-        let mut input = base_write_status_input(&reference, &mesh_resolution);
-        input.contact_details = Some(&contact_details);
-        input.static_bounds_occlusion = Some(&fully_occluded);
-        input.write.actions.static_delete = false;
-
-        assert_eq!(write_status_label(&input), "adjusted_or_adjustable");
-    }
 
     #[test]
     fn deleted_reference_inspection_skips_actionable_details() {
@@ -1542,32 +1307,6 @@ mod tests {
         let write_record = output.find("\"type\":\"write_adjustment\"").unwrap();
         let summary_record = output.find("\"type\":\"summary\"").unwrap();
         assert!(write_record < summary_record);
-    }
-
-    const MISSING_ORIGIN: OriginDetails = OriginDetails {
-        terrain_z: None,
-        delta: None,
-        classification: "origin_missing_terrain",
-    };
-
-    fn base_write_status_input<'a, 'b>(
-        reference: &'a Reference,
-        mesh_resolution: &'a MeshContactResolution<'b>,
-    ) -> ReferenceInspectionInput<'a, 'b> {
-        ReferenceInspectionInput {
-            cell: (0, 0),
-            key: (0, 0),
-            reference,
-            origin: &MISSING_ORIGIN,
-            mesh_resolution,
-            contact_details: None,
-            static_bounds_occlusion: None,
-            write: WriteStatusEvidence {
-                plan: WritePlanEvidence::NotPlanned,
-                actions: test_write_actions(),
-            },
-            contact_epsilon: 0.5,
-        }
     }
 
     fn reference_at_z(z: f32) -> Reference {

@@ -10,6 +10,7 @@ mod report;
 mod terrain;
 mod write_plan;
 mod write_policy;
+mod write_status;
 mod writer;
 
 pub use args::UnclipArgs;
