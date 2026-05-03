@@ -14,7 +14,6 @@ use super::{
 
 const ORIGIN_TERRAIN_EPSILON: f32 = 0.5;
 const CONTACT_TERRAIN_EPSILON: f32 = 0.5;
-const STATIC_BOUNDS_OCCLUSION_RELOCATE_LIMIT: f32 = 0.10;
 const RELOCATION_STEP: f32 = 32.0;
 const RELOCATION_STEPS: u16 = 8;
 const CELL_SIZE: f32 = 8192.0;
@@ -483,11 +482,6 @@ fn write_threshold_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary)
         stdout,
         "  mesh contact terrain epsilon: {:.3}",
         summary.mesh_contact_terrain_epsilon
-    )?;
-    writeln!(
-        stdout,
-        "  static bounds relocate limit: {:.3}",
-        summary.static_bounds_occlusion_relocate_limit
     )
 }
 
@@ -508,7 +502,7 @@ fn write_static_bounds_summary_text(
     )?;
     writeln!(
         stdout,
-        "  lightly occluded: {}",
+        "  relocatable: {}",
         summary.refs_static_bounds_lightly_occluded
     )?;
     writeln!(stdout, "  blocked: {}", summary.refs_static_bounds_blocked)
@@ -804,7 +798,7 @@ fn adjust_reference_for_terrain_and_static_bounds(
             .world_aabb(corrected_translation, reference.rotation, reference.scale),
         static_occluders,
     ) {
-        StaticBoundsAction::None | StaticBoundsAction::Blocked { .. } => {}
+        StaticBoundsAction::None => {}
         StaticBoundsAction::Delete { ratio, occluder } => {
             reference.deleted = Some(true);
             return WriteReferenceChange::Delete(WriteStaticBoundsDeletion {
@@ -1317,9 +1311,6 @@ enum StaticBoundsAction<'a> {
         ratio: f32,
         occluder: &'a StaticOccluder,
     },
-    Blocked {
-        ratio: f32,
-    },
 }
 
 fn decide_static_bounds_action(
@@ -1349,11 +1340,7 @@ fn decide_static_bounds_action(
     let Some(occluder) = primary_occluder(grass_bounds, &candidates) else {
         return StaticBoundsAction::None;
     };
-    if ratio <= STATIC_BOUNDS_OCCLUSION_RELOCATE_LIMIT {
-        return StaticBoundsAction::Move { ratio, occluder };
-    }
-
-    StaticBoundsAction::Blocked { ratio }
+    StaticBoundsAction::Move { ratio, occluder }
 }
 
 fn primary_occluder<'a>(
@@ -1626,7 +1613,6 @@ impl UnclipReportContext {
             refs_static_bounds_blocked: inspection.refs_static_bounds_blocked,
             origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
             mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
-            static_bounds_occlusion_relocate_limit: STATIC_BOUNDS_OCCLUSION_RELOCATE_LIMIT,
         }
     }
 }
@@ -1842,7 +1828,6 @@ struct UnclipSummary {
     refs_static_bounds_blocked: usize,
     origin_terrain_epsilon: f32,
     mesh_contact_terrain_epsilon: f32,
-    static_bounds_occlusion_relocate_limit: f32,
 }
 
 #[derive(Serialize)]
@@ -2329,9 +2314,9 @@ fn classify_static_bounds_occlusion(
         {
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_lightly_occluded += 1;
-            ("static_bounds_lightly_occluded", ratio)
+            ("static_bounds_relocatable", ratio)
         }
-        StaticBoundsAction::Move { ratio, .. } | StaticBoundsAction::Blocked { ratio } => {
+        StaticBoundsAction::Move { ratio, .. } => {
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_blocked += 1;
             ("static_bounds_blocked", ratio)
@@ -2791,32 +2776,28 @@ mod tests {
                 assert_close(ratio, 1.0);
                 assert_eq!(occluder.id, "rock");
             }
-            StaticBoundsAction::None
-            | StaticBoundsAction::Move { .. }
-            | StaticBoundsAction::Blocked { .. } => panic!("expected delete"),
+            StaticBoundsAction::None | StaticBoundsAction::Move { .. } => panic!("expected delete"),
         }
     }
 
     #[test]
-    fn static_bounds_action_moves_lightly_occluded_ref() {
+    fn static_bounds_action_moves_partially_occluded_ref() {
         let grass = WorldAabb {
             min: [0.0, 0.0, 0.0],
             max: [10.0, 10.0, 10.0],
         };
         let occluders = StaticOccluderIndex {
             occluders: vec![static_occluder(WorldAabb {
-                min: [9.0, 0.0, 0.0],
+                min: [5.0, 0.0, 0.0],
                 max: [10.0, 10.0, 10.0],
             })],
         };
 
         match decide_static_bounds_action(grass, &occluders) {
             StaticBoundsAction::Move { ratio, .. } => {
-                assert_close(ratio, 0.1);
+                assert_close(ratio, 0.5);
             }
-            StaticBoundsAction::None
-            | StaticBoundsAction::Delete { .. }
-            | StaticBoundsAction::Blocked { .. } => panic!("expected move"),
+            StaticBoundsAction::None | StaticBoundsAction::Delete { .. } => panic!("expected move"),
         }
     }
 
