@@ -18,6 +18,10 @@ use super::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
     },
     report,
+    target::{
+        sorted_exterior_cells, target_exterior_cells, target_exterior_ref_count,
+        target_reference_static_ids,
+    },
     terrain::TerrainIndex,
     write_plan::{WritePlan, WriteReport, WriteStatusIndex},
     write_policy::{
@@ -425,19 +429,6 @@ fn path_matches_any(path: &std::path::Path, candidates: &[PathBuf]) -> bool {
         .any(|candidate| candidate == path)
 }
 
-fn target_exterior_cells(plugin: &Plugin, policy: &UnclipPolicy) -> BTreeSet<CellCoord> {
-    plugin
-        .objects_of_type::<Cell>()
-        .filter(|cell| cell.is_exterior())
-        .filter(|cell| {
-            cell.references
-                .values()
-                .any(|reference| policy.target_filter.includes(&reference.id))
-        })
-        .map(|cell| cell.data.grid)
-        .collect()
-}
-
 fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTreeSet<CellCoord>> {
     let mut cells = BTreeSet::new();
 
@@ -446,17 +437,6 @@ fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTreeSet<CellC
     }
 
     Ok(cells)
-}
-
-fn target_reference_static_ids(plugin: &Plugin, policy: &UnclipPolicy) -> BTreeSet<String> {
-    plugin
-        .objects_of_type::<Cell>()
-        .filter(|cell| cell.is_exterior())
-        .flat_map(|cell| cell.references.values())
-        .filter(|reference| reference.deleted != Some(true))
-        .filter(|reference| policy.target_filter.includes(&reference.id))
-        .map(|reference| reference.id.to_lowercase())
-        .collect()
 }
 
 fn build_static_occluders(
@@ -593,23 +573,6 @@ fn count_target_refs(
     }
 
     report
-}
-
-fn sorted_exterior_cells(plugin: &Plugin) -> Vec<&Cell> {
-    let mut cells = plugin
-        .objects_of_type::<Cell>()
-        .filter(|cell| cell.is_exterior())
-        .collect::<Vec<_>>();
-    cells.sort_by_key(|cell| cell.data.grid);
-    cells
-}
-
-fn target_exterior_ref_count(plugin: &Plugin) -> usize {
-    plugin
-        .objects_of_type::<Cell>()
-        .filter(|cell| cell.is_exterior())
-        .map(|cell| cell.references.len())
-        .sum()
 }
 
 struct ReferenceInspectionContext<'a, 'b> {
@@ -1144,15 +1107,12 @@ mod tests {
 
     use crate::unclip::{
         UnclipArgs,
-        args::{RelocationPolicy, TargetFilter, UnclipPolicy, WriteActionArg, WriteActions},
+        args::WriteActionArg,
         model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
 
-    use super::{
-        deleted_reference_inspection, effective_active_refs, target_exterior_cells,
-        target_exterior_ref_count, target_reference_static_ids, write_output_footer,
-    };
+    use super::{deleted_reference_inspection, effective_active_refs, write_output_footer};
 
     #[test]
     fn deleted_reference_inspection_skips_actionable_details() {
@@ -1211,59 +1171,6 @@ mod tests {
     }
 
     #[test]
-    fn target_static_ids_follow_target_filter() {
-        let plugin = Plugin {
-            objects: vec![TES3Object::Cell(exterior_cell([
-                ((1, 2), reference_with_id("flora_grass_01")),
-                ((3, 4), reference_with_id("terrain_rock_01")),
-            ]))],
-        };
-        let policy = test_policy_with_filter(&["flora_*"], &[]);
-
-        let ids = target_reference_static_ids(&plugin, &policy);
-
-        assert!(ids.contains("flora_grass_01"));
-        assert!(!ids.contains("terrain_rock_01"));
-    }
-
-    #[test]
-    fn target_exterior_ref_count_includes_filtered_and_deleted_refs() {
-        let mut deleted = reference_with_id("flora_deleted");
-        deleted.deleted = Some(true);
-        let plugin = Plugin {
-            objects: vec![TES3Object::Cell(exterior_cell([
-                ((1, 2), reference_with_id("flora_grass_01")),
-                ((3, 4), reference_with_id("terrain_rock_01")),
-                ((5, 6), deleted),
-            ]))],
-        };
-
-        assert_eq!(target_exterior_ref_count(&plugin), 3);
-    }
-
-    #[test]
-    fn target_exterior_cells_follow_target_filter() {
-        let plugin = Plugin {
-            objects: vec![
-                TES3Object::Cell(exterior_cell_at(
-                    (1, 0),
-                    [((1, 2), reference_with_id("flora_grass_01"))],
-                )),
-                TES3Object::Cell(exterior_cell_at(
-                    (2, 0),
-                    [((3, 4), reference_with_id("terrain_rock_01"))],
-                )),
-            ],
-        };
-        let policy = test_policy_with_filter(&["flora_*"], &[]);
-
-        assert_eq!(
-            target_exterior_cells(&plugin, &policy),
-            BTreeSet::from([(1, 0)])
-        );
-    }
-
-    #[test]
     fn structured_instance_footer_writes_changes_before_summary() {
         let args = UnclipArgs {
             openmw_cfg: None,
@@ -1314,43 +1221,6 @@ mod tests {
             id: "grass".to_owned(),
             translation: [0.0, 0.0, z],
             ..Reference::default()
-        }
-    }
-
-    fn reference_with_id(id: &str) -> Reference {
-        Reference {
-            id: id.to_owned(),
-            ..Reference::default()
-        }
-    }
-
-    fn test_policy_with_filter(include_ids: &[&str], exclude_ids: &[&str]) -> UnclipPolicy {
-        UnclipPolicy {
-            write_actions: test_write_actions(),
-            contact_epsilon: 0.5,
-            origin_epsilon: 0.5,
-            relocation: RelocationPolicy {
-                step: 32.0,
-                steps: 8,
-            },
-            target_filter: TargetFilter::new(
-                &include_ids
-                    .iter()
-                    .map(|pattern| (*pattern).to_owned())
-                    .collect::<Vec<_>>(),
-                &exclude_ids
-                    .iter()
-                    .map(|pattern| (*pattern).to_owned())
-                    .collect::<Vec<_>>(),
-            ),
-        }
-    }
-
-    const fn test_write_actions() -> WriteActions {
-        WriteActions {
-            terrain_z: true,
-            static_delete: true,
-            static_move: true,
         }
     }
 
