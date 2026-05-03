@@ -67,25 +67,35 @@ pub(crate) fn apply_unclip_adjustments(
                 mesh_contacts,
                 static_occluders,
             );
-            match change {
-                WriteReferenceChange::None => {}
-                WriteReferenceChange::AdjustZ(adjustment) => {
-                    plan.adjusted_refs += 1;
-                    plan.adjustments.push(adjustment);
-                }
-                WriteReferenceChange::Delete(deletion) => {
-                    plan.deleted_refs += 1;
-                    plan.deletions.push(deletion);
-                }
-                WriteReferenceChange::Move(move_) => {
-                    plan.moved_refs += 1;
-                    plan.moves.push(move_);
-                }
-            }
+            record_reference_change(cell, key, change, &mut plan);
         }
     }
 
     plan
+}
+
+fn record_reference_change(
+    cell: &mut tes3::esp::Cell,
+    key: (u32, u32),
+    change: WriteReferenceChange,
+    plan: &mut WritePlan,
+) {
+    match change {
+        WriteReferenceChange::None => {}
+        WriteReferenceChange::AdjustZ(adjustment) => {
+            plan.adjusted_refs += 1;
+            plan.adjustments.push(adjustment);
+        }
+        WriteReferenceChange::Delete(deletion) => {
+            cell.references.remove(&key);
+            plan.deleted_refs += 1;
+            plan.deletions.push(deletion);
+        }
+        WriteReferenceChange::Move(move_) => {
+            plan.moved_refs += 1;
+            plan.moves.push(move_);
+        }
+    }
 }
 
 enum WriteReferenceChange {
@@ -140,7 +150,6 @@ fn adjust_reference_for_terrain_and_static_bounds(
     ) {
         StaticBoundsAction::None => {}
         StaticBoundsAction::Delete { ratio, occluder } => {
-            reference.deleted = Some(true);
             return WriteReferenceChange::Delete(WriteStaticBoundsDeletion {
                 cell: [cell.0, cell.1],
                 reference_key: [key.0, key.1],
@@ -309,9 +318,10 @@ fn apply_contact_adjustment(
 
 #[cfg(test)]
 mod tests {
-    use tes3::esp::Reference;
+    use tes3::esp::{Cell, CellData, Reference};
 
-    use super::apply_contact_adjustment;
+    use super::{WriteReferenceChange, apply_contact_adjustment, record_reference_change};
+    use crate::unclip::write_plan::{WritePlan, WriteStaticBoundsDeletion};
 
     #[test]
     fn contact_adjustment_moves_buried_contact_up() {
@@ -349,12 +359,48 @@ mod tests {
         assert_close(reference.translation[2], 10.0);
     }
 
+    #[test]
+    fn deleted_write_changes_physically_remove_local_refs() {
+        let mut cell = exterior_cell([((3, 4), reference_at_z(10.0))]);
+        let mut plan = WritePlan::default();
+
+        record_reference_change(
+            &mut cell,
+            (3, 4),
+            WriteReferenceChange::Delete(WriteStaticBoundsDeletion {
+                cell: [1, 2],
+                reference_key: [3, 4],
+                id: "grass".to_owned(),
+                occlusion_ratio: 1.0,
+                occluder_id: "rock".to_owned(),
+                occluder_cell: [1, 2],
+                occluder_reference_key: [5, 6],
+            }),
+            &mut plan,
+        );
+
+        assert_eq!(plan.deleted_refs, 1);
+        assert!(!cell.references.contains_key(&(3, 4)));
+    }
+
     fn reference_at_z(z: f32) -> Reference {
         Reference {
             id: "grass".to_owned(),
             translation: [0.0, 0.0, z],
             ..Reference::default()
         }
+    }
+
+    fn exterior_cell(refs: impl IntoIterator<Item = ((u32, u32), Reference)>) -> Cell {
+        let mut cell = Cell {
+            data: CellData {
+                grid: (1, 2),
+                ..CellData::default()
+            },
+            ..Cell::default()
+        };
+        cell.references.extend(refs);
+        cell
     }
 
     fn assert_close(actual: f32, expected: f32) {
