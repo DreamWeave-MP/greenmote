@@ -1,4 +1,7 @@
-use std::{collections::HashMap, io};
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+};
 
 use glam::{Affine3A, EulerRot, Mat3, Vec3};
 use tes3::{
@@ -289,7 +292,9 @@ impl<'a> MeshBoundsCache<'a> {
 }
 
 fn normalize_mesh_key(mesh_path: &str) -> String {
-    mesh_path.replace('/', "\\").to_lowercase()
+    strip_meshes_prefix(mesh_path)
+        .replace('/', "\\")
+        .to_lowercase()
 }
 
 fn resolve_mesh(vfs: &VFS, mesh_path: &str) -> io::Result<VfsFile> {
@@ -337,16 +342,10 @@ fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
 }
 
 fn sort_dedup_vertices(vertices: &mut Vec<Vec3>) {
-    vertices.sort_by(|left, right| {
-        left.x
-            .total_cmp(&right.x)
-            .then_with(|| left.y.total_cmp(&right.y))
-            .then_with(|| left.z.total_cmp(&right.z))
-    });
-    vertices.dedup_by(|left, right| {
-        left.x.to_bits() == right.x.to_bits()
-            && left.y.to_bits() == right.y.to_bits()
-            && left.z.to_bits() == right.z.to_bits()
+    let mut seen = HashSet::new();
+    vertices.retain(|vertex| {
+        let key = [vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()];
+        seen.insert(key)
     });
 }
 
@@ -499,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn mesh_contact_vertices_deduplicate_exact_duplicates() {
+    fn mesh_contact_vertices_deduplicate_exact_duplicates_without_reordering() {
         let mut vertices = vec![
             Vec3::new(1.0, 2.0, 3.0),
             Vec3::new(0.0, 0.0, 0.0),
@@ -508,8 +507,17 @@ mod tests {
 
         sort_dedup_vertices(&mut vertices);
 
-        assert_eq!(vertices.len(), 2);
-        assert!(vertices.contains(&Vec3::new(0.0, 0.0, 0.0)));
-        assert!(vertices.contains(&Vec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(
+            vertices,
+            vec![Vec3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, 0.0)]
+        );
+    }
+
+    #[test]
+    fn mesh_cache_key_matches_optional_meshes_prefix() {
+        assert_eq!(
+            normalize_mesh_key("Meshes/Grass/Foo.nif"),
+            normalize_mesh_key("grass\\foo.nif")
+        );
     }
 }
