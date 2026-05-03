@@ -3,6 +3,7 @@ use std::{io, io::Write};
 mod app;
 mod args;
 mod cells;
+mod inspection;
 mod mesh;
 mod model;
 mod occlusion;
