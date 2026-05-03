@@ -24,7 +24,7 @@ pub(crate) fn write_summary_text(
     writeln!(stdout, "Target plugin: {}", context.target_plugin)?;
     write_write_summary_text(stdout, context.write.as_ref(), include_adjustments)?;
     writeln!(stdout)?;
-    write_policy_summary_text(stdout, context.policy())?;
+    write_policy_summary_text(stdout, context.write_requested(), context.policy())?;
     writeln!(stdout)?;
     write_terrain_summary_text(stdout, &summary)?;
     writeln!(stdout)?;
@@ -59,6 +59,7 @@ pub(crate) fn write_structured_summary(
     let report = StructuredSummaryReport {
         kind: "greenmote_unclip_terrain_inspection",
         target_plugin: &context.target_plugin,
+        write_requested: context.write_requested(),
         policy: context.policy(),
         write: context.write.as_ref(),
         missing_active_terrain_cells: context.missing_active_terrain_cells(),
@@ -77,6 +78,7 @@ pub(crate) fn write_structured_header(
         r#type: "header",
         kind: "greenmote_unclip_terrain_inspection",
         target_plugin: &context.target_plugin,
+        write_requested: context.write_requested(),
         policy: context.policy(),
         write: header_write.as_ref(),
         missing_active_terrain_cells: context.missing_active_terrain_cells(),
@@ -138,6 +140,8 @@ pub(crate) fn write_structured_summary_record(
     let write = context.write.as_ref().map(WriteReport::summary);
     let summary = StructuredSummaryRecord {
         r#type: "summary",
+        write_requested: context.write_requested(),
+        policy: context.policy(),
         write: write.as_ref(),
         summary: context.summary(inspection),
     };
@@ -159,7 +163,8 @@ fn write_write_summary_text(
         } else {
             writeln!(
                 stdout,
-                "No plugin written: no refs changed at {}",
+                "No plugin written: {} at {}",
+                write.no_write_reason.unwrap_or("no_refs_changed"),
                 write.destination_plugin
             )?;
         }
@@ -240,22 +245,22 @@ fn write_reference_summary_text(stdout: &mut dyn Write, summary: &UnclipSummary)
     )?;
     writeln!(
         stdout,
-        "  with origin terrain: {}",
+        "  matching with origin terrain: {}",
         summary.filtered_refs_with_origin_terrain
     )?;
     writeln!(
         stdout,
-        "  missing origin terrain: {}",
+        "  matching missing origin terrain: {}",
         summary.filtered_refs_missing_origin_terrain
     )?;
     writeln!(
         stdout,
-        "  origin above terrain: {}",
+        "  matching origin above terrain: {}",
         summary.filtered_refs_origin_above_terrain
     )?;
     writeln!(
         stdout,
-        "  origin below terrain: {}",
+        "  matching origin below terrain: {}",
         summary.filtered_refs_origin_below_terrain
     )
 }
@@ -267,41 +272,51 @@ fn write_mesh_contact_summary_text(
     writeln!(stdout, "Mesh contacts:")?;
     writeln!(
         stdout,
-        "  resolved: {}",
+        "  matching resolved: {}",
         summary.filtered_refs_with_mesh_contact
     )?;
     writeln!(
         stdout,
-        "  unresolved static: {}",
+        "  matching unresolved static: {}",
         summary.filtered_refs_without_resolved_static
     )?;
     writeln!(
         stdout,
-        "  missing contact: {}",
+        "  matching missing contact: {}",
         summary.filtered_refs_missing_mesh_contact
     )?;
     writeln!(
         stdout,
-        "  contact above terrain: {}",
+        "  matching contact above terrain: {}",
         summary.filtered_refs_mesh_contact_above_terrain
     )?;
     writeln!(
         stdout,
-        "  contact below terrain: {}",
+        "  matching contact below terrain: {}",
         summary.filtered_refs_mesh_contact_below_terrain
     )?;
     writeln!(
         stdout,
-        "  contact missing terrain: {}",
+        "  matching contact missing terrain: {}",
         summary.filtered_refs_mesh_contact_missing_terrain
     )
 }
 
 fn write_policy_summary_text(
     stdout: &mut dyn Write,
+    write_requested: bool,
     policy: &UnclipPolicySummary,
 ) -> io::Result<()> {
     writeln!(stdout, "Policy:")?;
+    writeln!(
+        stdout,
+        "  write mode: {}",
+        if write_requested {
+            "write"
+        } else {
+            "inspect-only"
+        }
+    )?;
     let actions = if policy.write_actions.is_empty() {
         "none".to_owned()
     } else {
@@ -351,22 +366,22 @@ fn write_static_bounds_summary_text(
     writeln!(stdout, "Static bounds occlusion:")?;
     writeln!(
         stdout,
-        "  occluded: {}",
+        "  matching occluded: {}",
         summary.filtered_refs_static_bounds_occluded
     )?;
     writeln!(
         stdout,
-        "  fully occluded: {}",
+        "  matching fully occluded: {}",
         summary.filtered_refs_static_bounds_fully_occluded
     )?;
     writeln!(
         stdout,
-        "  relocatable: {}",
+        "  matching relocatable: {}",
         summary.filtered_refs_static_bounds_relocatable
     )?;
     writeln!(
         stdout,
-        "  blocked: {}",
+        "  matching blocked: {}",
         summary.filtered_refs_static_bounds_blocked
     )
 }
@@ -488,6 +503,7 @@ fn optional_f32(value: Option<f32>) -> String {
 struct StructuredSummaryReport<'a> {
     kind: &'static str,
     target_plugin: &'a str,
+    write_requested: bool,
     policy: &'a UnclipPolicySummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     write: Option<&'a WriteReport>,
@@ -500,6 +516,7 @@ struct StructuredHeader<'a> {
     r#type: &'static str,
     kind: &'static str,
     target_plugin: &'a str,
+    write_requested: bool,
     policy: &'a UnclipPolicySummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     write: Option<&'a WriteSummary>,
@@ -509,6 +526,8 @@ struct StructuredHeader<'a> {
 #[derive(Serialize)]
 struct StructuredSummaryRecord<'a> {
     r#type: &'static str,
+    write_requested: bool,
+    policy: &'a UnclipPolicySummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     write: Option<&'a WriteSummary>,
     summary: UnclipSummary,
@@ -560,6 +579,7 @@ mod tests {
                 adjustments: vec![write_adjustment()],
                 ..WritePlan::default()
             },
+            "no_refs_changed",
         ));
         let mut with_adjustments = Vec::new();
         let mut without_adjustments = Vec::new();
@@ -583,8 +603,33 @@ mod tests {
         let without_adjustments = String::from_utf8(without_adjustments).unwrap();
         assert!(with_adjustments.contains("WRITE CELL"));
         assert!(with_adjustments.contains("Policy:"));
+        assert!(with_adjustments.contains("write mode: inspect-only"));
         assert!(with_adjustments.contains("target exterior refs total:"));
         assert!(!without_adjustments.contains("WRITE CELL"));
+    }
+
+    #[test]
+    fn write_summary_reports_no_write_reason() {
+        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
+        context.write = Some(WriteReport::not_written(
+            std::path::Path::new("plugin.omwaddon"),
+            WritePlan::default(),
+            "all_write_actions_disabled",
+        ));
+        let mut output = Vec::new();
+
+        write_summary_text(
+            &mut output,
+            &context,
+            &TerrainInspectionReport::default(),
+            false,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains("No plugin written: all_write_actions_disabled at plugin.omwaddon")
+        );
     }
 
     #[test]
@@ -596,6 +641,7 @@ mod tests {
 
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("\"policy\":"));
+        assert!(output.contains("\"write_requested\":false"));
         assert!(
             output.contains("\"write_actions\":[\"terrain-z\",\"static-delete\",\"static-move\"]")
         );
@@ -615,6 +661,7 @@ mod tests {
                 ],
                 ..WritePlan::default()
             },
+            "no_refs_changed",
         );
         let mut output = Vec::new();
 

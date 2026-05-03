@@ -13,33 +13,31 @@ pub(crate) struct UnclipReportContext {
     loaded_terrain_cells_total: usize,
     missing_active_terrain_cells: Vec<CellCoord>,
     policy: UnclipPolicySummary,
+    write_requested: bool,
     pub(crate) write: Option<WriteReport>,
 }
 
 impl UnclipReportContext {
-    pub(crate) fn new(
-        target_plugin_path: &std::path::Path,
-        target_exterior_cells: usize,
-        target_refs_total: usize,
-        active_cells: usize,
-        loaded_terrain_cells_total: usize,
-        missing_active_terrain_cells: Vec<CellCoord>,
-        policy: &UnclipPolicy,
-    ) -> Self {
+    pub(crate) fn new(input: UnclipReportContextInput<'_>, policy: &UnclipPolicy) -> Self {
         Self {
-            target_plugin: target_plugin_path.display().to_string(),
-            target_exterior_cells,
-            target_refs_total,
-            active_cells,
-            loaded_terrain_cells_total,
-            missing_active_terrain_cells,
+            target_plugin: input.target_plugin_path.display().to_string(),
+            target_exterior_cells: input.target_exterior_cells,
+            target_refs_total: input.target_refs_total,
+            active_cells: input.active_cells,
+            loaded_terrain_cells_total: input.loaded_terrain_cells_total,
+            missing_active_terrain_cells: input.missing_active_terrain_cells,
             policy: UnclipPolicySummary::from_policy(policy),
+            write_requested: input.write_requested,
             write: None,
         }
     }
 
     pub(crate) const fn policy(&self) -> &UnclipPolicySummary {
         &self.policy
+    }
+
+    pub(crate) const fn write_requested(&self) -> bool {
+        self.write_requested
     }
 
     pub(crate) fn missing_active_terrain_cells(&self) -> Vec<[i32; 2]> {
@@ -80,6 +78,16 @@ impl UnclipReportContext {
             filtered_refs_static_bounds_blocked: inspection.refs_static_bounds_blocked,
         }
     }
+}
+
+pub(crate) struct UnclipReportContextInput<'a> {
+    pub(crate) target_plugin_path: &'a std::path::Path,
+    pub(crate) target_exterior_cells: usize,
+    pub(crate) target_refs_total: usize,
+    pub(crate) active_cells: usize,
+    pub(crate) loaded_terrain_cells_total: usize,
+    pub(crate) missing_active_terrain_cells: Vec<CellCoord>,
+    pub(crate) write_requested: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -130,6 +138,7 @@ impl UnclipReportContext {
                 include_ids: Vec::new(),
                 exclude_ids: Vec::new(),
             },
+            write_requested: false,
             write: None,
         }
     }

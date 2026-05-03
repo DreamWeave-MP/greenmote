@@ -100,8 +100,10 @@ pub(crate) struct RelocationPolicy {
 
 #[derive(Clone, Debug)]
 pub(crate) struct TargetFilter {
-    include_ids: Vec<String>,
-    exclude_ids: Vec<String>,
+    include_patterns: Vec<String>,
+    exclude_patterns: Vec<String>,
+    normalized_includes: Vec<String>,
+    normalized_excludes: Vec<String>,
 }
 
 impl UnclipArgs {
@@ -178,11 +180,13 @@ impl WriteActions {
 impl TargetFilter {
     pub(crate) fn new(include_ids: &[String], exclude_ids: &[String]) -> Self {
         Self {
-            include_ids: include_ids
+            include_patterns: include_ids.to_vec(),
+            exclude_patterns: exclude_ids.to_vec(),
+            normalized_includes: include_ids
                 .iter()
                 .map(|pattern| pattern.to_lowercase())
                 .collect(),
-            exclude_ids: exclude_ids
+            normalized_excludes: exclude_ids
                 .iter()
                 .map(|pattern| pattern.to_lowercase())
                 .collect(),
@@ -192,25 +196,25 @@ impl TargetFilter {
     pub(crate) fn includes(&self, id: &str) -> bool {
         let id = id.to_lowercase();
         if self
-            .exclude_ids
+            .normalized_excludes
             .iter()
             .any(|pattern| wildcard_matches(pattern, &id))
         {
             return false;
         }
-        self.include_ids.is_empty()
+        self.normalized_includes.is_empty()
             || self
-                .include_ids
+                .normalized_includes
                 .iter()
                 .any(|pattern| wildcard_matches(pattern, &id))
     }
 
     pub(crate) fn include_ids(&self) -> &[String] {
-        &self.include_ids
+        &self.include_patterns
     }
 
     pub(crate) fn exclude_ids(&self) -> &[String] {
-        &self.exclude_ids
+        &self.exclude_patterns
     }
 }
 

@@ -9,6 +9,8 @@ pub(crate) struct WriteReport {
     pub(crate) written: bool,
     pub(crate) destination_plugin: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) no_write_reason: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) backup_plugin: Option<String>,
     pub(crate) adjusted_refs: usize,
     pub(crate) deleted_refs: usize,
@@ -30,18 +32,24 @@ impl WriteReport {
         Self::from_plan(
             true,
             destination_path,
+            None,
             backup_path.map(|path| path.display().to_string()),
             plan,
         )
     }
 
-    pub(crate) fn not_written(destination_path: &Path, plan: WritePlan) -> Self {
-        Self::from_plan(false, destination_path, None, plan)
+    pub(crate) fn not_written(
+        destination_path: &Path,
+        plan: WritePlan,
+        reason: &'static str,
+    ) -> Self {
+        Self::from_plan(false, destination_path, Some(reason), None, plan)
     }
 
     fn from_plan(
         written: bool,
         destination_path: &Path,
+        no_write_reason: Option<&'static str>,
         backup_plugin: Option<String>,
         mut plan: WritePlan,
     ) -> Self {
@@ -49,6 +57,7 @@ impl WriteReport {
         Self {
             written,
             destination_plugin: destination_path.display().to_string(),
+            no_write_reason,
             backup_plugin,
             adjusted_refs: plan.adjusted_refs,
             deleted_refs: plan.deleted_refs,
@@ -63,6 +72,7 @@ impl WriteReport {
         WriteSummary {
             written: self.written,
             destination_plugin: self.destination_plugin.clone(),
+            no_write_reason: self.no_write_reason,
             backup_plugin: self.backup_plugin.clone(),
             adjusted_refs: self.adjusted_refs,
             deleted_refs: self.deleted_refs,
@@ -75,6 +85,8 @@ impl WriteReport {
 pub(crate) struct WriteSummary {
     pub(crate) written: bool,
     pub(crate) destination_plugin: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) no_write_reason: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) backup_plugin: Option<String>,
     pub(crate) adjusted_refs: usize,
@@ -260,6 +272,7 @@ mod tests {
                 ],
                 ..WritePlan::default()
             },
+            "no_refs_changed",
         );
 
         assert_eq!(report.adjustments[0].cell, [0, 0]);
