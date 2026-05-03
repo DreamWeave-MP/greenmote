@@ -146,7 +146,7 @@ mod tests {
             panic!("unclip command should parse");
         };
 
-        let policy = args.policy();
+        let policy = args.policy().unwrap();
         assert!(policy.write_actions.terrain_z);
         assert!(!policy.write_actions.static_delete);
         assert!(policy.write_actions.static_move);
@@ -177,6 +177,24 @@ mod tests {
 
             assert!(result.is_err());
         }
+    }
+
+    #[test]
+    fn unclip_policy_rejects_mixed_write_action_macros() {
+        let cli = Cli::parse_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--write-actions",
+            "none,terrain-z",
+        ]);
+
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("unclip command should parse before policy validation");
+        };
+
+        assert!(args.policy().is_err());
     }
 
     #[test]

@@ -105,9 +105,10 @@ pub(crate) struct TargetFilter {
 }
 
 impl UnclipArgs {
-    pub(crate) fn policy(&self) -> UnclipPolicy {
-        UnclipPolicy {
-            write_actions: WriteActions::from_args(&self.write_actions),
+    pub(crate) fn policy(&self) -> Result<UnclipPolicy, String> {
+        let write_actions = WriteActions::from_args(&self.write_actions)?;
+        Ok(UnclipPolicy {
+            write_actions,
             contact_epsilon: self.contact_epsilon,
             origin_epsilon: self.origin_epsilon,
             relocation: RelocationPolicy {
@@ -115,12 +116,21 @@ impl UnclipArgs {
                 steps: self.relocation_steps,
             },
             target_filter: TargetFilter::new(&self.include_ids, &self.exclude_ids),
-        }
+        })
     }
 }
 
 impl WriteActions {
-    fn from_args(actions: &[WriteActionArg]) -> Self {
+    fn from_args(actions: &[WriteActionArg]) -> Result<Self, String> {
+        if actions.len() > 1
+            && actions
+                .iter()
+                .any(|action| matches!(action, WriteActionArg::All | WriteActionArg::None))
+        {
+            return Err(
+                "write action 'all' or 'none' cannot be combined with other actions".to_owned(),
+            );
+        }
         let mut write_actions = Self {
             terrain_z: false,
             static_delete: false,
@@ -143,7 +153,11 @@ impl WriteActions {
                 WriteActionArg::StaticMove => write_actions.static_move = true,
             }
         }
-        write_actions
+        Ok(write_actions)
+    }
+
+    pub(crate) const fn any_enabled(self) -> bool {
+        self.terrain_z || self.static_delete || self.static_move
     }
 }
 

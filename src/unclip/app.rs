@@ -28,7 +28,9 @@ use super::{
 };
 
 pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
-    let policy = args.policy();
+    let policy = args
+        .policy()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let openmw_config = openmw::load_config_from_path(args.openmw_cfg.as_deref())?;
     let vfs = openmw::build_vfs(&openmw_config);
     let target_plugin = resolve_target_plugin(&args.plugin, &openmw_config, &vfs)?;
@@ -75,14 +77,18 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     );
     let mut target_meshes = MeshContactCache::new(&vfs);
     let write_plan = if args.write {
-        Some(plan_unclip_adjustments(
-            &target_plugin_data,
-            &terrain,
-            &target_static_index,
-            &mut target_meshes,
-            &static_occluders,
-            &policy,
-        ))
+        if policy.write_actions.any_enabled() {
+            Some(plan_unclip_adjustments(
+                &target_plugin_data,
+                &terrain,
+                &target_static_index,
+                &mut target_meshes,
+                &static_occluders,
+                &policy,
+            ))
+        } else {
+            Some(WritePlan::default())
+        }
     } else {
         None
     };
