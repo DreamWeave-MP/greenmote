@@ -14,6 +14,10 @@ use super::{
         static_bounds_occlusion_ratio, translate_bounds_xy,
     },
     terrain::TerrainIndex,
+    write_plan::{
+        WriteAdjustment, WritePlan, WriteReport, WriteStaticBoundsDeletion, WriteStaticBoundsMove,
+        WriteSummary,
+    },
 };
 
 const ORIGIN_TERRAIN_EPSILON: f32 = 0.5;
@@ -1011,24 +1015,7 @@ fn save_plugin_with_backup(
         return Err(error);
     }
 
-    let adjusted_ref_keys = adjusted_ref_keys(&plan.adjustments);
-    let deleted_ref_keys = adjusted_ref_keys_from_deletions(&plan.deletions);
-    let moved_ref_keys = adjusted_ref_keys_from_moves(&plan.moves);
-
-    Ok(WriteReport {
-        written: true,
-        destination_plugin: destination_path.display().to_string(),
-        backup_plugin: backup.path().map(|path| path.display().to_string()),
-        adjusted_refs: plan.adjusted_refs,
-        deleted_refs: plan.deleted_refs,
-        moved_refs: plan.moved_refs,
-        adjusted_ref_keys,
-        deleted_ref_keys,
-        moved_ref_keys,
-        adjustments: plan.adjustments,
-        deletions: plan.deletions,
-        moves: plan.moves,
-    })
+    Ok(WriteReport::written(destination_path, backup.path(), plan))
 }
 
 fn replace_with_temp(
@@ -1465,191 +1452,6 @@ impl UnclipReportContext {
             mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
         }
     }
-}
-
-#[derive(Serialize)]
-struct WriteReport {
-    written: bool,
-    destination_plugin: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    backup_plugin: Option<String>,
-    adjusted_refs: usize,
-    deleted_refs: usize,
-    moved_refs: usize,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    adjustments: Vec<WriteAdjustment>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    deletions: Vec<WriteStaticBoundsDeletion>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    moves: Vec<WriteStaticBoundsMove>,
-    #[serde(skip)]
-    adjusted_ref_keys: BTreeSet<AdjustedRefKey>,
-    #[serde(skip)]
-    deleted_ref_keys: BTreeSet<AdjustedRefKey>,
-    #[serde(skip)]
-    moved_ref_keys: BTreeSet<AdjustedRefKey>,
-}
-
-impl WriteReport {
-    fn not_written(destination_path: &std::path::Path, plan: WritePlan) -> Self {
-        let adjusted_ref_keys = adjusted_ref_keys(&plan.adjustments);
-        let deleted_ref_keys = adjusted_ref_keys_from_deletions(&plan.deletions);
-        let moved_ref_keys = adjusted_ref_keys_from_moves(&plan.moves);
-        Self {
-            written: false,
-            destination_plugin: destination_path.display().to_string(),
-            backup_plugin: None,
-            adjusted_refs: plan.adjusted_refs,
-            deleted_refs: plan.deleted_refs,
-            moved_refs: plan.moved_refs,
-            adjustments: plan.adjustments,
-            deletions: plan.deletions,
-            moves: plan.moves,
-            adjusted_ref_keys,
-            deleted_ref_keys,
-            moved_ref_keys,
-        }
-    }
-
-    fn summary(&self) -> WriteSummary {
-        WriteSummary {
-            written: self.written,
-            destination_plugin: self.destination_plugin.clone(),
-            backup_plugin: self.backup_plugin.clone(),
-            adjusted_refs: self.adjusted_refs,
-            deleted_refs: self.deleted_refs,
-            moved_refs: self.moved_refs,
-        }
-    }
-
-    fn is_adjusted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
-        self.adjusted_ref_keys
-            .contains(&AdjustedRefKey::new(cell, key))
-    }
-
-    fn is_deleted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
-        self.deleted_ref_keys
-            .contains(&AdjustedRefKey::new(cell, key))
-    }
-
-    fn is_moved(&self, cell: CellCoord, key: (u32, u32)) -> bool {
-        self.moved_ref_keys
-            .contains(&AdjustedRefKey::new(cell, key))
-    }
-}
-
-#[derive(Serialize)]
-struct WriteSummary {
-    written: bool,
-    destination_plugin: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    backup_plugin: Option<String>,
-    adjusted_refs: usize,
-    deleted_refs: usize,
-    moved_refs: usize,
-}
-
-#[derive(Default)]
-struct WritePlan {
-    adjusted_refs: usize,
-    deleted_refs: usize,
-    moved_refs: usize,
-    adjustments: Vec<WriteAdjustment>,
-    deletions: Vec<WriteStaticBoundsDeletion>,
-    moves: Vec<WriteStaticBoundsMove>,
-}
-
-impl WritePlan {
-    const fn changed_refs(&self) -> usize {
-        self.adjusted_refs + self.deleted_refs + self.moved_refs
-    }
-}
-
-#[derive(Serialize)]
-struct WriteAdjustment {
-    cell: [i32; 2],
-    reference_key: [u32; 2],
-    id: String,
-    old_z: f32,
-    new_z: f32,
-    applied_delta: f32,
-    contact_position: [f32; 3],
-    terrain_z: f32,
-}
-
-#[derive(Serialize)]
-struct WriteStaticBoundsDeletion {
-    cell: [i32; 2],
-    reference_key: [u32; 2],
-    id: String,
-    occlusion_ratio: f32,
-    occluder_id: String,
-    occluder_cell: [i32; 2],
-    occluder_reference_key: [u32; 2],
-}
-
-#[derive(Serialize)]
-struct WriteStaticBoundsMove {
-    cell: [i32; 2],
-    reference_key: [u32; 2],
-    id: String,
-    occlusion_ratio: f32,
-    old_position: [f32; 3],
-    new_position: [f32; 3],
-    occluder_id: String,
-    occluder_cell: [i32; 2],
-    occluder_reference_key: [u32; 2],
-}
-
-#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
-struct AdjustedRefKey {
-    cell: [i32; 2],
-    reference_key: [u32; 2],
-}
-
-impl AdjustedRefKey {
-    const fn new(cell: CellCoord, key: (u32, u32)) -> Self {
-        Self {
-            cell: [cell.0, cell.1],
-            reference_key: [key.0, key.1],
-        }
-    }
-
-    const fn from_adjustment(adjustment: &WriteAdjustment) -> Self {
-        Self {
-            cell: adjustment.cell,
-            reference_key: adjustment.reference_key,
-        }
-    }
-}
-
-fn adjusted_ref_keys(adjustments: &[WriteAdjustment]) -> BTreeSet<AdjustedRefKey> {
-    adjustments
-        .iter()
-        .map(AdjustedRefKey::from_adjustment)
-        .collect()
-}
-
-fn adjusted_ref_keys_from_deletions(
-    deletions: &[WriteStaticBoundsDeletion],
-) -> BTreeSet<AdjustedRefKey> {
-    deletions
-        .iter()
-        .map(|deletion| AdjustedRefKey {
-            cell: deletion.cell,
-            reference_key: deletion.reference_key,
-        })
-        .collect()
-}
-
-fn adjusted_ref_keys_from_moves(moves: &[WriteStaticBoundsMove]) -> BTreeSet<AdjustedRefKey> {
-    moves
-        .iter()
-        .map(|move_| AdjustedRefKey {
-            cell: move_.cell,
-            reference_key: move_.reference_key,
-        })
-        .collect()
 }
 
 #[derive(Serialize)]
@@ -2365,11 +2167,11 @@ mod tests {
     use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
     use super::{
-        MeshContactResolution, WriteAdjustment, WritePlan, WriteReport, adjusted_ref_keys,
-        apply_contact_adjustment, deleted_reference_inspection, effective_active_refs,
-        next_numbered_backup_path, prepare_plugin_backup, replace_with_temp, write_status_label,
-        write_write_summary_text,
+        MeshContactResolution, apply_contact_adjustment, deleted_reference_inspection,
+        effective_active_refs, next_numbered_backup_path, prepare_plugin_backup, replace_with_temp,
+        write_status_label, write_write_summary_text,
     };
+    use crate::unclip::write_plan::{WriteAdjustment, WritePlan, WriteReport};
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -2517,21 +2319,14 @@ mod tests {
 
     #[test]
     fn write_summary_prints_adjustments_only_when_requested() {
-        let adjustments = vec![write_adjustment()];
-        let report = WriteReport {
-            written: false,
-            destination_plugin: "plugin.omwaddon".to_owned(),
-            backup_plugin: None,
-            adjusted_refs: 1,
-            deleted_refs: 0,
-            moved_refs: 0,
-            adjusted_ref_keys: adjusted_ref_keys(&adjustments),
-            deleted_ref_keys: BTreeSet::new(),
-            moved_ref_keys: BTreeSet::new(),
-            adjustments,
-            deletions: Vec::new(),
-            moves: Vec::new(),
-        };
+        let report = WriteReport::not_written(
+            Path::new("plugin.omwaddon"),
+            WritePlan {
+                adjusted_refs: 1,
+                adjustments: vec![write_adjustment()],
+                ..WritePlan::default()
+            },
+        );
         let mut with_adjustments = Vec::new();
         let mut without_adjustments = Vec::new();
 
@@ -2559,21 +2354,6 @@ mod tests {
             ),
             "adjusted"
         );
-    }
-
-    #[test]
-    fn write_report_uses_adjusted_key_set() {
-        let report = WriteReport::not_written(
-            Path::new("plugin.omwaddon"),
-            WritePlan {
-                adjusted_refs: 1,
-                adjustments: vec![write_adjustment()],
-                ..WritePlan::default()
-            },
-        );
-
-        assert!(report.is_adjusted((1, 2), (3, 4)));
-        assert!(!report.is_adjusted((1, 2), (3, 5)));
     }
 
     #[test]
