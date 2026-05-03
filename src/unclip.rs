@@ -7,6 +7,7 @@ mod mesh;
 mod model;
 mod occlusion;
 mod report;
+mod setup;
 mod static_occluders;
 mod target;
 mod terrain;
