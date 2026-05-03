@@ -14,6 +14,7 @@ use vfstool_lib::{VFS, VfsFile};
 pub struct StaticMesh {
     pub static_id: String,
     pub mesh_path: String,
+    mesh_key: String,
 }
 
 #[derive(Default)]
@@ -36,6 +37,7 @@ impl StaticMeshIndex {
                     StaticMesh {
                         static_id: static_.id.clone(),
                         mesh_path: static_.mesh.clone(),
+                        mesh_key: normalize_mesh_key(&static_.mesh),
                     },
                 );
             }
@@ -47,6 +49,11 @@ impl StaticMeshIndex {
     #[must_use]
     pub fn get(&self, id: &str) -> Option<&StaticMesh> {
         self.statics.get(&id.to_lowercase())
+    }
+
+    #[must_use]
+    pub fn get_normalized_key(&self, key: &str) -> Option<&StaticMesh> {
+        self.statics.get(key)
     }
 }
 
@@ -204,14 +211,14 @@ impl<'a> MeshContactCache<'a> {
         }
     }
 
-    pub fn geometry(&mut self, mesh_path: &str) -> io::Result<&MeshGeometry> {
-        let key = mesh_path.replace('/', "\\").to_lowercase();
-        if !self.meshes.contains_key(&key) {
-            let geometry = self.load_geometry(mesh_path);
+    pub fn geometry(&mut self, static_mesh: &StaticMesh) -> io::Result<&MeshGeometry> {
+        let key = &static_mesh.mesh_key;
+        if !self.meshes.contains_key(key) {
+            let geometry = self.load_geometry(&static_mesh.mesh_path);
             self.meshes.insert(key.clone(), geometry);
         }
 
-        self.meshes[&key].as_ref().map_or_else(
+        self.meshes[key].as_ref().map_or_else(
             |error| Err(io::Error::new(error.kind(), error.to_string())),
             Ok,
         )
@@ -247,14 +254,14 @@ impl<'a> MeshBoundsCache<'a> {
         }
     }
 
-    pub fn bounds(&mut self, mesh_path: &str) -> io::Result<MeshAabb> {
-        let key = mesh_path.replace('/', "\\").to_lowercase();
-        if !self.meshes.contains_key(&key) {
-            let bounds = self.load_bounds(mesh_path);
+    pub fn bounds(&mut self, static_mesh: &StaticMesh) -> io::Result<MeshAabb> {
+        let key = &static_mesh.mesh_key;
+        if !self.meshes.contains_key(key) {
+            let bounds = self.load_bounds(&static_mesh.mesh_path);
             self.meshes.insert(key.clone(), bounds);
         }
 
-        self.meshes[&key].as_ref().map_or_else(
+        self.meshes[key].as_ref().map_or_else(
             |error| Err(io::Error::new(error.kind(), error.to_string())),
             |bounds| Ok(*bounds),
         )
@@ -279,6 +286,10 @@ impl<'a> MeshBoundsCache<'a> {
             )
         })
     }
+}
+
+fn normalize_mesh_key(mesh_path: &str) -> String {
+    mesh_path.replace('/', "\\").to_lowercase()
 }
 
 fn resolve_mesh(vfs: &VFS, mesh_path: &str) -> io::Result<VfsFile> {

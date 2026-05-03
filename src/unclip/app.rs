@@ -430,14 +430,15 @@ fn build_static_occluders(
     let mut occluders = Vec::new();
 
     for (key, reference) in effective_refs {
-        if target_static_ids.contains(&reference.id.to_lowercase()) {
+        let reference_id_key = reference.id.to_lowercase();
+        if target_static_ids.contains(&reference_id_key) {
             continue;
         }
 
-        let Some(static_mesh) = static_index.get(&reference.id) else {
+        let Some(static_mesh) = static_index.get_normalized_key(&reference_id_key) else {
             continue;
         };
-        let Ok(bounds) = mesh_bounds.bounds(&static_mesh.mesh_path) else {
+        let Ok(bounds) = mesh_bounds.bounds(static_mesh) else {
             continue;
         };
 
@@ -1020,7 +1021,7 @@ fn resolve_ref_mesh_contact<'a>(
         return MeshContactResolution::UnresolvedStatic;
     };
 
-    match mesh_contacts.geometry(&static_mesh.mesh_path) {
+    match mesh_contacts.geometry(static_mesh) {
         Ok(geometry) => {
             report.refs_with_mesh_contact += 1;
             MeshContactResolution::Resolved {

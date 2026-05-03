@@ -213,7 +213,7 @@ fn adjust_reference_for_terrain_and_static_bounds(
     let Some(static_mesh) = static_index.get(&reference.id) else {
         return WriteReferenceChange::None;
     };
-    let Ok(geometry) = mesh_contacts.geometry(&static_mesh.mesh_path) else {
+    let Ok(geometry) = mesh_contacts.geometry(static_mesh) else {
         return WriteReferenceChange::None;
     };
 
