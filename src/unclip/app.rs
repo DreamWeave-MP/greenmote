@@ -9,9 +9,9 @@ use super::{
     cells::{CellCoord, active_grid},
     mesh::{MeshContactCache, StaticMeshIndex},
     model::{
-        MeshContactInspection, OriginInspection, ReferenceInspection,
-        StaticBoundsOcclusionInspection, StaticMeshInspection, TerrainInspectionReport,
-        UnclipSummary,
+        CONTACT_TERRAIN_EPSILON, MeshContactInspection, ORIGIN_TERRAIN_EPSILON, OriginInspection,
+        ReferenceInspection, StaticBoundsOcclusionInspection, StaticMeshInspection,
+        TerrainInspectionReport, UnclipReportContext,
     },
     occlusion::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
@@ -25,8 +25,6 @@ use super::{
     writer::save_plugin_with_backup,
 };
 
-const ORIGIN_TERRAIN_EPSILON: f32 = 0.5;
-const CONTACT_TERRAIN_EPSILON: f32 = 0.5;
 const RELOCATION_STEP: f32 = 32.0;
 const RELOCATION_STEPS: u16 = 8;
 const CELL_SIZE: f32 = 8192.0;
@@ -767,85 +765,6 @@ fn effective_active_refs(
     }
 
     refs
-}
-
-pub(crate) struct UnclipReportContext {
-    pub(crate) target_plugin: String,
-    target_exterior_cells: usize,
-    active_cells: usize,
-    loaded_terrain_cells_total: usize,
-    missing_active_terrain_cells: Vec<CellCoord>,
-    pub(crate) write: Option<WriteReport>,
-}
-
-impl UnclipReportContext {
-    fn new(
-        target_plugin_path: &std::path::Path,
-        target_exterior_cells: usize,
-        active_cells: usize,
-        loaded_terrain_cells_total: usize,
-        missing_active_terrain_cells: Vec<CellCoord>,
-    ) -> Self {
-        Self {
-            target_plugin: target_plugin_path.display().to_string(),
-            target_exterior_cells,
-            active_cells,
-            loaded_terrain_cells_total,
-            missing_active_terrain_cells,
-            write: None,
-        }
-    }
-
-    pub(crate) fn missing_active_terrain_cells(&self) -> Vec<[i32; 2]> {
-        self.missing_active_terrain_cells
-            .iter()
-            .map(|&(x, y)| [x, y])
-            .collect()
-    }
-
-    pub(crate) fn summary(&self, inspection: &TerrainInspectionReport) -> UnclipSummary {
-        let active_terrain_cells_missing = self.missing_active_terrain_cells.len();
-        UnclipSummary {
-            target_exterior_cells: self.target_exterior_cells,
-            active_cells: self.active_cells,
-            loaded_terrain_cells_total: self.loaded_terrain_cells_total,
-            active_terrain_cells_loaded: self.active_cells - active_terrain_cells_missing,
-            active_terrain_cells_missing,
-            refs: inspection.refs,
-            refs_actionable: inspection.refs - inspection.refs_deleted,
-            refs_deleted: inspection.refs_deleted,
-            refs_with_mesh_contact: inspection.refs_with_mesh_contact,
-            refs_without_resolved_static: inspection.refs_without_resolved_static,
-            refs_missing_mesh_contact: inspection.refs_missing_mesh_contact,
-            refs_with_terrain: inspection.refs_with_terrain,
-            refs_missing_terrain: inspection.refs_missing_terrain,
-            refs_origin_above_terrain: inspection.refs_above_terrain,
-            refs_origin_below_terrain: inspection.refs_below_terrain,
-            refs_mesh_contact_above_terrain: inspection.refs_contact_above_terrain,
-            refs_mesh_contact_below_terrain: inspection.refs_contact_below_terrain,
-            refs_mesh_contact_missing_terrain: inspection.refs_contact_missing_terrain,
-            refs_static_bounds_occluded: inspection.refs_static_bounds_occluded,
-            refs_static_bounds_fully_occluded: inspection.refs_static_bounds_fully_occluded,
-            refs_static_bounds_lightly_occluded: inspection.refs_static_bounds_lightly_occluded,
-            refs_static_bounds_blocked: inspection.refs_static_bounds_blocked,
-            origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
-            mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
-        }
-    }
-}
-
-#[cfg(test)]
-impl UnclipReportContext {
-    pub(crate) fn new_for_test(target_plugin: &str) -> Self {
-        Self {
-            target_plugin: target_plugin.to_owned(),
-            target_exterior_cells: 0,
-            active_cells: 0,
-            loaded_terrain_cells_total: 0,
-            missing_active_terrain_cells: Vec::new(),
-            write: None,
-        }
-    }
 }
 
 fn inspect_target_refs(

@@ -3,8 +3,7 @@ use std::{io, io::Write};
 use serde::Serialize;
 
 use super::{
-    app::UnclipReportContext,
-    model::{ReferenceInspection, TerrainInspectionReport, UnclipSummary},
+    model::{ReferenceInspection, TerrainInspectionReport, UnclipReportContext, UnclipSummary},
     write_plan::{
         WriteAdjustment, WriteReport, WriteStaticBoundsDeletion, WriteStaticBoundsMove,
         WriteSummary,
@@ -473,8 +472,7 @@ struct StructuredWriteMoveRecord<'a> {
 mod tests {
     use super::write_summary_text;
     use crate::unclip::{
-        app::UnclipReportContext,
-        model::TerrainInspectionReport,
+        model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
 
