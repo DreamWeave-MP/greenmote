@@ -27,7 +27,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
     let openmw_config = openmw::load_config_from_path(args.openmw_cfg.as_deref())?;
     let vfs = openmw::build_vfs(&openmw_config);
     let target_plugin = resolve_target_plugin(&args.plugin, &openmw_config, &vfs)?;
-    let mut target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
+    let target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
     let content_files = openmw::content_files(&openmw_config)?;
     let context_plugin_paths = resolve_content_plugin_paths(&content_files, &vfs)?;
     let context_plugins = load_context_plugins(&context_plugin_paths)?;
@@ -66,9 +66,15 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         missing_active_terrain_cells,
     );
     if args.write {
+        // Reports describe the refs the user asked us to inspect. `--write`
+        // mutates a separate plugin instance; feeding that mutated plugin into
+        // reporting would make the summary describe the cleaned result instead
+        // of the discovered problems. That is technically correct in the least
+        // useful way.
+        let mut write_plugin_data = target_plugin_data.clone();
         let mut mesh_contacts = MeshContactCache::new(&vfs);
         let write_plan = apply_unclip_adjustments(
-            &mut target_plugin_data,
+            &mut write_plugin_data,
             &terrain,
             &target_static_index,
             &mut mesh_contacts,
@@ -78,7 +84,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
             WriteReport::not_written(&target_plugin.destination_path, write_plan)
         } else {
             save_plugin_with_backup(
-                &mut target_plugin_data,
+                &mut write_plugin_data,
                 &target_plugin.source_path,
                 &target_plugin.destination_path,
                 write_plan,
