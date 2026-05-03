@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::{cells::CellCoord, mesh::WorldAabb};
 
 const CELL_SIZE: f32 = 8192.0;
+const MAX_INDEXED_CELL_SPAN: i32 = 32;
 
 #[derive(Clone)]
 pub(crate) struct StaticOccluder {
@@ -16,25 +17,40 @@ pub(crate) struct StaticOccluder {
 pub(crate) struct StaticOccluderIndex {
     occluders: Vec<StaticOccluder>,
     cells: BTreeMap<CellCoord, Vec<usize>>,
+    large_occluders: Vec<usize>,
 }
 
 impl StaticOccluderIndex {
     pub(crate) fn new(occluders: Vec<StaticOccluder>) -> Self {
         let mut cells = BTreeMap::<CellCoord, Vec<usize>>::new();
+        let mut large_occluders = Vec::new();
         for (index, occluder) in occluders.iter().enumerate() {
-            for cell in cells_for_bounds(occluder.bounds) {
-                cells.entry(cell).or_default().push(index);
+            if let Some(occluder_cells) = cells_for_bounds(occluder.bounds) {
+                for cell in occluder_cells {
+                    cells.entry(cell).or_default().push(index);
+                }
+            } else {
+                large_occluders.push(index);
             }
         }
-        Self { occluders, cells }
+        Self {
+            occluders,
+            cells,
+            large_occluders,
+        }
     }
 
     pub(crate) fn candidates_for(&self, bounds: WorldAabb) -> Vec<&StaticOccluder> {
         let mut indices = BTreeSet::new();
-        for cell in cells_for_bounds(bounds) {
-            if let Some(cell_indices) = self.cells.get(&cell) {
-                indices.extend(cell_indices.iter().copied());
+        if let Some(cells) = cells_for_bounds(bounds) {
+            for cell in cells {
+                if let Some(cell_indices) = self.cells.get(&cell) {
+                    indices.extend(cell_indices.iter().copied());
+                }
             }
+            indices.extend(self.large_occluders.iter().copied());
+        } else {
+            indices.extend(0..self.occluders.len());
         }
         indices
             .into_iter()
@@ -51,23 +67,41 @@ impl StaticOccluderIndex {
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn cells_for_bounds(bounds: WorldAabb) -> Vec<CellCoord> {
+fn cells_for_bounds(bounds: WorldAabb) -> Option<Vec<CellCoord>> {
     let min_x = cell_coord(bounds.min[0]);
     let min_y = cell_coord(bounds.min[1]);
-    let max_x = cell_coord(bounds.max[0] - f32::EPSILON);
-    let max_y = cell_coord(bounds.max[1] - f32::EPSILON);
+    let max_x = cell_coord(previous_f32(bounds.max[0]));
+    let max_y = cell_coord(previous_f32(bounds.max[1]));
+    if max_x - min_x >= MAX_INDEXED_CELL_SPAN || max_y - min_y >= MAX_INDEXED_CELL_SPAN {
+        return None;
+    }
     let mut cells = Vec::new();
     for y in min_y..=max_y {
         for x in min_x..=max_x {
             cells.push((x, y));
         }
     }
-    cells
+    Some(cells)
 }
 
 #[allow(clippy::cast_possible_truncation)]
 fn cell_coord(position: f32) -> i32 {
     (position / CELL_SIZE).floor() as i32
+}
+
+fn previous_f32(value: f32) -> f32 {
+    if value.is_nan() || value == f32::NEG_INFINITY {
+        return value;
+    }
+    if value == 0.0 {
+        return -f32::MIN_POSITIVE;
+    }
+    let bits = value.to_bits();
+    f32::from_bits(if value.is_sign_positive() {
+        bits - 1
+    } else {
+        bits + 1
+    })
 }
 
 pub(crate) enum StaticBoundsAction<'a> {
@@ -297,6 +331,38 @@ mod tests {
             occluders
                 .candidates_for(aabb([8192.0, 0.0, 0.0], [8202.0, 10.0, 10.0]))
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn static_occluder_index_does_not_index_exact_max_border_into_next_cell() {
+        let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
+            [0.0, 0.0, 0.0],
+            [8192.0, 10.0, 10.0],
+        ))]);
+
+        assert!(
+            occluders
+                .candidates_for(aabb([8192.0, 0.0, 0.0], [8202.0, 10.0, 10.0]))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn static_occluder_index_keeps_large_occluders_visible() {
+        let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
+            [0.0, 0.0, 0.0],
+            [8192.0 * 40.0, 10.0, 10.0],
+        ))]);
+
+        assert_eq!(
+            occluders
+                .candidates_for(aabb(
+                    [8192.0 * 20.0, 0.0, 0.0],
+                    [8192.0 * 20.0 + 1.0, 1.0, 1.0]
+                ))
+                .len(),
+            1
         );
     }
 
