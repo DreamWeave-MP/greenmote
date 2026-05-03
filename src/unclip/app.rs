@@ -6,12 +6,13 @@ use crate::groundcover::openmw;
 
 use super::{
     UnclipArgs,
+    args::UnclipPolicy,
     cells::{CellCoord, active_grid},
     mesh::{MeshBoundsCache, MeshContactCache, StaticMeshIndex},
     model::{
-        CONTACT_TERRAIN_EPSILON, MeshContactInspection, ORIGIN_TERRAIN_EPSILON, OriginInspection,
-        ReferenceInspection, StaticBoundsOcclusionInspection, StaticMeshInspection,
-        TerrainInspectionReport, UnclipReportContext,
+        MeshContactInspection, OriginInspection, ReferenceInspection,
+        StaticBoundsOcclusionInspection, StaticMeshInspection, TerrainInspectionReport,
+        UnclipReportContext,
     },
     occlusion::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
@@ -27,6 +28,7 @@ use super::{
 };
 
 pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
+    let policy = args.policy();
     let openmw_config = openmw::load_config_from_path(args.openmw_cfg.as_deref())?;
     let vfs = openmw::build_vfs(&openmw_config);
     let target_plugin = resolve_target_plugin(&args.plugin, &openmw_config, &vfs)?;
@@ -68,6 +70,8 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         active_cells.len(),
         terrain.len(),
         missing_active_terrain_cells,
+        policy.origin_epsilon,
+        policy.contact_epsilon,
     );
     let mut target_meshes = MeshContactCache::new(&vfs);
     let write_plan = if args.write {
@@ -77,6 +81,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
             &target_static_index,
             &mut target_meshes,
             &static_occluders,
+            &policy,
         ))
     } else {
         None
@@ -94,6 +99,7 @@ pub fn run(args: &UnclipArgs, stdout: &mut dyn Write) -> io::Result<()> {
         mesh_contacts: &mut target_meshes,
         static_occluders: &static_occluders,
         report: &report_context,
+        policy: &policy,
     };
     let inspection = write_output(stdout, args, &mut output, write_status.as_ref())?;
     report_context.write = save_write_plan(
@@ -130,6 +136,7 @@ struct OutputContext<'a, 'b> {
     mesh_contacts: &'a mut MeshContactCache<'b>,
     static_occluders: &'a StaticOccluderIndex,
     report: &'a UnclipReportContext,
+    policy: &'a UnclipPolicy,
 }
 
 fn write_output(
@@ -145,6 +152,7 @@ fn write_output(
             output.static_index,
             output.mesh_contacts,
             output.static_occluders,
+            output.policy,
         )),
         (false, true) => write_instance_text(stdout, output, write_status),
         (true, false) => Ok(write_structured_summary(
@@ -153,6 +161,7 @@ fn write_output(
             output.static_index,
             output.mesh_contacts,
             output.static_occluders,
+            output.policy,
         )),
         (true, true) => write_structured_instances(stdout, output, write_status),
     }
@@ -184,6 +193,7 @@ fn write_text_summary(
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
     static_occluders: &StaticOccluderIndex,
+    policy: &UnclipPolicy,
 ) -> TerrainInspectionReport {
     count_target_refs(
         plugin,
@@ -191,6 +201,7 @@ fn write_text_summary(
         static_index,
         mesh_contacts,
         static_occluders,
+        policy,
     )
 }
 
@@ -200,15 +211,16 @@ fn write_instance_text(
     write_status: Option<&WriteStatusIndex>,
 ) -> io::Result<TerrainInspectionReport> {
     report::write_instance_header(stdout, output.report)?;
-    let inspection = inspect_target_refs(
-        output.plugin,
-        output.terrain,
-        output.static_index,
-        output.mesh_contacts,
-        output.static_occluders,
-        write_status,
-        |reference| report::write_reference_text(stdout, reference),
-    )?;
+    let mut context = ReferenceInspectionContext {
+        terrain: output.terrain,
+        static_index: output.static_index,
+        mesh_contacts: output.mesh_contacts,
+        static_occluders: output.static_occluders,
+        policy: output.policy,
+    };
+    let inspection = inspect_target_refs(output.plugin, &mut context, write_status, |reference| {
+        report::write_reference_text(stdout, reference)
+    })?;
     Ok(inspection)
 }
 
@@ -218,6 +230,7 @@ fn write_structured_summary(
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
     static_occluders: &StaticOccluderIndex,
+    policy: &UnclipPolicy,
 ) -> TerrainInspectionReport {
     count_target_refs(
         plugin,
@@ -225,6 +238,7 @@ fn write_structured_summary(
         static_index,
         mesh_contacts,
         static_occluders,
+        policy,
     )
 }
 
@@ -235,15 +249,16 @@ fn write_structured_instances(
 ) -> io::Result<TerrainInspectionReport> {
     report::write_structured_header(stdout, output.report)?;
 
-    let inspection = inspect_target_refs(
-        output.plugin,
-        output.terrain,
-        output.static_index,
-        output.mesh_contacts,
-        output.static_occluders,
-        write_status,
-        |reference| report::write_structured_reference_record(stdout, reference),
-    )?;
+    let mut context = ReferenceInspectionContext {
+        terrain: output.terrain,
+        static_index: output.static_index,
+        mesh_contacts: output.mesh_contacts,
+        static_occluders: output.static_occluders,
+        policy: output.policy,
+    };
+    let inspection = inspect_target_refs(output.plugin, &mut context, write_status, |reference| {
+        report::write_structured_reference_record(stdout, reference)
+    })?;
     Ok(inspection)
 }
 
@@ -490,20 +505,11 @@ fn effective_active_refs<'a>(
 
 fn inspect_target_refs(
     plugin: &Plugin,
-    terrain: &TerrainIndex,
-    static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshContactCache<'_>,
-    static_occluders: &StaticOccluderIndex,
+    context: &mut ReferenceInspectionContext<'_, '_>,
     write: Option<&WriteStatusIndex>,
     mut reference_sink: impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<TerrainInspectionReport> {
     let mut report = TerrainInspectionReport::default();
-    let mut context = ReferenceInspectionContext {
-        terrain,
-        static_index,
-        mesh_contacts,
-        static_occluders,
-    };
 
     for cell in sorted_exterior_cells(plugin) {
         let mut reference_keys = cell.references.keys().copied().collect::<Vec<_>>();
@@ -512,9 +518,12 @@ fn inspect_target_refs(
             let Some(reference) = cell.references.get(&key) else {
                 continue;
             };
+            if !context.policy.target_filter.includes(&reference.id) {
+                continue;
+            }
             inspect_reference(
                 &mut report,
-                &mut context,
+                context,
                 cell.data.grid,
                 key,
                 reference,
@@ -533,6 +542,7 @@ fn count_target_refs(
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
     static_occluders: &StaticOccluderIndex,
+    policy: &UnclipPolicy,
 ) -> TerrainInspectionReport {
     let mut report = TerrainInspectionReport::default();
     let mut context = ReferenceInspectionContext {
@@ -540,6 +550,7 @@ fn count_target_refs(
         static_index,
         mesh_contacts,
         static_occluders,
+        policy,
     };
 
     for cell in sorted_exterior_cells(plugin) {
@@ -549,6 +560,9 @@ fn count_target_refs(
             let Some(reference) = cell.references.get(&key) else {
                 continue;
             };
+            if !policy.target_filter.includes(&reference.id) {
+                continue;
+            }
             count_reference(&mut report, &mut context, cell.data.grid, reference);
         }
     }
@@ -570,6 +584,7 @@ struct ReferenceInspectionContext<'a, 'b> {
     static_index: &'a StaticMeshIndex,
     mesh_contacts: &'a mut MeshContactCache<'b>,
     static_occluders: &'a StaticOccluderIndex,
+    policy: &'a UnclipPolicy,
 }
 
 struct OriginDetails {
@@ -615,6 +630,7 @@ fn inspect_reference(
             context.terrain,
             reference,
             contact,
+            context.policy.contact_epsilon,
         )),
         MeshContactResolution::UnresolvedStatic | MeshContactResolution::MissingContact { .. } => {
             None
@@ -627,8 +643,14 @@ fn inspect_reference(
         reference,
         &mesh_contact,
         context.static_occluders,
+        context.policy,
     );
-    let origin = classify_origin(report, context.terrain, reference);
+    let origin = classify_origin(
+        report,
+        context.terrain,
+        reference,
+        context.policy.origin_epsilon,
+    );
     let inspection = reference_inspection(&ReferenceInspectionInput {
         cell,
         key,
@@ -642,6 +664,7 @@ fn inspect_reference(
             deleted: write.is_some_and(|write| write.is_deleted(cell, key)),
             moved: write.is_some_and(|write| write.is_moved(cell, key)),
         },
+        contact_epsilon: context.policy.contact_epsilon,
     });
     reference_sink(&inspection)
 }
@@ -665,7 +688,13 @@ fn count_reference(
         context.mesh_contacts,
     );
     if let MeshContactResolution::Resolved { contact, .. } = &mesh_contact {
-        let _ = classify_contact(report, context.terrain, reference, contact);
+        let _ = classify_contact(
+            report,
+            context.terrain,
+            reference,
+            contact,
+            context.policy.contact_epsilon,
+        );
     }
     let _ = classify_static_bounds_occlusion(
         report,
@@ -674,14 +703,21 @@ fn count_reference(
         reference,
         &mesh_contact,
         context.static_occluders,
+        context.policy,
     );
-    let _ = classify_origin(report, context.terrain, reference);
+    let _ = classify_origin(
+        report,
+        context.terrain,
+        reference,
+        context.policy.origin_epsilon,
+    );
 }
 
 fn classify_origin(
     report: &mut TerrainInspectionReport,
     terrain: &TerrainIndex,
     reference: &tes3::esp::Reference,
+    epsilon: f32,
 ) -> OriginDetails {
     let [x, y, z] = reference.translation;
     let Some(terrain_z) = terrain.height_at(x, y) else {
@@ -695,7 +731,7 @@ fn classify_origin(
 
     report.refs_with_terrain += 1;
     let delta = z - terrain_z;
-    let classification = classify_origin_delta(delta);
+    let classification = classify_origin_delta(delta, epsilon);
     match classification {
         OriginTerrainClassification::Above => report.refs_above_terrain += 1,
         OriginTerrainClassification::Below => report.refs_below_terrain += 1,
@@ -718,6 +754,7 @@ struct ReferenceInspectionInput<'a, 'b> {
     contact_details: Option<&'a ContactDetails>,
     static_bounds_occlusion: Option<&'a StaticBoundsOcclusionDetails>,
     write: WriteStatusEvidence,
+    contact_epsilon: f32,
 }
 
 struct WriteStatusEvidence {
@@ -749,6 +786,7 @@ fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceIn
             input.write.adjusted,
             input.write.deleted,
             input.write.moved,
+            input.contact_epsilon,
         ),
         static_mesh: input
             .mesh_resolution
@@ -817,6 +855,7 @@ fn write_status_label(
     was_adjusted: bool,
     was_deleted: bool,
     was_moved: bool,
+    contact_epsilon: f32,
 ) -> &'static str {
     if was_deleted {
         return "deleted_static_bounds_occluded";
@@ -836,9 +875,7 @@ fn write_status_label(
         MeshContactResolution::Resolved { .. } => {
             contact_details.map_or("skipped_missing_contact_terrain", |details| {
                 match details.delta {
-                    Some(delta) if delta.abs() > CONTACT_TERRAIN_EPSILON => {
-                        "adjusted_or_adjustable"
-                    }
+                    Some(delta) if delta.abs() > contact_epsilon => "adjusted_or_adjustable",
                     Some(_) => "skipped_within_epsilon",
                     None => "skipped_missing_contact_terrain",
                 }
@@ -866,6 +903,7 @@ fn classify_static_bounds_occlusion(
     reference: &tes3::esp::Reference,
     mesh_resolution: &MeshContactResolution<'_>,
     static_occluders: &StaticOccluderIndex,
+    policy: &UnclipPolicy,
 ) -> Option<StaticBoundsOcclusionDetails> {
     let MeshContactResolution::Resolved {
         contact, bounds, ..
@@ -901,6 +939,7 @@ fn classify_static_bounds_occlusion(
                 *bounds,
                 terrain,
                 static_occluders,
+                policy.relocation,
             )
             .is_some() =>
         {
@@ -923,12 +962,13 @@ fn classify_contact(
     terrain: &TerrainIndex,
     reference: &tes3::esp::Reference,
     contact: &super::mesh::MeshContact,
+    epsilon: f32,
 ) -> ContactDetails {
     let position =
         contact.world_position(reference.translation, reference.rotation, reference.scale);
     let terrain_z = terrain.height_at(position[0], position[1]);
     let delta = terrain_z.map(|terrain_z| position[2] - terrain_z);
-    let classification = delta.map(|delta| classify_counted_contact_delta(report, delta));
+    let classification = delta.map(|delta| classify_counted_contact_delta(report, delta, epsilon));
     if terrain_z.is_none() {
         report.refs_contact_missing_terrain += 1;
     }
@@ -944,8 +984,9 @@ fn classify_contact(
 fn classify_counted_contact_delta(
     report: &mut TerrainInspectionReport,
     delta: f32,
+    epsilon: f32,
 ) -> ContactTerrainClassification {
-    let classification = classify_contact_delta(delta);
+    let classification = classify_contact_delta(delta, epsilon);
     match classification {
         ContactTerrainClassification::Above => {
             report.refs_contact_above_terrain += 1;
@@ -1055,10 +1096,10 @@ impl OriginTerrainClassification {
     }
 }
 
-fn classify_origin_delta(delta: f32) -> OriginTerrainClassification {
-    if delta > ORIGIN_TERRAIN_EPSILON {
+fn classify_origin_delta(delta: f32, epsilon: f32) -> OriginTerrainClassification {
+    if delta > epsilon {
         OriginTerrainClassification::Above
-    } else if delta < -ORIGIN_TERRAIN_EPSILON {
+    } else if delta < -epsilon {
         OriginTerrainClassification::Below
     } else {
         OriginTerrainClassification::OnTerrain
@@ -1082,10 +1123,10 @@ impl ContactTerrainClassification {
     }
 }
 
-fn classify_contact_delta(delta: f32) -> ContactTerrainClassification {
-    if delta > CONTACT_TERRAIN_EPSILON {
+fn classify_contact_delta(delta: f32, epsilon: f32) -> ContactTerrainClassification {
+    if delta > epsilon {
         ContactTerrainClassification::Above
-    } else if delta < -CONTACT_TERRAIN_EPSILON {
+    } else if delta < -epsilon {
         ContactTerrainClassification::Below
     } else {
         ContactTerrainClassification::OnTerrain
@@ -1100,6 +1141,7 @@ mod tests {
 
     use crate::unclip::{
         UnclipArgs,
+        args::WriteActionArg,
         model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
@@ -1120,7 +1162,8 @@ mod tests {
                 None,
                 true,
                 false,
-                false
+                false,
+                0.5,
             ),
             "adjusted"
         );
@@ -1190,6 +1233,17 @@ mod tests {
             instances: true,
             structured: true,
             write: true,
+            write_actions: vec![
+                WriteActionArg::TerrainZ,
+                WriteActionArg::StaticDelete,
+                WriteActionArg::StaticMove,
+            ],
+            contact_epsilon: 0.5,
+            origin_epsilon: 0.5,
+            relocation_step: 32.0,
+            relocation_steps: 8,
+            include_ids: Vec::new(),
+            exclude_ids: Vec::new(),
         };
         let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
         context.write = Some(WriteReport::not_written(

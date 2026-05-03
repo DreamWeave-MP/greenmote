@@ -113,6 +113,70 @@ mod tests {
         assert!(!args.instances);
         assert!(!args.structured);
         assert!(!args.write);
+        assert_close(args.contact_epsilon, 0.5);
+        assert_close(args.origin_epsilon, 0.5);
+        assert_close(args.relocation_step, 32.0);
+        assert_eq!(args.relocation_steps, 8);
+    }
+
+    #[test]
+    fn parser_accepts_unclip_policy_knobs() {
+        let cli = Cli::parse_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--write-actions",
+            "terrain-z,static-move",
+            "--contact-epsilon",
+            "1.25",
+            "--origin-epsilon",
+            "2.5",
+            "--relocation-step",
+            "64",
+            "--relocation-steps",
+            "12",
+            "--include-id",
+            "flora_grass_*",
+            "--exclude-id",
+            "flora_grass_bad_*",
+        ]);
+
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("unclip command should parse");
+        };
+
+        let policy = args.policy();
+        assert!(policy.write_actions.terrain_z);
+        assert!(!policy.write_actions.static_delete);
+        assert!(policy.write_actions.static_move);
+        assert_close(policy.contact_epsilon, 1.25);
+        assert_close(policy.origin_epsilon, 2.5);
+        assert_close(policy.relocation.step, 64.0);
+        assert_eq!(policy.relocation.steps, 12);
+        assert!(policy.target_filter.includes("flora_grass_01"));
+        assert!(!policy.target_filter.includes("flora_grass_bad_01"));
+    }
+
+    #[test]
+    fn parser_rejects_invalid_unclip_policy_knobs() {
+        for flag in [
+            ["--contact-epsilon", "-1"],
+            ["--origin-epsilon", "nan"],
+            ["--relocation-step", "0"],
+            ["--relocation-steps", "0"],
+        ] {
+            let result = Cli::command().try_get_matches_from([
+                "greenmote",
+                "unclip",
+                "--plugin",
+                "groundcover.omwaddon",
+                flag[0],
+                flag[1],
+            ]);
+
+            assert!(result.is_err());
+        }
     }
 
     #[test]
@@ -191,5 +255,9 @@ mod tests {
         ]);
 
         assert!(result.is_err());
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() < f32::EPSILON);
     }
 }

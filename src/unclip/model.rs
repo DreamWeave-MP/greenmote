@@ -11,6 +11,8 @@ pub(crate) struct UnclipReportContext {
     active_cells: usize,
     loaded_terrain_cells_total: usize,
     missing_active_terrain_cells: Vec<CellCoord>,
+    origin_epsilon: f32,
+    contact_epsilon: f32,
     pub(crate) write: Option<WriteReport>,
 }
 
@@ -21,6 +23,8 @@ impl UnclipReportContext {
         active_cells: usize,
         loaded_terrain_cells_total: usize,
         missing_active_terrain_cells: Vec<CellCoord>,
+        origin_epsilon: f32,
+        contact_epsilon: f32,
     ) -> Self {
         Self {
             target_plugin: target_plugin_path.display().to_string(),
@@ -28,6 +32,8 @@ impl UnclipReportContext {
             active_cells,
             loaded_terrain_cells_total,
             missing_active_terrain_cells,
+            origin_epsilon,
+            contact_epsilon,
             write: None,
         }
     }
@@ -64,8 +70,8 @@ impl UnclipReportContext {
             refs_static_bounds_fully_occluded: inspection.refs_static_bounds_fully_occluded,
             refs_static_bounds_relocatable: inspection.refs_static_bounds_relocatable,
             refs_static_bounds_blocked: inspection.refs_static_bounds_blocked,
-            origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
-            mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
+            origin_terrain_epsilon: self.origin_epsilon,
+            mesh_contact_terrain_epsilon: self.contact_epsilon,
         }
     }
 }
@@ -79,6 +85,8 @@ impl UnclipReportContext {
             active_cells: 0,
             loaded_terrain_cells_total: 0,
             missing_active_terrain_cells: Vec::new(),
+            origin_epsilon: ORIGIN_TERRAIN_EPSILON,
+            contact_epsilon: CONTACT_TERRAIN_EPSILON,
             write: None,
         }
     }
