@@ -4,6 +4,7 @@ mod app;
 mod args;
 mod cells;
 mod mesh;
+mod model;
 mod occlusion;
 mod report;
 mod terrain;
