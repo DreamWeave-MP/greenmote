@@ -413,10 +413,12 @@ impl GreenmoteApp {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.apply_pending_progress(pending_progress.take());
-                    self.finish_conversion(
-                        Some("Conversion worker disconnected.".to_owned()),
-                        false,
-                    );
+                    if self.convert.running {
+                        self.finish_conversion(
+                            Some("Conversion worker disconnected.".to_owned()),
+                            false,
+                        );
+                    }
                     return;
                 }
             }
