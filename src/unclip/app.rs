@@ -674,6 +674,7 @@ fn save_plugin_with_backup(
         destination_plugin: destination_path.display().to_string(),
         backup_plugin: backup.path().map(|path| path.display().to_string()),
         adjusted_refs: plan.adjusted_refs,
+        adjusted_ref_keys: adjusted_ref_keys(&plan.adjustments),
         adjustments: plan.adjustments,
     })
 }
@@ -1016,16 +1017,20 @@ struct WriteReport {
     adjusted_refs: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     adjustments: Vec<WriteAdjustment>,
+    #[serde(skip)]
+    adjusted_ref_keys: BTreeSet<AdjustedRefKey>,
 }
 
 impl WriteReport {
     fn not_written(destination_path: &std::path::Path, plan: WritePlan) -> Self {
+        let adjusted_ref_keys = adjusted_ref_keys(&plan.adjustments);
         Self {
             written: false,
             destination_plugin: destination_path.display().to_string(),
             backup_plugin: None,
             adjusted_refs: plan.adjusted_refs,
             adjustments: plan.adjustments,
+            adjusted_ref_keys,
         }
     }
 
@@ -1039,9 +1044,8 @@ impl WriteReport {
     }
 
     fn is_adjusted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
-        self.adjustments.iter().any(|adjustment| {
-            adjustment.cell == [cell.0, cell.1] && adjustment.reference_key == [key.0, key.1]
-        })
+        self.adjusted_ref_keys
+            .contains(&AdjustedRefKey::new(cell, key))
     }
 }
 
@@ -1070,6 +1074,35 @@ struct WriteAdjustment {
     applied_delta: f32,
     contact_position: [f32; 3],
     terrain_z: f32,
+}
+
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+struct AdjustedRefKey {
+    cell: [i32; 2],
+    reference_key: [u32; 2],
+}
+
+impl AdjustedRefKey {
+    const fn new(cell: CellCoord, key: (u32, u32)) -> Self {
+        Self {
+            cell: [cell.0, cell.1],
+            reference_key: [key.0, key.1],
+        }
+    }
+
+    const fn from_adjustment(adjustment: &WriteAdjustment) -> Self {
+        Self {
+            cell: adjustment.cell,
+            reference_key: adjustment.reference_key,
+        }
+    }
+}
+
+fn adjusted_ref_keys(adjustments: &[WriteAdjustment]) -> BTreeSet<AdjustedRefKey> {
+    adjustments
+        .iter()
+        .map(AdjustedRefKey::from_adjustment)
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -1588,9 +1621,9 @@ mod tests {
     use tes3::esp::Reference;
 
     use super::{
-        MeshContactResolution, WriteAdjustment, WriteReport, apply_contact_adjustment,
-        next_numbered_backup_path, prepare_plugin_backup, replace_with_temp, write_status_label,
-        write_write_summary_text,
+        MeshContactResolution, WriteAdjustment, WritePlan, WriteReport, adjusted_ref_keys,
+        apply_contact_adjustment, next_numbered_backup_path, prepare_plugin_backup,
+        replace_with_temp, write_status_label, write_write_summary_text,
     };
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
@@ -1739,12 +1772,14 @@ mod tests {
 
     #[test]
     fn write_summary_prints_adjustments_only_when_requested() {
+        let adjustments = vec![write_adjustment()];
         let report = WriteReport {
             written: false,
             destination_plugin: "plugin.omwaddon".to_owned(),
             backup_plugin: None,
             adjusted_refs: 1,
-            adjustments: vec![write_adjustment()],
+            adjusted_ref_keys: adjusted_ref_keys(&adjustments),
+            adjustments,
         };
         let mut with_adjustments = Vec::new();
         let mut without_adjustments = Vec::new();
@@ -1771,6 +1806,20 @@ mod tests {
             ),
             "adjusted"
         );
+    }
+
+    #[test]
+    fn write_report_uses_adjusted_key_set() {
+        let report = WriteReport::not_written(
+            Path::new("plugin.omwaddon"),
+            WritePlan {
+                adjusted_refs: 1,
+                adjustments: vec![write_adjustment()],
+            },
+        );
+
+        assert!(report.is_adjusted((1, 2), (3, 4)));
+        assert!(!report.is_adjusted((1, 2), (3, 5)));
     }
 
     fn reference_at_z(z: f32) -> Reference {
