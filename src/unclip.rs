@@ -9,6 +9,7 @@ mod occlusion;
 mod report;
 mod terrain;
 mod write_plan;
+mod write_policy;
 mod writer;
 
 pub use args::UnclipArgs;
