@@ -19,23 +19,21 @@ pub fn process_exterior_cells<S: BuildHasher>(
         .objects_of_type::<Cell>()
         .filter(|cell| cell.is_exterior())
     {
-        let matching_refs = cell
-            .references
-            .iter()
-            .filter(|(_, reference)| {
-                matched_static_ids.contains(&reference.id.to_ascii_lowercase())
-            })
-            .collect::<Vec<_>>();
+        let mut groundcover_cell = None;
+        let mut deleted_cell = None;
 
-        if matching_refs.is_empty() {
-            continue;
-        }
+        for (key, reference) in &cell.references {
+            let static_id = reference.id.to_ascii_lowercase();
+            if !matched_static_ids.contains(&static_id) {
+                continue;
+            }
 
-        let mut groundcover_cell = minimal_cell_shell(cell);
-        let mut deleted_cell = minimal_cell_shell(cell);
+            let groundcover_cell = groundcover_cell
+                .get_or_insert_with(|| minimal_cell_shell(cell, cell.references.len()));
+            let deleted_cell =
+                deleted_cell.get_or_insert_with(|| minimal_cell_shell(cell, cell.references.len()));
 
-        for (key, reference) in matching_refs {
-            used_static_ids.insert(reference.id.to_ascii_lowercase());
+            used_static_ids.insert(static_id);
             groundcover_cell.references.insert(*key, reference.clone());
 
             let mut deleted_reference = reference.clone();
@@ -44,8 +42,10 @@ pub fn process_exterior_cells<S: BuildHasher>(
             touched_refs += 1;
         }
 
-        groundcover_cells.push(groundcover_cell);
-        deleted_cells.push(deleted_cell);
+        if let (Some(groundcover_cell), Some(deleted_cell)) = (groundcover_cell, deleted_cell) {
+            groundcover_cells.push(groundcover_cell);
+            deleted_cells.push(deleted_cell);
+        }
     }
 
     (
@@ -56,9 +56,18 @@ pub fn process_exterior_cells<S: BuildHasher>(
     )
 }
 
-fn minimal_cell_shell(source: &Cell) -> Cell {
-    let mut cell = source.clone();
-    cell.references.clear();
+fn minimal_cell_shell(source: &Cell, reference_capacity: usize) -> Cell {
+    let mut cell = Cell {
+        flags: source.flags,
+        name: source.name.clone(),
+        data: source.data.clone(),
+        region: source.region.clone(),
+        map_color: source.map_color,
+        water_height: source.water_height,
+        atmosphere_data: source.atmosphere_data.clone(),
+        ..Cell::default()
+    };
+    cell.references.reserve(reference_capacity);
     cell
 }
 
