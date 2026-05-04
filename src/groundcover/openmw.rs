@@ -7,7 +7,7 @@ use openmw_config::OpenMWConfiguration;
 use vfstool_lib::VFS;
 
 pub fn load_config_from_path(openmw_cfg: Option<&Path>) -> io::Result<OpenMWConfiguration> {
-    OpenMWConfiguration::new(Some(config_path(openmw_cfg)?)).map_err(|error| {
+    OpenMWConfiguration::new(Some(resolved_config_path(openmw_cfg)?)).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("failed to read OpenMW configuration: {error}"),
@@ -15,7 +15,7 @@ pub fn load_config_from_path(openmw_cfg: Option<&Path>) -> io::Result<OpenMWConf
     })
 }
 
-fn config_path(openmw_cfg: Option<&Path>) -> io::Result<PathBuf> {
+pub fn resolved_config_path(openmw_cfg: Option<&Path>) -> io::Result<PathBuf> {
     if let Some(path) = openmw_cfg {
         let absolute_path = if path.is_relative() {
             path.canonicalize().unwrap_or_else(|_| path.to_owned())

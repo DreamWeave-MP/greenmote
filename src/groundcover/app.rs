@@ -24,12 +24,13 @@ pub fn run(
     let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(&greenmote_config_path)?;
     let runtime_openmw_cfg = openmw_cfg.or(configured_openmw_cfg.as_deref());
     let openmw_config = openmw::load_config_from_path(runtime_openmw_cfg)?;
+    let persisted_openmw_cfg = openmw::resolved_config_path(runtime_openmw_cfg)?;
     let default_output_directory = openmw::default_output_directory(&openmw_config);
     let config = GroundcoverConfig::get(
         args,
         &greenmote_config_path,
         default_output_directory,
-        runtime_openmw_cfg.map(Path::to_owned),
+        Some(persisted_openmw_cfg),
     )?;
 
     if config.validate_config {

@@ -47,7 +47,7 @@ fn get_config(
         args,
         &default_config_path(dir),
         default_output_directory,
-        None,
+        Some(dir.path.join("openmw.cfg")),
     )
 }
 
@@ -66,6 +66,7 @@ fn missing_config_default_initializes_next_to_user_config() {
     let contents = read_to_string(default_config_path(&dir)).unwrap();
     assert!(contents.contains("[convert]"));
     assert!(contents.contains("[unclip]"));
+    assert!(contents.contains("openmw_cfg"));
     assert!(!contents.contains("plugin ="));
     assert!(!contents.contains("validate_config"));
 }

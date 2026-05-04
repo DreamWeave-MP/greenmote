@@ -95,6 +95,7 @@ impl UnclipConfig {
             .join(DEFAULT_CONFIG_NAME);
         let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(&config_path)?;
         let runtime_openmw_cfg = cli_openmw_cfg.or(configured_openmw_cfg.as_deref());
+        let persisted_openmw_cfg = openmw::resolved_config_path(runtime_openmw_cfg)?;
         let persisted = match std::fs::symlink_metadata(&config_path) {
             Ok(_) => PersistedUnclipConfig::from_toml(&read_to_string(config_path)?)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -103,11 +104,7 @@ impl UnclipConfig {
             Err(error) => return Err(error),
         };
 
-        let config = Self::merge(
-            args,
-            persisted,
-            runtime_openmw_cfg.map(std::path::Path::to_owned),
-        )?;
+        let config = Self::merge(args, persisted, Some(persisted_openmw_cfg))?;
         config.validate()?;
 
         Ok(config)
