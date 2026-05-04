@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
-use crate::groundcover::{self, GroundcoverArgs, GroundcoverConfig};
+use crate::groundcover::{self, GroundcoverConfig};
 
 use super::{ConvertRunOptions, GreenmoteApp, PendingNavigation};
 
@@ -214,7 +214,7 @@ impl GreenmoteApp {
     }
 
     pub(super) fn regenerate_settings(&mut self) -> bool {
-        match groundcover::regenerate_config_for_edit(None, &GroundcoverArgs::default()) {
+        match groundcover::regenerate_config_for_edit(None, None) {
             Ok((path, config)) => {
                 self.settings.replace_saved_config(
                     path.clone(),
@@ -239,7 +239,7 @@ impl GreenmoteApp {
     }
 
     fn load_settings_from_disk(&mut self, verb: &str) -> bool {
-        match groundcover::load_config_for_edit(None, &GroundcoverArgs::default()) {
+        match groundcover::load_config_for_edit(None, None) {
             Ok((path, config)) => {
                 self.settings.replace_saved_config(
                     path.clone(),

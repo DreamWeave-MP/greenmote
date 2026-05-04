@@ -2,7 +2,7 @@ use std::{fs::read_to_string, io, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::groundcover::{DEFAULT_CONFIG_NAME, openmw};
+use crate::groundcover::openmw;
 
 use super::{
     UnclipArgs,
@@ -87,12 +87,11 @@ struct UnclipConfigRoot {
 impl UnclipConfig {
     pub(crate) fn get(
         cli_openmw_cfg: Option<&std::path::Path>,
+        config_path_override: Option<&std::path::Path>,
         args: &UnclipArgs,
     ) -> io::Result<Self> {
         let discovery_config = openmw::load_config_from_path(cli_openmw_cfg)?;
-        let config_path = discovery_config
-            .user_config_path()
-            .join(DEFAULT_CONFIG_NAME);
+        let config_path = openmw::greenmote_config_path(config_path_override, &discovery_config);
         let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(&config_path)?;
         let runtime_openmw_cfg = cli_openmw_cfg.or(configured_openmw_cfg.as_deref());
         let persisted_openmw_cfg = openmw::resolved_config_path(runtime_openmw_cfg)?;

@@ -90,6 +90,7 @@ fn run_synthetic_unclip_torture(profile: Profile) {
     let started = Instant::now();
     greenmote::unclip::run_with_output(
         Some(&config_dir.path().join("openmw.cfg")),
+        None,
         &args,
         &mut stdout,
     )

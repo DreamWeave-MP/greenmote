@@ -1,4 +1,4 @@
-use crate::groundcover::{self, GroundcoverArgs, GroundcoverConfig};
+use crate::groundcover::{self, GroundcoverConfig};
 
 use super::GreenmoteApp;
 
@@ -77,8 +77,7 @@ impl GreenmoteApp {
             return true;
         }
 
-        let args = GroundcoverArgs::default();
-        match groundcover::load_config_for_edit(None, &args).and_then(
+        match groundcover::load_config_for_edit(None, None).and_then(
             |(_loaded_path, mut config)| {
                 options.apply_to_config(&mut config);
                 groundcover::save_config_for_edit(&config, &path)

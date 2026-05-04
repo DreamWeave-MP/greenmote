@@ -12,6 +12,7 @@ use crate::groundcover::{
 
 pub fn run(
     openmw_cfg: Option<&Path>,
+    config_path_override: Option<&Path>,
     args: GroundcoverArgs,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -20,7 +21,7 @@ pub fn run(
 ) -> io::Result<()> {
     let discovery_config = openmw::load_config_from_path(openmw_cfg)?;
     let greenmote_config_path =
-        openmw::greenmote_config_path(args.config.as_deref(), &discovery_config);
+        openmw::greenmote_config_path(config_path_override, &discovery_config);
     let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(&greenmote_config_path)?;
     let runtime_openmw_cfg = openmw_cfg.or(configured_openmw_cfg.as_deref());
     let openmw_config = openmw::load_config_from_path(runtime_openmw_cfg)?;

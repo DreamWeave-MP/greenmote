@@ -2,9 +2,7 @@ use std::{ffi::OsString, io, path::Path, process::Command, sync::mpsc, thread};
 
 use eframe::egui;
 
-use crate::groundcover::{
-    self, CancellationToken, ConversionEvent, ConversionPhase, GroundcoverArgs,
-};
+use crate::groundcover::{self, CancellationToken, ConversionEvent, ConversionPhase};
 
 use super::{ConvertRunOptions, GreenmoteApp};
 
@@ -336,8 +334,7 @@ impl GreenmoteApp {
             let mut stdout = GuiOutput::new(sink.clone());
             let mut stderr = GuiOutput::new(sink.clone());
             let progress_sink = sink.clone();
-            let args = GroundcoverArgs::default();
-            let error = match groundcover::load_config_for_edit(None, &args) {
+            let error = match groundcover::load_config_for_edit(None, None) {
                 Ok((_path, mut config)) => {
                     options.apply_to_config(&mut config);
                     config.compile_regex_sets().and_then(|()| {

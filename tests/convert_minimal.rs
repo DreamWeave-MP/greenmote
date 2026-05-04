@@ -49,6 +49,7 @@ fn convert_minimal_fixture_writes_plugins_and_copied_meshes() {
 
     greenmote::groundcover::run(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args_for(config_dir.path()),
     )
     .unwrap();
@@ -123,7 +124,7 @@ fn convert_dry_run_writes_no_outputs() {
     let mut args = args_for(config_dir.path());
     args.dry_run = Some(true);
 
-    greenmote::groundcover::run(Some(&openmw_cfg(config_dir.path())), args).unwrap();
+    greenmote::groundcover::run(Some(&openmw_cfg(config_dir.path())), None, args).unwrap();
 
     assert!(!output_dir.path().join(GROUNDCOVER_PLUGIN_NAME).exists());
     assert!(!output_dir.path().join(DELETED_PLUGIN_NAME).exists());
@@ -158,6 +159,7 @@ fn manual_guidance_reports_already_enabled_outputs() {
 
     greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args_for(config_dir.path()),
         &mut stdout,
         &mut stderr,
@@ -188,6 +190,7 @@ fn manual_guidance_reports_only_missing_deleted_output() {
 
     greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args_for(config_dir.path()),
         &mut stdout,
         &mut stderr,
@@ -218,6 +221,7 @@ fn manual_guidance_reports_only_missing_groundcover_output() {
 
     greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args_for(config_dir.path()),
         &mut stdout,
         &mut stderr,
@@ -251,6 +255,7 @@ fn auto_enable_does_not_rewrite_when_outputs_are_already_enabled() {
 
     greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args,
         &mut stdout,
         &mut stderr,
@@ -285,6 +290,7 @@ fn auto_enable_adds_only_missing_deleted_output() {
 
     greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args,
         &mut stdout,
         &mut stderr,
@@ -326,6 +332,7 @@ fn auto_enable_adds_only_missing_groundcover_output() {
 
     greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args,
         &mut stdout,
         &mut stderr,
@@ -369,6 +376,7 @@ fn auto_enable_allows_invisible_output_when_outputs_are_already_enabled() {
 
     greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args,
         &mut stdout,
         &mut stderr,
@@ -401,6 +409,7 @@ fn auto_enable_rejects_invisible_output_when_an_output_is_missing() {
 
     let result = greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args,
         &mut stdout,
         &mut stderr,
@@ -431,6 +440,7 @@ fn run_minimal_fixture(name: &str) -> GeneratedBytes {
 
     greenmote::groundcover::run(
         Some(&openmw_cfg(config_dir.path())),
+        None,
         args_for(config_dir.path()),
     )
     .unwrap();
@@ -443,7 +453,6 @@ fn run_minimal_fixture(name: &str) -> GeneratedBytes {
 
 fn args_for(_config_dir: &Path) -> GroundcoverArgs {
     GroundcoverArgs {
-        config: None,
         output: None,
         ignored_plugins: Vec::new(),
         dry_run: None,

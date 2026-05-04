@@ -32,10 +32,14 @@ pub const LOG_NAME: &str = "greenmote.log";
 /// # Errors
 ///
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
-pub fn run(openmw_cfg: Option<&Path>, args: GroundcoverArgs) -> io::Result<()> {
+pub fn run(
+    openmw_cfg: Option<&Path>,
+    config_path: Option<&Path>,
+    args: GroundcoverArgs,
+) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
-    run_with_output(openmw_cfg, args, &mut stdout, &mut stderr)
+    run_with_output(openmw_cfg, config_path, args, &mut stdout, &mut stderr)
 }
 
 /// Runs the groundcover conversion subcommand with explicit output streams.
@@ -45,11 +49,12 @@ pub fn run(openmw_cfg: Option<&Path>, args: GroundcoverArgs) -> io::Result<()> {
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
 pub fn run_with_output(
     openmw_cfg: Option<&Path>,
+    config_path: Option<&Path>,
     args: GroundcoverArgs,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> io::Result<()> {
-    run_with_output_and_events(openmw_cfg, args, stdout, stderr, &|_event| {})
+    run_with_output_and_events(openmw_cfg, config_path, args, stdout, stderr, &|_event| {})
 }
 
 /// Runs the groundcover conversion subcommand with explicit output streams and progress events.
@@ -59,6 +64,7 @@ pub fn run_with_output(
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
 pub fn run_with_output_and_events(
     openmw_cfg: Option<&Path>,
+    config_path: Option<&Path>,
     args: GroundcoverArgs,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -66,6 +72,7 @@ pub fn run_with_output_and_events(
 ) -> io::Result<()> {
     app::run(
         openmw_cfg,
+        config_path,
         args,
         stdout,
         stderr,
@@ -101,10 +108,10 @@ pub(crate) fn run_with_config_events_and_cancel(
 /// Returns filesystem, `OpenMW` configuration, TOML parse, or regex validation errors.
 pub(crate) fn load_config_for_edit(
     openmw_cfg: Option<&Path>,
-    args: &GroundcoverArgs,
+    config_path_override: Option<&Path>,
 ) -> io::Result<(PathBuf, GroundcoverConfig)> {
     let discovery_config = openmw::load_config_from_path(openmw_cfg)?;
-    let config_path = openmw::greenmote_config_path(args.config.as_deref(), &discovery_config);
+    let config_path = openmw::greenmote_config_path(config_path_override, &discovery_config);
     let config_openmw_cfg = config::configured_openmw_cfg(&config_path)?;
     let runtime_openmw_cfg = openmw_cfg.or(config_openmw_cfg.as_deref());
     let runtime_config = openmw::load_config_from_path(runtime_openmw_cfg)?;
@@ -127,11 +134,11 @@ pub(crate) fn load_config_for_edit(
 /// Returns `OpenMW` configuration or filesystem errors.
 pub(crate) fn regenerate_config_for_edit(
     openmw_cfg: Option<&Path>,
-    args: &GroundcoverArgs,
+    config_path_override: Option<&Path>,
 ) -> io::Result<(PathBuf, GroundcoverConfig)> {
     let runtime_config = openmw::load_config_from_path(openmw_cfg)?;
     let persisted_openmw_cfg = openmw::resolved_config_path(openmw_cfg)?;
-    let config_path = openmw::greenmote_config_path(args.config.as_deref(), &runtime_config);
+    let config_path = openmw::greenmote_config_path(config_path_override, &runtime_config);
     let default_output_directory = openmw::default_output_directory(&runtime_config);
     let config = config::regenerate_for_edit(
         &config_path,

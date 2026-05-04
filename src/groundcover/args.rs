@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-
 use clap::Parser;
+
+use std::path::PathBuf;
 
 #[derive(Parser, Clone, Debug, Default)]
 #[command(
@@ -8,10 +8,6 @@ use clap::Parser;
     about = "Convert vanilla-style static exterior refs into OpenMW groundcover."
 )]
 pub struct GroundcoverArgs {
-    /// Path to `greenmote.toml`. Defaults to the `OpenMW` user config directory.
-    #[arg(long = "config")]
-    pub config: Option<PathBuf>,
-
     /// Output directory for generated plugins and copied meshes.
     #[arg(short = 'o', long = "output")]
     pub output: Option<PathBuf>,

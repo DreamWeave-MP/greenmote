@@ -33,9 +33,12 @@ pub fn run() -> io::Result<()> {
     }
 
     let openmw_cfg = cli.openmw_cfg.clone();
+    let config_path = cli.config.clone();
     match cli.command_or_default() {
-        Command::Convert(args) => groundcover::run(openmw_cfg.as_deref(), args),
-        Command::Unclip(args) => unclip::run(openmw_cfg.as_deref(), &args),
+        Command::Convert(args) => {
+            groundcover::run(openmw_cfg.as_deref(), config_path.as_deref(), args)
+        }
+        Command::Unclip(args) => unclip::run(openmw_cfg.as_deref(), config_path.as_deref(), &args),
     }
 }
 

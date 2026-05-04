@@ -9,8 +9,12 @@ use crate::{groundcover::GroundcoverArgs, unclip::UnclipArgs};
 #[command(name = "greenmote", author, version)]
 pub struct Cli {
     /// Path to openmw.cfg, or a directory containing openmw.cfg.
-    #[arg(short = 'c', long = "openmw-cfg", global = true)]
+    #[arg(short = 'c', long = "openmw-cfg")]
     pub openmw_cfg: Option<PathBuf>,
+
+    /// Path to greenmote.toml. Defaults to the `OpenMW` user config directory.
+    #[arg(long = "config")]
+    pub config: Option<PathBuf>,
 
     /// Generate shell completion script to stdout for the whole application.
     #[arg(long, value_name = "SHELL", conflicts_with = "generate_manpage")]
@@ -89,12 +93,12 @@ mod tests {
     fn parser_no_subcommand_defaults_to_convert() {
         let cli = Cli::parse_from(["greenmote"]);
         assert!(cli.openmw_cfg.is_none());
+        assert!(cli.config.is_none());
 
         let Command::Convert(args) = cli.command_or_default() else {
             panic!("no subcommand should default to convert");
         };
 
-        assert!(args.config.is_none());
         assert!(args.output.is_none());
         assert!(args.ignored_plugins.is_empty());
         assert_eq!(args.dry_run, None);
@@ -126,16 +130,39 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_openmw_cfg_as_global_option() {
+    fn parser_accepts_openmw_cfg_only_as_top_level_option() {
         for args in [
             ["greenmote", "--openmw-cfg", "profile/openmw.cfg", "convert"],
-            ["greenmote", "convert", "--openmw-cfg", "profile/openmw.cfg"],
             ["greenmote", "--openmw-cfg", "profile/openmw.cfg", "unclip"],
-            ["greenmote", "unclip", "--openmw-cfg", "profile/openmw.cfg"],
         ] {
             let cli = Cli::parse_from(args);
 
             assert_eq!(cli.openmw_cfg, Some(PathBuf::from("profile/openmw.cfg")));
+        }
+
+        for args in [
+            ["greenmote", "convert", "--openmw-cfg", "profile/openmw.cfg"],
+            ["greenmote", "unclip", "--openmw-cfg", "profile/openmw.cfg"],
+        ] {
+            let result = Cli::command().try_get_matches_from(args);
+
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn parser_accepts_config_only_as_top_level_option() {
+        let cli = Cli::parse_from(["greenmote", "--config", "custom.toml", "convert"]);
+
+        assert_eq!(cli.config, Some(PathBuf::from("custom.toml")));
+
+        for args in [
+            ["greenmote", "convert", "--config", "custom.toml"],
+            ["greenmote", "unclip", "--config", "custom.toml"],
+        ] {
+            let result = Cli::command().try_get_matches_from(args);
+
+            assert!(result.is_err());
         }
     }
 

@@ -26,9 +26,13 @@ pub use args::UnclipArgs;
 /// # Errors
 ///
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or terrain lookup errors.
-pub fn run(openmw_cfg: Option<&Path>, args: &UnclipArgs) -> io::Result<()> {
+pub fn run(
+    openmw_cfg: Option<&Path>,
+    config_path: Option<&Path>,
+    args: &UnclipArgs,
+) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
-    run_with_output(openmw_cfg, args, &mut stdout)
+    run_with_output(openmw_cfg, config_path, args, &mut stdout)
 }
 
 /// Runs the groundcover unclipping subcommand with an explicit output stream.
@@ -38,9 +42,10 @@ pub fn run(openmw_cfg: Option<&Path>, args: &UnclipArgs) -> io::Result<()> {
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or terrain lookup errors.
 pub fn run_with_output(
     openmw_cfg: Option<&Path>,
+    config_path: Option<&Path>,
     args: &UnclipArgs,
     stdout: &mut dyn Write,
 ) -> io::Result<()> {
-    let config = config::UnclipConfig::get(openmw_cfg, args)?;
+    let config = config::UnclipConfig::get(openmw_cfg, config_path, args)?;
     app::run(&config, stdout)
 }
