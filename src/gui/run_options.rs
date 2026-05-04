@@ -78,10 +78,12 @@ impl GreenmoteApp {
         }
 
         let args = GroundcoverArgs::default();
-        match groundcover::load_config_for_edit(&args).and_then(|(_loaded_path, mut config)| {
-            options.apply_to_config(&mut config);
-            groundcover::save_config_for_edit(&config, &path)
-        }) {
+        match groundcover::load_config_for_edit(None, &args).and_then(
+            |(_loaded_path, mut config)| {
+                options.apply_to_config(&mut config);
+                groundcover::save_config_for_edit(&config, &path)
+            },
+        ) {
             Ok(config) => {
                 self.settings.replace_saved_config(
                     path.clone(),

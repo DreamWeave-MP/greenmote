@@ -6,12 +6,6 @@ use std::{
 use openmw_config::OpenMWConfiguration;
 use vfstool_lib::VFS;
 
-use crate::groundcover::GroundcoverArgs;
-
-pub fn load_config(args: &GroundcoverArgs) -> io::Result<OpenMWConfiguration> {
-    load_config_from_path(args.openmw_cfg.as_deref())
-}
-
 pub fn load_config_from_path(openmw_cfg: Option<&Path>) -> io::Result<OpenMWConfiguration> {
     OpenMWConfiguration::new(Some(config_path(openmw_cfg)?)).map_err(|error| {
         io::Error::new(
@@ -55,12 +49,15 @@ fn config_path(openmw_cfg: Option<&Path>) -> io::Result<PathBuf> {
 }
 
 #[must_use]
-pub fn greenmote_config_path(args: &GroundcoverArgs, config: &OpenMWConfiguration) -> PathBuf {
-    args.config.clone().unwrap_or_else(|| {
-        config
-            .user_config_path()
-            .join(crate::groundcover::DEFAULT_CONFIG_NAME)
-    })
+pub fn greenmote_config_path(config_path: Option<&Path>, config: &OpenMWConfiguration) -> PathBuf {
+    config_path.map_or_else(
+        || {
+            config
+                .user_config_path()
+                .join(crate::groundcover::DEFAULT_CONFIG_NAME)
+        },
+        Path::to_owned,
+    )
 }
 
 pub fn content_files(config: &OpenMWConfiguration) -> io::Result<Vec<String>> {

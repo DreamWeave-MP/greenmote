@@ -23,6 +23,9 @@ use crate::{
 // type prettier and the TOML schema worse. That is not a trade.
 #[allow(clippy::struct_excessive_bools)]
 pub struct GroundcoverConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openmw_cfg: Option<PathBuf>,
+
     #[serde(default = "default::output_directory")]
     pub output_directory: PathBuf,
 
@@ -70,6 +73,7 @@ impl GroundcoverConfig {
     pub(super) fn with_output_directory(output_directory: PathBuf) -> Self {
         Self {
             output_directory,
+            openmw_cfg: None,
             grass_ids: default::grass_ids(),
             exclude: default::exclude(),
             ignored_plugins: default::ignored_plugins(),
@@ -96,14 +100,21 @@ impl GroundcoverConfig {
     pub(crate) fn load_for_edit(
         config_path: &Path,
         default_output_directory: PathBuf,
+        openmw_cfg: Option<PathBuf>,
     ) -> io::Result<Self> {
         let mut config = match std::fs::symlink_metadata(config_path) {
             Ok(_) => {
                 let contents = read_to_string(config_path)?;
-                file::GroundcoverConfigFile::from_toml(&contents, default_output_directory)?
+                file::GroundcoverConfigFile::from_toml(
+                    &contents,
+                    default_output_directory,
+                    openmw_cfg.clone(),
+                )?
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                Self::with_output_directory(default_output_directory)
+                let mut config = Self::with_output_directory(default_output_directory);
+                config.openmw_cfg = openmw_cfg;
+                config
             }
             Err(error) => return Err(error),
         };
@@ -141,13 +152,10 @@ impl GroundcoverConfig {
     /// compilation errors as invalid input.
     pub fn get(
         args: GroundcoverArgs,
-        user_config_path: &Path,
+        config_path: &Path,
         default_output_directory: PathBuf,
+        openmw_cfg: Option<PathBuf>,
     ) -> io::Result<Self> {
-        let config_path = args
-            .config
-            .clone()
-            .unwrap_or_else(|| user_config_path.join(crate::groundcover::DEFAULT_CONFIG_NAME));
         let config_missing = !config_path.is_file();
         if config_missing && args.validate_config == Some(true) {
             return Err(io::Error::new(
@@ -158,15 +166,22 @@ impl GroundcoverConfig {
         let mut config = if config_missing {
             Self::with_output_directory(default_output_directory)
         } else {
-            let contents = read_to_string(&config_path)?;
-            file::GroundcoverConfigFile::from_toml(&contents, default_output_directory)?
+            let contents = read_to_string(config_path)?;
+            file::GroundcoverConfigFile::from_toml(
+                &contents,
+                default_output_directory,
+                openmw_cfg.clone(),
+            )?
         };
+        if config_missing {
+            config.openmw_cfg = openmw_cfg;
+        }
 
         config.apply_args(args);
         config.compile_regex_sets()?;
 
         if config_missing && !config.dry_run && !config.validate_config {
-            config.save_to(&config_path)?;
+            config.save_to(config_path)?;
         }
 
         Ok(config)
@@ -237,8 +252,17 @@ impl GroundcoverConfig {
 pub(crate) fn regenerate_for_edit(
     config_path: &Path,
     default_output_directory: PathBuf,
+    openmw_cfg: Option<PathBuf>,
 ) -> io::Result<GroundcoverConfig> {
-    edit::regenerate(config_path, default_output_directory)
+    edit::regenerate(config_path, default_output_directory, openmw_cfg)
+}
+
+pub(crate) fn configured_openmw_cfg(config_path: &Path) -> io::Result<Option<PathBuf>> {
+    match std::fs::symlink_metadata(config_path) {
+        Ok(_) => file::GroundcoverConfigFile::configured_openmw_cfg(&read_to_string(config_path)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 pub(super) fn to_io_error<E: std::fmt::Display>(err: E) -> io::Error {

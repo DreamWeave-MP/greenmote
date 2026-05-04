@@ -84,7 +84,11 @@ fn run_synthetic_convert_torture(profile: Profile) {
     write_meshes(data_dir.path(), profile);
 
     let started = Instant::now();
-    greenmote::groundcover::run(args_for(config_dir.path())).unwrap();
+    greenmote::groundcover::run(
+        Some(&config_dir.path().join("openmw.cfg")),
+        args_for(config_dir.path()),
+    )
+    .unwrap();
     let elapsed = started.elapsed();
 
     let groundcover = Plugin::from_path(output_dir.path().join(GROUNDCOVER_PLUGIN_NAME)).unwrap();
@@ -254,9 +258,8 @@ fn write_meshes(data_dir: &Path, profile: Profile) {
     }
 }
 
-fn args_for(config_dir: &Path) -> GroundcoverArgs {
+fn args_for(_config_dir: &Path) -> GroundcoverArgs {
     GroundcoverArgs {
-        openmw_cfg: Some(config_dir.join("openmw.cfg")),
         config: None,
         output: None,
         ignored_plugins: Vec::new(),

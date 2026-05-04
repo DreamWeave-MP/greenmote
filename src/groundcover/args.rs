@@ -8,10 +8,6 @@ use clap::Parser;
     about = "Convert vanilla-style static exterior refs into OpenMW groundcover."
 )]
 pub struct GroundcoverArgs {
-    /// Path to openmw.cfg, or a directory containing openmw.cfg.
-    #[arg(short = 'c', long = "openmw-cfg")]
-    pub openmw_cfg: Option<PathBuf>,
-
     /// Path to `greenmote.toml`. Defaults to the `OpenMW` user config directory.
     #[arg(long = "config")]
     pub config: Option<PathBuf>,

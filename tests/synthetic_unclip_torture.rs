@@ -85,13 +85,15 @@ fn run_synthetic_unclip_torture(profile: Profile) {
     write_context_plugin(data_dir.path(), profile);
     write_target_plugin(data_dir.path(), profile);
 
-    let args = unclip_args(
-        config_dir.path(),
-        data_dir.path().join("TargetGroundcover.omwaddon"),
-    );
+    let args = unclip_args(data_dir.path().join("TargetGroundcover.omwaddon"));
     let mut stdout = Vec::new();
     let started = Instant::now();
-    greenmote::unclip::run_with_output(&args, &mut stdout).unwrap();
+    greenmote::unclip::run_with_output(
+        Some(&config_dir.path().join("openmw.cfg")),
+        &args,
+        &mut stdout,
+    )
+    .unwrap();
     let elapsed = started.elapsed();
 
     let report: Value = serde_json::from_slice(&stdout).unwrap();
@@ -155,12 +157,10 @@ fn write_openmw_cfg(config_dir: &Path, data_dir: &Path) {
     .unwrap();
 }
 
-fn unclip_args(config_dir: &Path, target: PathBuf) -> greenmote::unclip::UnclipArgs {
+fn unclip_args(target: PathBuf) -> greenmote::unclip::UnclipArgs {
     let cli = Cli::parse_from([
         "greenmote".into(),
         "unclip".into(),
-        "--openmw-cfg".into(),
-        config_dir.join("openmw.cfg").into_os_string(),
         "--plugin".into(),
         target.into_os_string(),
         "--structured".into(),

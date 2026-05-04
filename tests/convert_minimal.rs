@@ -47,7 +47,11 @@ fn convert_minimal_fixture_writes_plugins_and_copied_meshes() {
     write_source_plugin(data_dir.path());
     write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
 
-    greenmote::groundcover::run(args_for(config_dir.path())).unwrap();
+    greenmote::groundcover::run(
+        Some(&openmw_cfg(config_dir.path())),
+        args_for(config_dir.path()),
+    )
+    .unwrap();
 
     let groundcover_path = output_dir.path().join(GROUNDCOVER_PLUGIN_NAME);
     let deleted_path = output_dir.path().join(DELETED_PLUGIN_NAME);
@@ -119,7 +123,7 @@ fn convert_dry_run_writes_no_outputs() {
     let mut args = args_for(config_dir.path());
     args.dry_run = Some(true);
 
-    greenmote::groundcover::run(args).unwrap();
+    greenmote::groundcover::run(Some(&openmw_cfg(config_dir.path())), args).unwrap();
 
     assert!(!output_dir.path().join(GROUNDCOVER_PLUGIN_NAME).exists());
     assert!(!output_dir.path().join(DELETED_PLUGIN_NAME).exists());
@@ -152,8 +156,13 @@ fn manual_guidance_reports_already_enabled_outputs() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    greenmote::groundcover::run_with_output(args_for(config_dir.path()), &mut stdout, &mut stderr)
-        .unwrap();
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        args_for(config_dir.path()),
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
     assert!(stdout.contains("Generated plugins are already enabled in openmw.cfg."));
@@ -177,8 +186,13 @@ fn manual_guidance_reports_only_missing_deleted_output() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    greenmote::groundcover::run_with_output(args_for(config_dir.path()), &mut stdout, &mut stderr)
-        .unwrap();
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        args_for(config_dir.path()),
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
     assert!(stdout.contains("Add deleted_groundcover.omwaddon as content= in openmw.cfg."));
@@ -202,8 +216,13 @@ fn manual_guidance_reports_only_missing_groundcover_output() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    greenmote::groundcover::run_with_output(args_for(config_dir.path()), &mut stdout, &mut stderr)
-        .unwrap();
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        args_for(config_dir.path()),
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
     assert!(stdout.contains("Add groundcover.omwaddon as groundcover= in openmw.cfg."));
@@ -230,7 +249,13 @@ fn auto_enable_does_not_rewrite_when_outputs_are_already_enabled() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr).unwrap();
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        args,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
 
     let after = std::fs::read(config_dir.path().join("openmw.cfg")).unwrap();
     let stdout = String::from_utf8(stdout).unwrap();
@@ -258,7 +283,13 @@ fn auto_enable_adds_only_missing_deleted_output() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr).unwrap();
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        args,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
 
     let openmw_cfg = std::fs::read_to_string(config_dir.path().join("openmw.cfg")).unwrap();
     let stdout = String::from_utf8(stdout).unwrap();
@@ -293,7 +324,13 @@ fn auto_enable_adds_only_missing_groundcover_output() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr).unwrap();
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        args,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
 
     let openmw_cfg = std::fs::read_to_string(config_dir.path().join("openmw.cfg")).unwrap();
     let stdout = String::from_utf8(stdout).unwrap();
@@ -330,7 +367,13 @@ fn auto_enable_allows_invisible_output_when_outputs_are_already_enabled() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr).unwrap();
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        args,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
 
     assert!(!config_dir.path().join("openmw.cfg.greenmote.bak").exists());
 }
@@ -356,7 +399,12 @@ fn auto_enable_rejects_invisible_output_when_an_output_is_missing() {
     let mut stdout = Cursor::new(Vec::new());
     let mut stderr = Cursor::new(Vec::new());
 
-    let result = greenmote::groundcover::run_with_output(args, &mut stdout, &mut stderr);
+    let result = greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        args,
+        &mut stdout,
+        &mut stderr,
+    );
 
     assert!(result.is_err());
     assert!(
@@ -381,7 +429,11 @@ fn run_minimal_fixture(name: &str) -> GeneratedBytes {
     write_source_plugin(data_dir.path());
     write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
 
-    greenmote::groundcover::run(args_for(config_dir.path())).unwrap();
+    greenmote::groundcover::run(
+        Some(&openmw_cfg(config_dir.path())),
+        args_for(config_dir.path()),
+    )
+    .unwrap();
 
     GeneratedBytes {
         groundcover: std::fs::read(output_dir.path().join(GROUNDCOVER_PLUGIN_NAME)).unwrap(),
@@ -389,9 +441,8 @@ fn run_minimal_fixture(name: &str) -> GeneratedBytes {
     }
 }
 
-fn args_for(config_dir: &Path) -> GroundcoverArgs {
+fn args_for(_config_dir: &Path) -> GroundcoverArgs {
     GroundcoverArgs {
-        openmw_cfg: Some(config_dir.join("openmw.cfg")),
         config: None,
         output: None,
         ignored_plugins: Vec::new(),
@@ -400,6 +451,10 @@ fn args_for(config_dir: &Path) -> GroundcoverArgs {
         auto_enable: false,
         debug: false,
     }
+}
+
+fn openmw_cfg(config_dir: &Path) -> PathBuf {
+    config_dir.join("openmw.cfg")
 }
 
 fn write_openmw_cfg(config_dir: &Path, data_dir: &Path, output_dir: &Path) {

@@ -17,10 +17,6 @@ pub(crate) const DEFAULT_ORIENTATION_EPSILON_DEGREES: f32 = 1.0;
     about = "Inspect groundcover refs against OpenMW terrain before unclipping."
 )]
 pub struct UnclipArgs {
-    /// Path to openmw.cfg, or a directory containing openmw.cfg.
-    #[arg(short = 'c', long = "openmw-cfg")]
-    pub openmw_cfg: Option<PathBuf>,
-
     /// Groundcover plugin to inspect. May be a filesystem path or a VFS plugin name.
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
     pub plugin: Option<PathBuf>,
@@ -131,7 +127,7 @@ impl UnclipArgs {
             "unclip requires --plugin or [unclip].plugin in greenmote.toml".to_owned()
         })?;
         let resolved = crate::unclip::config::UnclipConfig {
-            openmw_cfg: self.openmw_cfg.clone(),
+            openmw_cfg: None,
             plugin: plugin.clone(),
             instances: self.instances.unwrap_or(false),
             structured: self.structured.unwrap_or(false),

@@ -1,5 +1,6 @@
 use std::{
     fs::{create_dir, read_to_string},
+    io,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -33,23 +34,36 @@ impl Drop for TempDir {
     }
 }
 
+fn default_config_path(dir: &TempDir) -> PathBuf {
+    dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME)
+}
+
+fn get_config(
+    args: GroundcoverArgs,
+    dir: &TempDir,
+    default_output_directory: PathBuf,
+) -> io::Result<GroundcoverConfig> {
+    GroundcoverConfig::get(
+        args,
+        &default_config_path(dir),
+        default_output_directory,
+        None,
+    )
+}
+
 #[test]
 fn missing_config_default_initializes_next_to_user_config() {
     let dir = TempDir::new();
     let args = GroundcoverArgs::parse_from(["convert"]);
     let default_output_directory = dir.path.join("data-local");
 
-    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
+    let config = get_config(args, &dir, default_output_directory.clone()).unwrap();
 
     assert_eq!(config.output_directory, default_output_directory);
     assert!(config.matches_static_id("flora_grass_01"));
     assert!(!config.matches_static_id("ab_furn_impplantergrass"));
-    assert!(
-        dir.path
-            .join(crate::groundcover::DEFAULT_CONFIG_NAME)
-            .is_file()
-    );
-    let contents = read_to_string(dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME)).unwrap();
+    assert!(default_config_path(&dir).is_file());
+    let contents = read_to_string(default_config_path(&dir)).unwrap();
     assert!(contents.contains("[convert]"));
     assert!(contents.contains("[unclip]"));
     assert!(!contents.contains("plugin ="));
@@ -72,7 +86,7 @@ include_grass_ids = ["flora_.*"]
     .unwrap();
 
     let mut config =
-        GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local")).unwrap();
+        GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local"), None).unwrap();
     config.dry_run = true;
     config.save_for_edit(&config_path).unwrap();
     let contents = read_to_string(config_path).unwrap();
@@ -83,12 +97,32 @@ include_grass_ids = ["flora_.*"]
 }
 
 #[test]
+fn root_openmw_cfg_is_persisted_as_global_config() {
+    let dir = TempDir::new();
+    let config_path = default_config_path(&dir);
+    let openmw_cfg = dir.path.join("profile").join("openmw.cfg");
+    let mut config = GroundcoverConfig::with_output_directory(dir.path.join("data-local"));
+    config.openmw_cfg = Some(openmw_cfg.clone());
+
+    config.save_for_edit_new(&config_path).unwrap();
+    let loaded =
+        GroundcoverConfig::load_for_edit(&config_path, dir.path.join("fallback-data-local"), None)
+            .unwrap();
+    let contents = read_to_string(config_path).unwrap();
+
+    assert_eq!(loaded.openmw_cfg, Some(openmw_cfg));
+    assert!(contents.contains("openmw_cfg"));
+    assert!(contents.contains("[convert]"));
+    assert!(contents.contains("[unclip]"));
+}
+
+#[test]
 fn dry_run_does_not_default_initialize_config_file() {
     let dir = TempDir::new();
     let args = GroundcoverArgs::parse_from(["convert", "--dry-run"]);
     let default_output_directory = dir.path.join("data-local");
 
-    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
+    let config = get_config(args, &dir, default_output_directory.clone()).unwrap();
 
     assert!(config.dry_run);
     assert_eq!(config.output_directory, default_output_directory);
@@ -105,7 +139,7 @@ fn validate_config_is_cli_only() {
     let args = GroundcoverArgs::parse_from(["convert", "--validate-config"]);
     let default_output_directory = dir.path.join("data-local");
 
-    let result = GroundcoverConfig::get(args, &dir.path, default_output_directory);
+    let result = get_config(args, &dir, default_output_directory);
 
     assert!(result.is_err());
     assert!(
@@ -129,7 +163,7 @@ validate_config = true
     .unwrap();
     let args = GroundcoverArgs::parse_from(["convert"]);
 
-    let result = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local"));
+    let result = get_config(args, &dir, dir.path.join("data-local"));
 
     assert!(result.is_err());
 }
@@ -141,7 +175,7 @@ fn root_validate_config_is_rejected() {
     std::fs::write(&config_path, "validate_config = true\n").unwrap();
     let args = GroundcoverArgs::parse_from(["convert"]);
 
-    let result = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local"));
+    let result = get_config(args, &dir, dir.path.join("data-local"));
 
     assert!(result.is_err());
 }
@@ -169,7 +203,7 @@ dry_run = false
     ]);
     let default_output_directory = dir.path.join("data-local");
 
-    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory).unwrap();
+    let config = get_config(args, &dir, default_output_directory).unwrap();
 
     assert_eq!(config.output_directory, PathBuf::from("out"));
     assert!(config.dry_run);
@@ -192,7 +226,7 @@ ignored_plugins = ["Generated"]
     let args = GroundcoverArgs::parse_from(["convert"]);
     let default_output_directory = dir.path.join("profile-data-local");
 
-    let config = GroundcoverConfig::get(args, &dir.path, default_output_directory.clone()).unwrap();
+    let config = get_config(args, &dir, default_output_directory.clone()).unwrap();
 
     assert_eq!(config.output_directory, default_output_directory);
 }
@@ -213,8 +247,9 @@ deleted_output = "deleted_gc.omwaddon"
 
     let result = GroundcoverConfig::get(
         GroundcoverArgs::parse_from(["convert"]),
-        &dir.path,
+        &default_config_path(&dir),
         dir.path.join("data-local"),
+        None,
     );
 
     assert!(result.is_err());
@@ -237,7 +272,7 @@ fn stale_generated_platform_data_local_yields_to_effective_data_local() {
     let args = GroundcoverArgs::parse_from(["convert"]);
     let effective_data_local = dir.path.join("Morrowind").join("overwrite");
 
-    let config = GroundcoverConfig::get(args, &dir.path, effective_data_local.clone()).unwrap();
+    let config = get_config(args, &dir, effective_data_local.clone()).unwrap();
 
     assert_eq!(config.output_directory, effective_data_local);
 }
@@ -258,7 +293,7 @@ fn non_default_toml_output_directory_remains_user_override() {
     let args = GroundcoverArgs::parse_from(["convert"]);
     let effective_data_local = dir.path.join("Morrowind").join("overwrite");
 
-    let config = GroundcoverConfig::get(args, &dir.path, effective_data_local).unwrap();
+    let config = get_config(args, &dir, effective_data_local).unwrap();
 
     assert_eq!(config.output_directory, custom_output);
 }
@@ -288,7 +323,7 @@ dry_run = true
     .unwrap();
     let args = GroundcoverArgs::parse_from(["convert"]);
 
-    let config = GroundcoverConfig::get(args, &dir.path, dir.path.join("data-local")).unwrap();
+    let config = get_config(args, &dir, dir.path.join("data-local")).unwrap();
 
     assert_eq!(
         crate::groundcover::GROUNDCOVER_PLUGIN_NAME,
@@ -321,7 +356,7 @@ grass_ids = ["["]
     )
     .unwrap();
 
-    let result = GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local"));
+    let result = GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local"), None);
 
     assert!(result.is_err());
 }

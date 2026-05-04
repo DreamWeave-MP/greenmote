@@ -337,12 +337,12 @@ impl GreenmoteApp {
             let mut stderr = GuiOutput::new(sink.clone());
             let progress_sink = sink.clone();
             let args = GroundcoverArgs::default();
-            let error = match groundcover::load_config_for_edit(&args) {
+            let error = match groundcover::load_config_for_edit(None, &args) {
                 Ok((_path, mut config)) => {
                     options.apply_to_config(&mut config);
                     config.compile_regex_sets().and_then(|()| {
                         groundcover::run_with_config_events_and_cancel(
-                            args.openmw_cfg.as_deref(),
+                            config.openmw_cfg.as_deref(),
                             &config,
                             &mut stdout,
                             &mut stderr,

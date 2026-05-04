@@ -36,9 +36,6 @@ pub(crate) struct UnclipConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PersistedUnclipConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) openmw_cfg: Option<PathBuf>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) plugin: Option<PathBuf>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,11 +85,16 @@ struct UnclipConfigRoot {
 }
 
 impl UnclipConfig {
-    pub(crate) fn get(args: &UnclipArgs) -> io::Result<Self> {
-        let discovery_config = openmw::load_config_from_path(args.openmw_cfg.as_deref())?;
+    pub(crate) fn get(
+        cli_openmw_cfg: Option<&std::path::Path>,
+        args: &UnclipArgs,
+    ) -> io::Result<Self> {
+        let discovery_config = openmw::load_config_from_path(cli_openmw_cfg)?;
         let config_path = discovery_config
             .user_config_path()
             .join(DEFAULT_CONFIG_NAME);
+        let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(&config_path)?;
+        let runtime_openmw_cfg = cli_openmw_cfg.or(configured_openmw_cfg.as_deref());
         let persisted = match std::fs::symlink_metadata(&config_path) {
             Ok(_) => PersistedUnclipConfig::from_toml(&read_to_string(config_path)?)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -101,13 +103,21 @@ impl UnclipConfig {
             Err(error) => return Err(error),
         };
 
-        let config = Self::merge(args, persisted)?;
+        let config = Self::merge(
+            args,
+            persisted,
+            runtime_openmw_cfg.map(std::path::Path::to_owned),
+        )?;
         config.validate()?;
 
         Ok(config)
     }
 
-    pub(crate) fn merge(args: &UnclipArgs, persisted: PersistedUnclipConfig) -> io::Result<Self> {
+    pub(crate) fn merge(
+        args: &UnclipArgs,
+        persisted: PersistedUnclipConfig,
+        openmw_cfg: Option<PathBuf>,
+    ) -> io::Result<Self> {
         let plugin = args.plugin.clone().or(persisted.plugin).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -116,7 +126,7 @@ impl UnclipConfig {
         })?;
 
         Ok(Self {
-            openmw_cfg: args.openmw_cfg.clone().or(persisted.openmw_cfg),
+            openmw_cfg,
             plugin,
             instances: args.instances.or(persisted.instances).unwrap_or(false),
             structured: args.structured.or(persisted.structured).unwrap_or(false),
@@ -261,6 +271,7 @@ mod tests {
                 plugin: Some(PathBuf::from("configured.omwaddon")),
                 ..PersistedUnclipConfig::default()
             },
+            None,
         )
         .unwrap();
 
@@ -276,6 +287,7 @@ mod tests {
                 plugin: Some(PathBuf::from("configured.omwaddon")),
                 ..PersistedUnclipConfig::default()
             },
+            None,
         )
         .unwrap();
 
@@ -297,6 +309,7 @@ mod tests {
                 write: Some(true),
                 ..PersistedUnclipConfig::default()
             },
+            None,
         )
         .unwrap();
 
@@ -316,6 +329,7 @@ mod tests {
                 orientation_epsilon: Some(3.5),
                 ..PersistedUnclipConfig::default()
             },
+            None,
         )
         .unwrap();
 
@@ -342,6 +356,7 @@ mod tests {
                 contact_epsilon: Some(4.0),
                 ..PersistedUnclipConfig::default()
             },
+            None,
         )
         .unwrap();
 
@@ -364,6 +379,7 @@ mod tests {
                 include_grass_ids: Some(vec!["persisted_.*".to_owned()]),
                 ..PersistedUnclipConfig::default()
             },
+            None,
         )
         .unwrap();
 
@@ -379,6 +395,7 @@ mod tests {
                 include_grass_ids: Some(vec!["(".to_owned()]),
                 ..PersistedUnclipConfig::default()
             },
+            None,
         )
         .unwrap();
 
@@ -394,6 +411,7 @@ mod tests {
                 write_actions: Some(vec![WriteActionArg::All, WriteActionArg::TerrainZ]),
                 ..PersistedUnclipConfig::default()
             },
+            None,
         )
         .unwrap();
 

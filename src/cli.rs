@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
@@ -6,6 +8,10 @@ use crate::{groundcover::GroundcoverArgs, unclip::UnclipArgs};
 #[derive(Parser, Debug)]
 #[command(name = "greenmote", author, version)]
 pub struct Cli {
+    /// Path to openmw.cfg, or a directory containing openmw.cfg.
+    #[arg(short = 'c', long = "openmw-cfg", global = true)]
+    pub openmw_cfg: Option<PathBuf>,
+
     /// Generate shell completion script to stdout for the whole application.
     #[arg(long, value_name = "SHELL", conflicts_with = "generate_manpage")]
     pub generate_completion: Option<Shell>,
@@ -82,12 +88,12 @@ mod tests {
     #[test]
     fn parser_no_subcommand_defaults_to_convert() {
         let cli = Cli::parse_from(["greenmote"]);
+        assert!(cli.openmw_cfg.is_none());
 
         let Command::Convert(args) = cli.command_or_default() else {
             panic!("no subcommand should default to convert");
         };
 
-        assert!(args.openmw_cfg.is_none());
         assert!(args.config.is_none());
         assert!(args.output.is_none());
         assert!(args.ignored_plugins.is_empty());
@@ -109,7 +115,6 @@ mod tests {
             args.plugin,
             Some(std::path::PathBuf::from("groundcover.omwaddon"))
         );
-        assert!(args.openmw_cfg.is_none());
         assert_eq!(args.instances, None);
         assert_eq!(args.structured, None);
         assert_eq!(args.write, None);
@@ -118,6 +123,20 @@ mod tests {
         assert_eq!(args.relocation_step, None);
         assert_eq!(args.relocation_steps, None);
         assert_eq!(args.orientation_epsilon, None);
+    }
+
+    #[test]
+    fn parser_accepts_openmw_cfg_as_global_option() {
+        for args in [
+            ["greenmote", "--openmw-cfg", "profile/openmw.cfg", "convert"],
+            ["greenmote", "convert", "--openmw-cfg", "profile/openmw.cfg"],
+            ["greenmote", "--openmw-cfg", "profile/openmw.cfg", "unclip"],
+            ["greenmote", "unclip", "--openmw-cfg", "profile/openmw.cfg"],
+        ] {
+            let cli = Cli::parse_from(args);
+
+            assert_eq!(cli.openmw_cfg, Some(PathBuf::from("profile/openmw.cfg")));
+        }
     }
 
     #[test]
