@@ -110,12 +110,11 @@ pub(crate) fn load_config_for_edit(
     openmw_cfg: Option<&Path>,
     config_path_override: Option<&Path>,
 ) -> io::Result<(PathBuf, GroundcoverConfig)> {
-    let discovery_config = openmw::load_config_from_path(openmw_cfg)?;
-    let config_path = openmw::greenmote_config_path(config_path_override, &discovery_config);
+    let config_path = openmw::resolve_greenmote_config_path(config_path_override, openmw_cfg)?;
     let config_openmw_cfg = config::configured_openmw_cfg(&config_path)?;
     let runtime_openmw_cfg = openmw_cfg.or(config_openmw_cfg.as_deref());
     let runtime_config = openmw::load_config_from_path(runtime_openmw_cfg)?;
-    let persisted_openmw_cfg = openmw::resolved_config_path(runtime_openmw_cfg)?;
+    let persisted_openmw_cfg = openmw::persisted_config_path(&runtime_config);
     let default_output_directory = openmw::default_output_directory(&runtime_config);
     let config = GroundcoverConfig::load_for_edit(
         &config_path,
@@ -137,7 +136,7 @@ pub(crate) fn regenerate_config_for_edit(
     config_path_override: Option<&Path>,
 ) -> io::Result<(PathBuf, GroundcoverConfig)> {
     let runtime_config = openmw::load_config_from_path(openmw_cfg)?;
-    let persisted_openmw_cfg = openmw::resolved_config_path(openmw_cfg)?;
+    let persisted_openmw_cfg = openmw::persisted_config_path(&runtime_config);
     let config_path = openmw::greenmote_config_path(config_path_override, &runtime_config);
     let default_output_directory = openmw::default_output_directory(&runtime_config);
     let config = config::regenerate_for_edit(

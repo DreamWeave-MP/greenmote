@@ -7,7 +7,13 @@ use openmw_config::OpenMWConfiguration;
 use vfstool_lib::VFS;
 
 pub fn load_config_from_path(openmw_cfg: Option<&Path>) -> io::Result<OpenMWConfiguration> {
-    OpenMWConfiguration::new(Some(resolved_config_path(openmw_cfg)?)).map_err(|error| {
+    let config = if let Some(path) = openmw_cfg {
+        OpenMWConfiguration::new(Some(explicit_config_path(path)?))
+    } else {
+        OpenMWConfiguration::from_env()
+    };
+
+    config.map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("failed to read OpenMW configuration: {error}"),
@@ -15,37 +21,31 @@ pub fn load_config_from_path(openmw_cfg: Option<&Path>) -> io::Result<OpenMWConf
     })
 }
 
-pub fn resolved_config_path(openmw_cfg: Option<&Path>) -> io::Result<PathBuf> {
-    if let Some(path) = openmw_cfg {
-        let absolute_path = if path.is_relative() {
-            path.canonicalize().unwrap_or_else(|_| path.to_owned())
-        } else {
-            path.to_owned()
-        };
+fn explicit_config_path(path: &Path) -> io::Result<PathBuf> {
+    let absolute_path = if path.is_relative() {
+        path.canonicalize().unwrap_or_else(|_| path.to_owned())
+    } else {
+        path.to_owned()
+    };
 
-        if absolute_path.is_file()
-            || (absolute_path.is_dir() && absolute_path.join("openmw.cfg").is_file())
-        {
-            return Ok(absolute_path);
-        }
-
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "explicit --openmw-cfg path {} is neither a file nor a directory containing openmw.cfg",
-                path.display()
-            ),
-        ));
+    if absolute_path.is_file()
+        || (absolute_path.is_dir() && absolute_path.join("openmw.cfg").is_file())
+    {
+        return Ok(absolute_path);
     }
 
-    let cwd_cfg = std::env::current_dir()
-        .expect("failed to get current directory")
-        .join("openmw.cfg");
-    if cwd_cfg.is_file() {
-        return Ok(cwd_cfg);
-    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "explicit --openmw-cfg path {} is neither a file nor a directory containing openmw.cfg",
+            path.display()
+        ),
+    ))
+}
 
-    Ok(openmw_config::default_config_path())
+#[must_use]
+pub fn persisted_config_path(config: &OpenMWConfiguration) -> PathBuf {
+    config.root_config_file().to_owned()
 }
 
 #[must_use]
@@ -58,6 +58,18 @@ pub fn greenmote_config_path(config_path: Option<&Path>, config: &OpenMWConfigur
         },
         Path::to_owned,
     )
+}
+
+pub fn resolve_greenmote_config_path(
+    config_path: Option<&Path>,
+    openmw_cfg: Option<&Path>,
+) -> io::Result<PathBuf> {
+    if let Some(path) = config_path {
+        return Ok(path.to_owned());
+    }
+
+    let config = load_config_from_path(openmw_cfg)?;
+    Ok(greenmote_config_path(None, &config))
 }
 
 pub fn content_files(config: &OpenMWConfiguration) -> io::Result<Vec<String>> {
@@ -98,4 +110,117 @@ pub fn build_vfs(config: &OpenMWConfiguration) -> VFS {
         .collect::<Vec<_>>();
 
     VFS::from_directories(directories, Some(fallback_archives))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        ffi::OsString,
+        fs::{create_dir, write},
+        path::PathBuf,
+        sync::{
+            Mutex, OnceLock,
+            atomic::{AtomicU64, Ordering},
+        },
+    };
+
+    use super::*;
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "greenmote-openmw-test-{}-{}",
+                std::process::id(),
+                NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)
+            ));
+            create_dir(&path).unwrap();
+
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn snapshot_env(keys: &[&str]) -> Vec<(String, Option<OsString>)> {
+        keys.iter()
+            .map(|key| ((*key).to_owned(), std::env::var_os(key)))
+            .collect()
+    }
+
+    fn restore_env(snapshot: Vec<(String, Option<OsString>)>) {
+        for (key, value) in snapshot {
+            // SAFETY: guarded by a process-wide mutex in this module's tests.
+            unsafe {
+                if let Some(value) = value {
+                    std::env::set_var(&key, value);
+                } else {
+                    std::env::remove_var(&key);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn implicit_loading_honors_openmw_config_dir_env() {
+        let _guard = env_lock().lock().unwrap();
+        let snapshot = snapshot_env(&["OPENMW_CONFIG", "OPENMW_CONFIG_DIR"]);
+        let dir = TempDir::new();
+        write(dir.path.join("openmw.cfg"), "").unwrap();
+
+        // SAFETY: guarded by a process-wide mutex in this module's tests.
+        unsafe {
+            std::env::remove_var("OPENMW_CONFIG");
+            std::env::set_var("OPENMW_CONFIG_DIR", &dir.path);
+        }
+
+        let config = load_config_from_path(None).unwrap();
+
+        assert_eq!(config.root_config_file(), dir.path.join("openmw.cfg"));
+        restore_env(snapshot);
+    }
+
+    #[test]
+    fn persisted_path_uses_loaded_root_config_file() {
+        let dir = TempDir::new();
+        let cfg = dir.path.join("openmw.cfg");
+        write(&cfg, "").unwrap();
+
+        let config = load_config_from_path(Some(&dir.path)).unwrap();
+
+        assert_eq!(persisted_config_path(&config), cfg);
+    }
+
+    #[test]
+    fn explicit_greenmote_config_path_does_not_force_openmw_discovery() {
+        let _guard = env_lock().lock().unwrap();
+        let snapshot = snapshot_env(&["OPENMW_CONFIG", "OPENMW_CONFIG_DIR"]);
+        let dir = TempDir::new();
+        let config_path = dir.path.join("custom-greenmote.toml");
+
+        // SAFETY: guarded by a process-wide mutex in this module's tests.
+        unsafe {
+            std::env::set_var("OPENMW_CONFIG", dir.path.join("missing-openmw.cfg"));
+            std::env::remove_var("OPENMW_CONFIG_DIR");
+        }
+
+        let resolved = resolve_greenmote_config_path(Some(&config_path), None).unwrap();
+
+        assert_eq!(resolved, config_path);
+        restore_env(snapshot);
+    }
 }
