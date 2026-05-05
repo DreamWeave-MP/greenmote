@@ -102,6 +102,10 @@ impl ConvertUiState {
         self.run_options
     }
 
+    pub(super) fn is_running(&self) -> bool {
+        self.running
+    }
+
     pub(super) fn mark_run_options_saved(&mut self, options: ConvertRunOptions) {
         self.saved_run_options = options;
     }
@@ -318,6 +322,7 @@ impl GreenmoteApp {
         let (sender, receiver) = mpsc::channel();
         let sink = GuiEventSink::new(sender, ctx.clone());
         let options = self.convert.run_options;
+        let openmw_cfg = self.session_openmw_cfg.clone();
         let cancellation = CancellationToken::default();
         let worker_cancellation = cancellation.clone();
 
@@ -334,7 +339,7 @@ impl GreenmoteApp {
             let mut stdout = GuiOutput::new(sink.clone());
             let mut stderr = GuiOutput::new(sink.clone());
             let progress_sink = sink.clone();
-            let error = match groundcover::load_config_for_edit(None, None) {
+            let error = match groundcover::load_config_for_edit(openmw_cfg.as_deref(), None) {
                 Ok((_path, mut config)) => {
                     options.apply_to_config(&mut config);
                     config.compile_regex_sets().and_then(|()| {

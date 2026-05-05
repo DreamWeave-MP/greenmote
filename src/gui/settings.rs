@@ -25,7 +25,6 @@ pub(super) struct SettingsUiState {
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsDraft {
-    openmw_cfg: String,
     output_directory: String,
     grass_ids: String,
     exclude: String,
@@ -159,12 +158,35 @@ impl GreenmoteApp {
     }
 
     fn show_general_settings(&mut self, ui: &mut egui::Ui) {
-        setting_text_field(
-            ui,
-            "OpenMW config path",
-            &mut self.settings.draft.openmw_cfg,
-            &mut self.settings.dirty,
-        );
+        ui.label("OpenMW config");
+        ui.add_space(4.0);
+
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| match &self.session_openmw_cfg {
+                Some(path) => {
+                    ui.monospace(path.display().to_string());
+                }
+                None => {
+                    ui.label("Using OpenMW autodetection.");
+                }
+            });
+
+        ui.add_space(6.0);
+
+        let can_select_config = !self.convert.is_running();
+        if ui
+            .add_enabled(can_select_config, egui::Button::new("Select OpenMW Config"))
+            .clicked()
+        {
+            self.request_openmw_config_selection();
+        }
+        if !can_select_config {
+            ui.label("OpenMW config cannot be changed while conversion is running.");
+        }
+
+        ui.add_space(8.0);
+
         setting_text_field(
             ui,
             "Output directory",
@@ -213,8 +235,29 @@ impl GreenmoteApp {
         self.load_settings_from_disk("Loaded")
     }
 
+    pub(super) fn load_settings_with_openmw_cfg(&mut self, openmw_cfg: &Path) -> bool {
+        match groundcover::load_config_for_edit(Some(openmw_cfg), None) {
+            Ok((path, config)) => {
+                self.settings.replace_saved_config(
+                    path.clone(),
+                    &config,
+                    format!("Loaded {}", path.display()),
+                );
+                self.convert
+                    .sync_run_options(ConvertRunOptions::from_config(&config));
+                true
+            }
+            Err(error) => {
+                self.settings.loaded = false;
+                self.settings.status.clear();
+                self.settings.error = Some(format!("Failed to load settings: {error}"));
+                false
+            }
+        }
+    }
+
     pub(super) fn regenerate_settings(&mut self) -> bool {
-        match groundcover::regenerate_config_for_edit(None, None) {
+        match groundcover::regenerate_config_for_edit(self.session_openmw_cfg.as_deref(), None) {
             Ok((path, config)) => {
                 self.settings.replace_saved_config(
                     path.clone(),
@@ -239,7 +282,7 @@ impl GreenmoteApp {
     }
 
     fn load_settings_from_disk(&mut self, verb: &str) -> bool {
-        match groundcover::load_config_for_edit(None, None) {
+        match groundcover::load_config_for_edit(self.session_openmw_cfg.as_deref(), None) {
             Ok((path, config)) => {
                 self.settings.replace_saved_config(
                     path.clone(),
@@ -306,7 +349,6 @@ impl SettingsDraft {
     fn from_config(config: &GroundcoverConfig) -> Self {
         let run_options = ConvertRunOptions::from_config(config);
         Self {
-            openmw_cfg: option_path_to_string(config.openmw_cfg.as_deref()),
             output_directory: path_to_string(&config.output_directory),
             grass_ids: vec_to_lines(&config.grass_ids),
             exclude: vec_to_lines(&config.exclude),
@@ -320,7 +362,6 @@ impl SettingsDraft {
 
     fn to_config(&self) -> GroundcoverConfig {
         let mut config = GroundcoverConfig::default();
-        config.openmw_cfg = string_to_path_option(&self.openmw_cfg);
         config.output_directory = PathBuf::from(self.output_directory.trim());
         config.grass_ids = lines_to_vec(&self.grass_ids);
         config.exclude = lines_to_vec(&self.exclude);
@@ -360,15 +401,6 @@ fn setting_multiline_text(ui: &mut egui::Ui, label: &str, value: &mut String, di
 
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
-}
-
-fn option_path_to_string(path: Option<&Path>) -> String {
-    path.map_or_else(String::new, path_to_string)
-}
-
-fn string_to_path_option(path: &str) -> Option<PathBuf> {
-    let path = path.trim();
-    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 fn vec_to_lines(lines: &[String]) -> String {

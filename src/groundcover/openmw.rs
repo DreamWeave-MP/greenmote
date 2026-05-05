@@ -1,5 +1,5 @@
 use std::{
-    io,
+    io::{self, BufRead, Write},
     path::{Path, PathBuf},
 };
 
@@ -19,6 +19,154 @@ pub fn load_config_from_path(openmw_cfg: Option<&Path>) -> io::Result<OpenMWConf
             format!("failed to read OpenMW configuration: {error}"),
         )
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConfigPathSource {
+    Cli,
+}
+
+impl ConfigPathSource {
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Cli => "requested OpenMW configuration",
+        }
+    }
+}
+
+pub(crate) fn load_config_with_prompt(
+    cli_openmw_cfg: Option<&Path>,
+    active_command: &str,
+    stdin: &mut dyn BufRead,
+    stderr: &mut dyn Write,
+) -> io::Result<OpenMWConfiguration> {
+    if let Some(path) = cli_openmw_cfg {
+        return load_explicit_or_prompt(path, ConfigPathSource::Cli, active_command, stdin, stderr);
+    }
+
+    match load_config_from_path(None) {
+        Ok(config) => {
+            write_autodetected_config_message(&config, stderr)?;
+            Ok(config)
+        }
+        Err(error) => prompt_for_default_config_path(None, &error, active_command, stdin, stderr),
+    }
+}
+
+fn load_explicit_or_prompt(
+    path: &Path,
+    source: ConfigPathSource,
+    active_command: &str,
+    stdin: &mut dyn BufRead,
+    stderr: &mut dyn Write,
+) -> io::Result<OpenMWConfiguration> {
+    match load_config_from_path(Some(path)) {
+        Ok(config) => Ok(config),
+        Err(error) => prompt_for_default_config_path(
+            Some((source, path)),
+            &error,
+            active_command,
+            stdin,
+            stderr,
+        ),
+    }
+}
+
+fn prompt_for_default_config_path(
+    invalid_path: Option<(ConfigPathSource, &Path)>,
+    original_error: &io::Error,
+    active_command: &str,
+    stdin: &mut dyn BufRead,
+    stderr: &mut dyn Write,
+) -> io::Result<OpenMWConfiguration> {
+    let default_config_file = default_user_config_file()?;
+
+    if let Some((source, path)) = invalid_path {
+        writeln!(
+            stderr,
+            "Greenmote could not use the {}:\n  {}\n\nReason: {original_error}",
+            source.description(),
+            path.display()
+        )?;
+        writeln!(stderr, "\nTry the default OpenMW user config path instead?")?;
+    } else {
+        writeln!(
+            stderr,
+            "Greenmote could not find an OpenMW configuration file.\n\nIt checked OpenMW's application-local and system root config locations.\n\nReason: {original_error}\n\nTry the default OpenMW user config path?"
+        )?;
+    }
+
+    writeln!(stderr, "  {}", default_config_file.display())?;
+    write!(stderr, "\nUse this path? [y/N]: ")?;
+    stderr.flush()?;
+
+    let mut answer = String::new();
+    stdin.read_line(&mut answer)?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        return Err(no_config_selected_error(
+            &default_config_file,
+            active_command,
+        ));
+    }
+
+    load_config_from_path(Some(&default_config_file)).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "default OpenMW config path is not valid:\n  {}\n\nReason: {error}\n\nPass one explicitly:\n\n  greenmote --openmw-cfg /path/to/openmw.cfg {active_command}\n\nor place Greenmote where OpenMW-style config discovery can find the desired profile.",
+                default_config_file.display()
+            ),
+        )
+    })
+}
+
+fn no_config_selected_error(_default_config_file: &Path, active_command: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "no OpenMW configuration selected\n\nPass the OpenMW profile you want explicitly:\n\n  greenmote --openmw-cfg /path/to/openmw.cfg {active_command}\n\nor place Greenmote where OpenMW-style config discovery can find that profile."
+        ),
+    )
+}
+
+pub(crate) fn default_user_config_file() -> io::Result<PathBuf> {
+    openmw_config::try_default_config_path()
+        .map(|path| path.join("openmw.cfg"))
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("failed to determine default OpenMW user config path: {error}"),
+            )
+        })
+}
+
+fn write_autodetected_config_message(
+    config: &OpenMWConfiguration,
+    stderr: &mut dyn Write,
+) -> io::Result<()> {
+    let root_config_file = config.root_config_file();
+    if let Ok(local_path) = openmw_config::try_default_local_path()
+        && root_config_file == local_path.join("openmw.cfg")
+    {
+        writeln!(
+            stderr,
+            "Using OpenMW configuration found next to Greenmote:\n  {}",
+            root_config_file.display()
+        )?;
+        return Ok(());
+    }
+
+    if let Ok(global_config_path) = openmw_config::try_default_global_config_path()
+        && root_config_file == global_config_path.join("openmw.cfg")
+    {
+        writeln!(
+            stderr,
+            "Using system OpenMW configuration:\n  {}",
+            root_config_file.display()
+        )?;
+    }
+
+    Ok(())
 }
 
 fn explicit_config_path(path: &Path) -> io::Result<PathBuf> {
@@ -221,6 +369,102 @@ mod tests {
         let resolved = resolve_greenmote_config_path(Some(&config_path), None).unwrap();
 
         assert_eq!(resolved, config_path);
+        restore_env(snapshot);
+    }
+
+    #[test]
+    fn missing_autodetected_config_prompts_for_default_user_config() {
+        let _guard = env_lock().lock().unwrap();
+        let snapshot = snapshot_env(&[
+            "OPENMW_CONFIG",
+            "OPENMW_CONFIG_DIR",
+            "OPENMW_GLOBAL_CONFIG_PATH",
+            "XDG_CONFIG_HOME",
+        ]);
+        let dir = TempDir::new();
+        let default_config_dir = dir.path.join("xdg").join("openmw");
+        std::fs::create_dir_all(&default_config_dir).unwrap();
+        let default_config = default_config_dir.join("openmw.cfg");
+        write(&default_config, "").unwrap();
+
+        // SAFETY: guarded by a process-wide mutex in this module's tests.
+        unsafe {
+            std::env::remove_var("OPENMW_CONFIG");
+            std::env::remove_var("OPENMW_CONFIG_DIR");
+            std::env::set_var("OPENMW_GLOBAL_CONFIG_PATH", dir.path.join("missing-global"));
+            std::env::set_var("XDG_CONFIG_HOME", dir.path.join("xdg"));
+        }
+
+        let mut input = io::Cursor::new(b"y\n");
+        let mut stderr = Vec::new();
+        let config = load_config_with_prompt(None, "convert", &mut input, &mut stderr).unwrap();
+
+        assert_eq!(config.root_config_file(), default_config);
+        let message = String::from_utf8(stderr).unwrap();
+        assert!(message.contains("could not find an OpenMW configuration"));
+        assert!(message.contains("Use this path? [y/N]:"));
+        restore_env(snapshot);
+    }
+
+    #[test]
+    fn declining_default_user_config_reports_repair_instructions() {
+        let _guard = env_lock().lock().unwrap();
+        let snapshot = snapshot_env(&[
+            "OPENMW_CONFIG",
+            "OPENMW_CONFIG_DIR",
+            "OPENMW_GLOBAL_CONFIG_PATH",
+            "XDG_CONFIG_HOME",
+        ]);
+        let dir = TempDir::new();
+
+        // SAFETY: guarded by a process-wide mutex in this module's tests.
+        unsafe {
+            std::env::remove_var("OPENMW_CONFIG");
+            std::env::remove_var("OPENMW_CONFIG_DIR");
+            std::env::set_var("OPENMW_GLOBAL_CONFIG_PATH", dir.path.join("missing-global"));
+            std::env::set_var("XDG_CONFIG_HOME", dir.path.join("xdg"));
+        }
+
+        let mut input = io::Cursor::new(b"\n");
+        let mut stderr = Vec::new();
+        let error = load_config_with_prompt(None, "unclip", &mut input, &mut stderr).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(
+            error
+                .to_string()
+                .contains("no OpenMW configuration selected")
+        );
+        assert!(error.to_string().contains("--openmw-cfg"));
+        assert!(error.to_string().contains(" unclip"));
+        restore_env(snapshot);
+    }
+
+    #[test]
+    fn invalid_cli_path_has_distinct_prompt_message() {
+        let _guard = env_lock().lock().unwrap();
+        let snapshot = snapshot_env(&["XDG_CONFIG_HOME"]);
+        let dir = TempDir::new();
+        let default_config_dir = dir.path.join("xdg").join("openmw");
+        std::fs::create_dir_all(&default_config_dir).unwrap();
+        let default_config = default_config_dir.join("openmw.cfg");
+        write(&default_config, "").unwrap();
+        let bad_config = dir.path.join("missing.cfg");
+
+        // SAFETY: guarded by a process-wide mutex in this module's tests.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path.join("xdg"));
+        }
+
+        let mut input = io::Cursor::new(b"yes\n");
+        let mut stderr = Vec::new();
+        let config =
+            load_config_with_prompt(Some(&bad_config), "unclip", &mut input, &mut stderr).unwrap();
+
+        assert_eq!(config.root_config_file(), default_config);
+        let message = String::from_utf8(stderr).unwrap();
+        assert!(message.contains("requested OpenMW configuration"));
+        assert!(message.contains(&bad_config.display().to_string()));
         restore_env(snapshot);
     }
 }
