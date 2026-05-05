@@ -8,7 +8,7 @@ use std::path::PathBuf;
     about = "Convert vanilla-style static exterior refs into OpenMW groundcover."
 )]
 pub struct GroundcoverArgs {
-    /// Output directory for generated plugins and copied meshes.
+    /// Override the `OpenMW` data-local directory for generated plugins and copied meshes.
     #[arg(short = 'o', long = "output")]
     pub output: Option<PathBuf>,
 

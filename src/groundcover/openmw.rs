@@ -236,13 +236,69 @@ pub fn content_files(config: &OpenMWConfiguration) -> io::Result<Vec<String>> {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ConvertOutputDirectorySource {
+    CliOverride,
+    OpenMwDataLocal,
+    ConfiguredFallback,
+    DefaultDataLocalForDefaultConfig,
+    #[default]
+    MissingFallback,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ConvertOutputDirectory {
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) source: ConvertOutputDirectorySource,
+}
+
 #[must_use]
-pub fn default_output_directory(config: &OpenMWConfiguration) -> PathBuf {
-    config
-        .data_local()
-        .map_or_else(openmw_config::default_data_local_path, |data_local| {
-            data_local.parsed().to_owned()
-        })
+pub(crate) fn resolve_convert_output_directory(
+    config: &OpenMWConfiguration,
+    fallback_output_directory: Option<PathBuf>,
+) -> ConvertOutputDirectory {
+    if let Some(data_local) = config.data_local() {
+        return ConvertOutputDirectory {
+            path: Some(data_local.parsed().to_owned()),
+            source: ConvertOutputDirectorySource::OpenMwDataLocal,
+        };
+    }
+
+    if let Some(fallback_output_directory) = fallback_output_directory {
+        return ConvertOutputDirectory {
+            path: Some(fallback_output_directory),
+            source: ConvertOutputDirectorySource::ConfiguredFallback,
+        };
+    }
+
+    if root_config_is_default_user_config(config) {
+        return ConvertOutputDirectory {
+            path: Some(openmw_config::default_data_local_path()),
+            source: ConvertOutputDirectorySource::DefaultDataLocalForDefaultConfig,
+        };
+    }
+
+    ConvertOutputDirectory {
+        path: None,
+        source: ConvertOutputDirectorySource::MissingFallback,
+    }
+}
+
+fn root_config_is_default_user_config(config: &OpenMWConfiguration) -> bool {
+    let Ok(default_config_path) = openmw_config::try_default_config_path() else {
+        return false;
+    };
+
+    paths_equal(
+        config.root_config_file(),
+        &default_config_path.join("openmw.cfg"),
+    )
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
 }
 
 #[must_use]

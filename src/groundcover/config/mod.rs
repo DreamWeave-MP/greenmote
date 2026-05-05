@@ -14,7 +14,7 @@ use regex::RegexSet;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    groundcover::{GroundcoverArgs, default},
+    groundcover::{GroundcoverArgs, default, openmw},
     unclip::config::PersistedUnclipConfig,
 };
 
@@ -28,6 +28,12 @@ pub struct GroundcoverConfig {
 
     #[serde(default = "default::output_directory")]
     pub output_directory: PathBuf,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) fallback_output_directory: Option<PathBuf>,
+
+    #[serde(skip, default = "missing_output_directory_source")]
+    pub(crate) output_directory_source: openmw::ConvertOutputDirectorySource,
 
     #[serde(default = "default::grass_ids")]
     pub grass_ids: Vec<String>,
@@ -73,6 +79,8 @@ impl GroundcoverConfig {
     pub(super) fn with_output_directory(output_directory: PathBuf) -> Self {
         Self {
             output_directory,
+            fallback_output_directory: None,
+            output_directory_source: openmw::ConvertOutputDirectorySource::ConfiguredFallback,
             openmw_cfg: None,
             grass_ids: default::grass_ids(),
             exclude: default::exclude(),
@@ -99,7 +107,7 @@ impl GroundcoverConfig {
     /// invalid input.
     pub(crate) fn load_for_edit(
         config_path: &Path,
-        default_output_directory: PathBuf,
+        output_directory: openmw::ConvertOutputDirectory,
         openmw_cfg: Option<PathBuf>,
     ) -> io::Result<Self> {
         let mut config = match std::fs::symlink_metadata(config_path) {
@@ -107,12 +115,12 @@ impl GroundcoverConfig {
                 let contents = read_to_string(config_path)?;
                 file::GroundcoverConfigFile::from_toml(
                     &contents,
-                    default_output_directory,
+                    output_directory,
                     openmw_cfg.clone(),
                 )?
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let mut config = Self::with_output_directory(default_output_directory);
+                let mut config = Self::with_resolved_output_directory(output_directory);
                 config.openmw_cfg = openmw_cfg;
                 config
             }
@@ -150,10 +158,10 @@ impl GroundcoverConfig {
     ///
     /// Returns filesystem errors for config IO, TOML parse errors as invalid data, or regex
     /// compilation errors as invalid input.
-    pub fn get(
+    pub(crate) fn get(
         args: GroundcoverArgs,
         config_path: &Path,
-        default_output_directory: PathBuf,
+        output_directory: openmw::ConvertOutputDirectory,
         openmw_cfg: Option<PathBuf>,
     ) -> io::Result<Self> {
         let config_missing = !config_path.is_file();
@@ -164,14 +172,10 @@ impl GroundcoverConfig {
             ));
         }
         let mut config = if config_missing {
-            Self::with_output_directory(default_output_directory)
+            Self::with_resolved_output_directory(output_directory)
         } else {
             let contents = read_to_string(config_path)?;
-            file::GroundcoverConfigFile::from_toml(
-                &contents,
-                default_output_directory,
-                openmw_cfg.clone(),
-            )?
+            file::GroundcoverConfigFile::from_toml(&contents, output_directory, openmw_cfg.clone())?
         };
         if config_missing {
             config.openmw_cfg = openmw_cfg;
@@ -190,6 +194,7 @@ impl GroundcoverConfig {
     fn apply_args(&mut self, mut args: GroundcoverArgs) {
         if let Some(output) = args.output.take() {
             self.output_directory = output;
+            self.output_directory_source = openmw::ConvertOutputDirectorySource::CliOverride;
         }
         self.ignored_plugins.append(&mut args.ignored_plugins);
 
@@ -251,10 +256,35 @@ impl GroundcoverConfig {
 
 pub(crate) fn regenerate_for_edit(
     config_path: &Path,
-    default_output_directory: PathBuf,
+    output_directory: openmw::ConvertOutputDirectory,
     openmw_cfg: Option<PathBuf>,
 ) -> io::Result<GroundcoverConfig> {
-    edit::regenerate(config_path, default_output_directory, openmw_cfg)
+    edit::regenerate(config_path, output_directory, openmw_cfg)
+}
+
+impl GroundcoverConfig {
+    pub(crate) fn with_resolved_output_directory(
+        output_directory: openmw::ConvertOutputDirectory,
+    ) -> Self {
+        let mut config = Self::with_output_directory(output_directory.path.unwrap_or_default());
+        config.output_directory_source = output_directory.source;
+        config
+    }
+
+    pub(crate) fn output_directory_error(&self) -> Option<io::Error> {
+        if self.output_directory_source != openmw::ConvertOutputDirectorySource::MissingFallback {
+            return None;
+        }
+
+        Some(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "selected OpenMW configuration does not define data-local; set convert --output or [convert].fallback_output_directory in greenmote.toml",
+        ))
+    }
+}
+
+fn missing_output_directory_source() -> openmw::ConvertOutputDirectorySource {
+    openmw::ConvertOutputDirectorySource::MissingFallback
 }
 
 pub(super) fn to_io_error<E: std::fmt::Display>(err: E) -> io::Error {

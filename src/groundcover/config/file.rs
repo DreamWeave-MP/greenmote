@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use regex::RegexSet;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    groundcover::{GroundcoverConfig, default},
+    groundcover::{GroundcoverConfig, default, openmw},
     unclip::config::PersistedUnclipConfig,
 };
 
@@ -15,9 +15,6 @@ use super::to_io_error;
 // intentionally set. Convert-specific knobs live under `[convert]`; root-level command knobs are
 // not supported because this tool is still wet paint, not a museum.
 pub(super) struct GroundcoverConfigFile {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    output_directory: Option<PathBuf>,
-
     #[serde(default, skip_serializing)]
     validate_config: Option<bool>,
 
@@ -34,6 +31,9 @@ pub(super) struct GroundcoverConfigFile {
 // command mode into TOML is how a config file starts lying to its owner.
 #[allow(clippy::struct_excessive_bools)]
 struct ConvertConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fallback_output_directory: Option<PathBuf>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grass_ids: Option<Vec<String>>,
 
@@ -56,9 +56,9 @@ struct ConvertConfigFile {
 impl GroundcoverConfigFile {
     pub(super) fn from_runtime(config: &GroundcoverConfig) -> Self {
         Self {
-            output_directory: Some(config.output_directory.clone()),
             validate_config: None,
             convert: ConvertConfigFile {
+                fallback_output_directory: config.fallback_output_directory.clone(),
                 grass_ids: Some(config.grass_ids.clone()),
                 exclude: Some(config.exclude.clone()),
                 ignored_plugins: Some(config.ignored_plugins.clone()),
@@ -72,7 +72,7 @@ impl GroundcoverConfigFile {
 
     pub(super) fn from_toml(
         contents: &str,
-        default_output_directory: PathBuf,
+        openmw_output_directory: openmw::ConvertOutputDirectory,
         openmw_cfg_override: Option<PathBuf>,
     ) -> std::io::Result<GroundcoverConfig> {
         let file = toml::from_str::<Self>(contents).map_err(to_io_error)?;
@@ -86,11 +86,14 @@ impl GroundcoverConfigFile {
             file.unclip
         };
 
+        let fallback_output_directory = convert.fallback_output_directory.clone();
+        let output_directory =
+            resolved_output_directory(openmw_output_directory, fallback_output_directory.clone());
+
         Ok(GroundcoverConfig {
-            output_directory: resolved_output_directory(
-                file.output_directory,
-                default_output_directory,
-            ),
+            output_directory: output_directory.path.unwrap_or_default(),
+            fallback_output_directory,
+            output_directory_source: output_directory.source,
             openmw_cfg: openmw_cfg_override,
             grass_ids: convert.grass_ids.unwrap_or_else(default::grass_ids),
             exclude: convert.exclude.unwrap_or_else(default::exclude),
@@ -127,29 +130,17 @@ fn is_empty_unclip_config(config: &PersistedUnclipConfig) -> bool {
 }
 
 fn resolved_output_directory(
-    configured_output_directory: Option<PathBuf>,
-    default_output_directory: PathBuf,
-) -> PathBuf {
-    let Some(configured_output_directory) = configured_output_directory else {
-        return default_output_directory;
-    };
-
-    // Early versions of greenmote wrote the platform default data-local path into generated TOML.
-    // Treat that exact value as a generated default, not a user override, so profile-specific
-    // `data-local=` keeps owning the output directory.
-    if paths_equal(
-        &configured_output_directory,
-        &openmw_config::default_data_local_path(),
-    ) && !paths_equal(&configured_output_directory, &default_output_directory)
-    {
-        default_output_directory
-    } else {
-        configured_output_directory
+    openmw_output_directory: openmw::ConvertOutputDirectory,
+    fallback_output_directory: Option<PathBuf>,
+) -> openmw::ConvertOutputDirectory {
+    if openmw_output_directory.source != openmw::ConvertOutputDirectorySource::MissingFallback {
+        return openmw_output_directory;
     }
-}
 
-fn paths_equal(left: &Path, right: &Path) -> bool {
-    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
-    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
-    left == right
+    fallback_output_directory.map_or(openmw_output_directory, |path| {
+        openmw::ConvertOutputDirectory {
+            path: Some(path),
+            source: openmw::ConvertOutputDirectorySource::ConfiguredFallback,
+        }
+    })
 }

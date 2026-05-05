@@ -4,13 +4,14 @@ use std::{
 };
 
 use super::GroundcoverConfig;
+use crate::groundcover::openmw;
 
 pub(super) fn regenerate(
     config_path: &Path,
-    default_output_directory: PathBuf,
+    output_directory: openmw::ConvertOutputDirectory,
     openmw_cfg: Option<PathBuf>,
 ) -> io::Result<GroundcoverConfig> {
-    let mut config = GroundcoverConfig::with_output_directory(default_output_directory);
+    let mut config = GroundcoverConfig::with_resolved_output_directory(output_directory);
     config.openmw_cfg = openmw_cfg;
     let temp_path = next_temp_config_path(config_path);
     let config = config.save_for_edit_new(&temp_path).map_err(|error| {

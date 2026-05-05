@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
-use crate::groundcover::{self, GroundcoverConfig};
+use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectorySource};
 
 use super::{ConvertRunOptions, GreenmoteApp, PendingNavigation};
 
@@ -25,7 +25,9 @@ pub(super) struct SettingsUiState {
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsDraft {
-    output_directory: String,
+    fallback_output_directory: Option<PathBuf>,
+    output_directory: PathBuf,
+    output_directory_source: ConvertOutputDirectorySource,
     grass_ids: String,
     exclude: String,
     ignored_plugins: String,
@@ -66,8 +68,9 @@ impl SettingsUiState {
         self.config_path.as_deref()
     }
 
-    pub(super) fn output_directory(&self) -> PathBuf {
-        PathBuf::from(self.draft.output_directory.trim())
+    pub(super) fn output_directory(&self) -> Option<&Path> {
+        (self.draft.output_directory_source != ConvertOutputDirectorySource::MissingFallback)
+            .then_some(self.draft.output_directory.as_path())
     }
 
     pub(super) fn log_directory(&self) -> Option<PathBuf> {
@@ -187,12 +190,7 @@ impl GreenmoteApp {
 
         ui.add_space(8.0);
 
-        setting_text_field(
-            ui,
-            "Output directory",
-            &mut self.settings.draft.output_directory,
-            &mut self.settings.dirty,
-        );
+        self.show_output_directory_settings(ui);
     }
 
     fn show_convert_settings(&mut self, ui: &mut egui::Ui) {
@@ -217,6 +215,75 @@ impl GreenmoteApp {
 
         ui.add_space(8.0);
         ui.label("Run options are configured on the Convert screen.");
+    }
+
+    fn show_output_directory_settings(&mut self, ui: &mut egui::Ui) {
+        ui.label("Convert output directory");
+        ui.add_space(4.0);
+
+        match self.settings.draft.output_directory_source {
+            ConvertOutputDirectorySource::OpenMwDataLocal => {
+                output_path_frame(ui, &self.settings.draft.output_directory);
+                ui.label("From the selected OpenMW configuration's data-local setting.");
+            }
+            ConvertOutputDirectorySource::DefaultDataLocalForDefaultConfig => {
+                output_path_frame(ui, &self.settings.draft.output_directory);
+                ui.label(
+                    "Using OpenMW's platform default data-local because the selected root openmw.cfg is the platform default user config.",
+                );
+            }
+            ConvertOutputDirectorySource::ConfiguredFallback
+            | ConvertOutputDirectorySource::MissingFallback => {
+                self.show_fallback_output_directory_picker(ui);
+            }
+            ConvertOutputDirectorySource::CliOverride => {
+                output_path_frame(ui, &self.settings.draft.output_directory);
+                ui.label("Overridden for this conversion run.");
+            }
+        }
+    }
+
+    fn show_fallback_output_directory_picker(&mut self, ui: &mut egui::Ui) {
+        match &self.settings.draft.fallback_output_directory {
+            Some(path) => output_path_frame(ui, path),
+            None => {
+                egui::Frame::group(ui.style())
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.label("No fallback output directory selected.");
+                    });
+            }
+        }
+
+        ui.label("Required because the selected OpenMW configuration does not define data-local.");
+        ui.horizontal(|ui| {
+            if ui.button("Select Fallback Output Directory").clicked()
+                && let Some(path) = select_fallback_output_directory(
+                    self.settings.draft.fallback_output_directory.as_deref(),
+                    self.settings.config_path.as_deref().and_then(Path::parent),
+                )
+            {
+                self.settings.draft.fallback_output_directory = Some(path.clone());
+                self.settings.draft.output_directory = path;
+                self.settings.draft.output_directory_source =
+                    ConvertOutputDirectorySource::ConfiguredFallback;
+                self.settings.dirty = true;
+            }
+
+            if ui
+                .add_enabled(
+                    self.settings.draft.fallback_output_directory.is_some(),
+                    egui::Button::new("Clear"),
+                )
+                .clicked()
+            {
+                self.settings.draft.fallback_output_directory = None;
+                self.settings.draft.output_directory = PathBuf::new();
+                self.settings.draft.output_directory_source =
+                    ConvertOutputDirectorySource::MissingFallback;
+                self.settings.dirty = true;
+            }
+        });
     }
 
     pub(super) fn load_settings(&mut self) -> bool {
@@ -349,7 +416,9 @@ impl SettingsDraft {
     fn from_config(config: &GroundcoverConfig) -> Self {
         let run_options = ConvertRunOptions::from_config(config);
         Self {
-            output_directory: path_to_string(&config.output_directory),
+            fallback_output_directory: config.fallback_output_directory.clone(),
+            output_directory: config.output_directory.clone(),
+            output_directory_source: config.output_directory_source.clone(),
             grass_ids: vec_to_lines(&config.grass_ids),
             exclude: vec_to_lines(&config.exclude),
             ignored_plugins: vec_to_lines(&config.ignored_plugins),
@@ -362,7 +431,11 @@ impl SettingsDraft {
 
     fn to_config(&self) -> GroundcoverConfig {
         let mut config = GroundcoverConfig::default();
-        config.output_directory = PathBuf::from(self.output_directory.trim());
+        config
+            .fallback_output_directory
+            .clone_from(&self.fallback_output_directory);
+        config.output_directory.clone_from(&self.output_directory);
+        config.output_directory_source = self.output_directory_source.clone();
         config.grass_ids = lines_to_vec(&self.grass_ids);
         config.exclude = lines_to_vec(&self.exclude);
         config.ignored_plugins = lines_to_vec(&self.ignored_plugins);
@@ -382,13 +455,6 @@ impl SettingsDraft {
     }
 }
 
-fn setting_text_field(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
-    ui.label(label);
-    if ui.text_edit_singleline(value).changed() {
-        *dirty = true;
-    }
-}
-
 fn setting_multiline_text(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
     ui.label(label);
     let editor = egui::TextEdit::multiline(value)
@@ -397,10 +463,6 @@ fn setting_multiline_text(ui: &mut egui::Ui, label: &str, value: &mut String, di
     if ui.add(editor).changed() {
         *dirty = true;
     }
-}
-
-fn path_to_string(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
 }
 
 fn vec_to_lines(lines: &[String]) -> String {
@@ -413,4 +475,25 @@ fn lines_to_vec(text: &str) -> Vec<String> {
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn output_path_frame(ui: &mut egui::Ui, path: &Path) {
+    egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.monospace(path.display().to_string());
+        });
+}
+
+fn select_fallback_output_directory(
+    current: Option<&Path>,
+    config_directory: Option<&Path>,
+) -> Option<PathBuf> {
+    let dialog = rfd::FileDialog::new().set_title("Select Fallback Output Directory");
+    let dialog = match current.or(config_directory) {
+        Some(directory) => dialog.set_directory(directory),
+        None => dialog,
+    };
+
+    dialog.pick_folder()
 }
