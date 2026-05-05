@@ -20,7 +20,7 @@ pub fn run(
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
     let mut stdin = io::stdin().lock();
-    let openmw_config = openmw::load_config_with_prompt(openmw_cfg, &mut stdin, stderr)?;
+    let openmw_config = openmw::load_config_with_prompt(openmw_cfg, "convert", &mut stdin, stderr)?;
     let greenmote_config_path = openmw::greenmote_config_path(config_path_override, &openmw_config);
     let persisted_openmw_cfg = openmw::persisted_config_path(&openmw_config);
     let default_output_directory = openmw::default_output_directory(&openmw_config);

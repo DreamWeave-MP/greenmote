@@ -253,7 +253,7 @@ impl GreenmoteApp {
     }
 
     fn load_settings_from_disk(&mut self, verb: &str) -> bool {
-        match groundcover::load_config_for_edit(None, None) {
+        match groundcover::load_config_for_edit(self.session_openmw_cfg.as_deref(), None) {
             Ok((path, config)) => {
                 self.settings.replace_saved_config(
                     path.clone(),

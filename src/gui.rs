@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::PathBuf};
 
 use eframe::egui;
 
@@ -21,6 +21,7 @@ struct GreenmoteApp {
     checked_initial_config: bool,
     config_recovery_error: Option<String>,
     openmw_config_error: Option<String>,
+    session_openmw_cfg: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,6 +47,7 @@ impl Default for GreenmoteApp {
             checked_initial_config: false,
             config_recovery_error: None,
             openmw_config_error: None,
+            session_openmw_cfg: None,
         }
     }
 }
@@ -269,6 +271,7 @@ impl GreenmoteApp {
         if use_default {
             match default_config {
                 Ok(path) if self.load_settings_with_openmw_cfg(&path) => {
+                    self.session_openmw_cfg = Some(path);
                     self.openmw_config_error = None;
                     self.config_recovery_error = None;
                 }

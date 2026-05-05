@@ -36,11 +36,12 @@ impl ConfigPathSource {
 
 pub(crate) fn load_config_with_prompt(
     cli_openmw_cfg: Option<&Path>,
+    active_command: &str,
     stdin: &mut dyn BufRead,
     stderr: &mut dyn Write,
 ) -> io::Result<OpenMWConfiguration> {
     if let Some(path) = cli_openmw_cfg {
-        return load_explicit_or_prompt(path, ConfigPathSource::Cli, stdin, stderr);
+        return load_explicit_or_prompt(path, ConfigPathSource::Cli, active_command, stdin, stderr);
     }
 
     match load_config_from_path(None) {
@@ -48,25 +49,33 @@ pub(crate) fn load_config_with_prompt(
             write_autodetected_config_message(&config, stderr)?;
             Ok(config)
         }
-        Err(error) => prompt_for_default_config_path(None, &error, stdin, stderr),
+        Err(error) => prompt_for_default_config_path(None, &error, active_command, stdin, stderr),
     }
 }
 
 fn load_explicit_or_prompt(
     path: &Path,
     source: ConfigPathSource,
+    active_command: &str,
     stdin: &mut dyn BufRead,
     stderr: &mut dyn Write,
 ) -> io::Result<OpenMWConfiguration> {
     match load_config_from_path(Some(path)) {
         Ok(config) => Ok(config),
-        Err(error) => prompt_for_default_config_path(Some((source, path)), &error, stdin, stderr),
+        Err(error) => prompt_for_default_config_path(
+            Some((source, path)),
+            &error,
+            active_command,
+            stdin,
+            stderr,
+        ),
     }
 }
 
 fn prompt_for_default_config_path(
     invalid_path: Option<(ConfigPathSource, &Path)>,
     original_error: &io::Error,
+    active_command: &str,
     stdin: &mut dyn BufRead,
     stderr: &mut dyn Write,
 ) -> io::Result<OpenMWConfiguration> {
@@ -94,25 +103,28 @@ fn prompt_for_default_config_path(
     let mut answer = String::new();
     stdin.read_line(&mut answer)?;
     if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-        return Err(no_config_selected_error(&default_config_file));
+        return Err(no_config_selected_error(
+            &default_config_file,
+            active_command,
+        ));
     }
 
     load_config_from_path(Some(&default_config_file)).map_err(|error| {
         io::Error::new(
             error.kind(),
             format!(
-                "default OpenMW config path is not valid:\n  {}\n\nReason: {error}\n\nPass one explicitly:\n\n  greenmote --openmw-cfg /path/to/openmw.cfg convert\n\nor place Greenmote where OpenMW-style config discovery can find the desired profile.",
+                "default OpenMW config path is not valid:\n  {}\n\nReason: {error}\n\nPass one explicitly:\n\n  greenmote --openmw-cfg /path/to/openmw.cfg {active_command}\n\nor place Greenmote where OpenMW-style config discovery can find the desired profile.",
                 default_config_file.display()
             ),
         )
     })
 }
 
-fn no_config_selected_error(default_config_file: &Path) -> io::Error {
+fn no_config_selected_error(default_config_file: &Path, active_command: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::NotFound,
         format!(
-            "no OpenMW configuration selected\n\nPass one explicitly:\n\n  greenmote --openmw-cfg {} convert\n\nor place Greenmote where OpenMW-style config discovery can find the desired profile.",
+            "no OpenMW configuration selected\n\nPass one explicitly:\n\n  greenmote --openmw-cfg {} {active_command}\n\nor place Greenmote where OpenMW-style config discovery can find the desired profile.",
             default_config_file.display()
         ),
     )
@@ -386,7 +398,7 @@ mod tests {
 
         let mut input = io::Cursor::new(b"y\n");
         let mut stderr = Vec::new();
-        let config = load_config_with_prompt(None, &mut input, &mut stderr).unwrap();
+        let config = load_config_with_prompt(None, "convert", &mut input, &mut stderr).unwrap();
 
         assert_eq!(config.root_config_file(), default_config);
         let message = String::from_utf8(stderr).unwrap();
@@ -416,7 +428,7 @@ mod tests {
 
         let mut input = io::Cursor::new(b"\n");
         let mut stderr = Vec::new();
-        let error = load_config_with_prompt(None, &mut input, &mut stderr).unwrap_err();
+        let error = load_config_with_prompt(None, "unclip", &mut input, &mut stderr).unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(
@@ -425,6 +437,7 @@ mod tests {
                 .contains("no OpenMW configuration selected")
         );
         assert!(error.to_string().contains("--openmw-cfg"));
+        assert!(error.to_string().contains(" unclip"));
         restore_env(snapshot);
     }
 
@@ -446,7 +459,8 @@ mod tests {
 
         let mut input = io::Cursor::new(b"yes\n");
         let mut stderr = Vec::new();
-        let config = load_config_with_prompt(Some(&bad_config), &mut input, &mut stderr).unwrap();
+        let config =
+            load_config_with_prompt(Some(&bad_config), "unclip", &mut input, &mut stderr).unwrap();
 
         assert_eq!(config.root_config_file(), default_config);
         let message = String::from_utf8(stderr).unwrap();
