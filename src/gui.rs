@@ -116,7 +116,7 @@ impl GreenmoteApp {
         };
 
         if is_openmw_config_settings_error(&error) {
-            self.openmw_config_error = Some(error);
+            self.openmw_config_error = Some(openmw_config_error_message(&error).to_owned());
         } else {
             self.config_recovery_error = Some(error);
         }
@@ -239,7 +239,6 @@ impl GreenmoteApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.label("Greenmote could not find or load an OpenMW configuration file.");
-                ui.label("This is not a malformed greenmote.toml problem.");
                 ui.label("Choose a valid OpenMW config path before continuing.");
                 ui.add_space(8.0);
                 match &default_config {
@@ -276,7 +275,10 @@ impl GreenmoteApp {
                     self.config_recovery_error = None;
                 }
                 Ok(_) => {
-                    self.openmw_config_error = self.settings_error().map(str::to_owned);
+                    self.openmw_config_error = self
+                        .settings_error()
+                        .map(openmw_config_error_message)
+                        .map(str::to_owned);
                 }
                 Err(error) => {
                     self.openmw_config_error = Some(format!(
@@ -294,9 +296,15 @@ impl GreenmoteApp {
 }
 
 fn is_openmw_config_settings_error(error: &str) -> bool {
-    error.contains("failed to read OpenMW configuration")
+    openmw_config_error_message(error).contains("failed to read OpenMW configuration")
         || error.contains("explicit --openmw-cfg path")
         || error.contains("OpenMW root config discovery")
+}
+
+fn openmw_config_error_message(error: &str) -> &str {
+    error
+        .strip_prefix("Failed to load settings: ")
+        .unwrap_or(error)
 }
 
 /// Runs the `greenmote` graphical user interface.
@@ -322,7 +330,7 @@ pub fn run() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_openmw_config_settings_error;
+    use super::{is_openmw_config_settings_error, openmw_config_error_message};
 
     #[test]
     fn openmw_config_errors_are_not_malformed_greenmote_config_errors() {
@@ -339,5 +347,15 @@ mod tests {
         assert!(!is_openmw_config_settings_error(
             "Failed to load settings: TOML parse error at line 1, column 1"
         ));
+    }
+
+    #[test]
+    fn openmw_config_dialog_removes_settings_load_wrapper() {
+        assert_eq!(
+            openmw_config_error_message(
+                "Failed to load settings: failed to read OpenMW configuration: missing openmw.cfg"
+            ),
+            "failed to read OpenMW configuration: missing openmw.cfg"
+        );
     }
 }
