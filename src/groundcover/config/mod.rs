@@ -11,61 +11,43 @@ use std::{
 };
 
 use regex::RegexSet;
-use serde::{Deserialize, Serialize};
 
 use crate::{
     groundcover::{GroundcoverArgs, default, openmw},
     unclip::config::PersistedUnclipConfig,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 // These are persisted/CLI-facing runtime toggles. Hiding them behind enums would make the Rust
 // type prettier and the TOML schema worse. That is not a trade.
 #[allow(clippy::struct_excessive_bools)]
 pub struct GroundcoverConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openmw_cfg: Option<PathBuf>,
 
-    #[serde(default = "default::output_directory")]
     pub output_directory: PathBuf,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) fallback_output_directory: Option<PathBuf>,
-
-    #[serde(skip, default = "missing_output_directory_source")]
     pub(crate) output_directory_source: openmw::ConvertOutputDirectorySource,
 
-    #[serde(default = "default::grass_ids")]
     pub grass_ids: Vec<String>,
 
-    #[serde(default = "default::exclude")]
     pub exclude: Vec<String>,
 
-    #[serde(default = "default::ignored_plugins")]
     pub ignored_plugins: Vec<String>,
 
-    #[serde(default)]
     pub dry_run: bool,
 
-    #[serde(default)]
     pub validate_config: bool,
 
-    #[serde(default)]
     pub debug: bool,
 
-    #[serde(default)]
     pub auto_enable: bool,
 
-    #[serde(skip)]
     pub(crate) unclip: PersistedUnclipConfig,
 
-    #[serde(skip, default = "RegexSet::empty")]
     include_set: RegexSet,
 
-    #[serde(skip, default = "RegexSet::empty")]
     exclude_set: RegexSet,
 
-    #[serde(skip, default = "RegexSet::empty")]
     ignored_plugin_set: RegexSet,
 }
 
@@ -79,8 +61,7 @@ impl GroundcoverConfig {
     pub(super) fn with_output_directory(output_directory: PathBuf) -> Self {
         Self {
             output_directory,
-            fallback_output_directory: None,
-            output_directory_source: openmw::ConvertOutputDirectorySource::ConfiguredFallback,
+            output_directory_source: openmw::ConvertOutputDirectorySource::WorkingDirectoryFallback,
             openmw_cfg: None,
             grass_ids: default::grass_ids(),
             exclude: default::exclude(),
@@ -266,25 +247,10 @@ impl GroundcoverConfig {
     pub(crate) fn with_resolved_output_directory(
         output_directory: openmw::ConvertOutputDirectory,
     ) -> Self {
-        let mut config = Self::with_output_directory(output_directory.path.unwrap_or_default());
+        let mut config = Self::with_output_directory(output_directory.path);
         config.output_directory_source = output_directory.source;
         config
     }
-
-    pub(crate) fn output_directory_error(&self) -> Option<io::Error> {
-        if self.output_directory_source != openmw::ConvertOutputDirectorySource::MissingFallback {
-            return None;
-        }
-
-        Some(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "selected OpenMW configuration does not define data-local; set convert --output or [convert].fallback_output_directory in greenmote.toml",
-        ))
-    }
-}
-
-fn missing_output_directory_source() -> openmw::ConvertOutputDirectorySource {
-    openmw::ConvertOutputDirectorySource::MissingFallback
 }
 
 pub(super) fn to_io_error<E: std::fmt::Display>(err: E) -> io::Error {

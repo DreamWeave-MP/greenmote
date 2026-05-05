@@ -53,15 +53,15 @@ fn get_config(
 
 fn resolved_output_directory(path: PathBuf) -> crate::groundcover::openmw::ConvertOutputDirectory {
     crate::groundcover::openmw::ConvertOutputDirectory {
-        path: Some(path),
+        path,
         source: crate::groundcover::openmw::ConvertOutputDirectorySource::OpenMwDataLocal,
     }
 }
 
-fn missing_output_directory() -> crate::groundcover::openmw::ConvertOutputDirectory {
+fn working_directory_output(path: PathBuf) -> crate::groundcover::openmw::ConvertOutputDirectory {
     crate::groundcover::openmw::ConvertOutputDirectory {
-        path: None,
-        source: crate::groundcover::openmw::ConvertOutputDirectorySource::MissingFallback,
+        path,
+        source: crate::groundcover::openmw::ConvertOutputDirectorySource::WorkingDirectoryFallback,
     }
 }
 
@@ -84,6 +84,11 @@ fn missing_config_default_initializes_next_to_user_config() {
     assert!(!contents.contains("plugin ="));
     assert!(!contents.contains("validate_config"));
     assert!(!contents.contains("fallback_output_directory"));
+    assert!(
+        !contents
+            .lines()
+            .any(|line| line.starts_with("output_directory ="))
+    );
 }
 
 #[test]
@@ -137,25 +142,6 @@ fn runtime_openmw_cfg_is_not_persisted_to_greenmote_toml() {
     assert!(!contents.contains("openmw_cfg"));
     assert!(contents.contains("[convert]"));
     assert!(contents.contains("[unclip]"));
-}
-
-#[test]
-fn fallback_output_directory_is_persisted_under_convert() {
-    let dir = TempDir::new();
-    let config_path = default_config_path(&dir);
-    let mut config = GroundcoverConfig::with_output_directory(dir.path.join("data-local"));
-    config.fallback_output_directory = Some(dir.path.join("fallback-output"));
-
-    config.save_for_edit_new(&config_path).unwrap();
-    let contents = read_to_string(config_path).unwrap();
-
-    assert!(contents.contains("[convert]"));
-    assert!(contents.contains("fallback_output_directory"));
-    assert!(
-        !contents
-            .lines()
-            .any(|line| line.starts_with("output_directory ="))
-    );
 }
 
 #[test]
@@ -254,7 +240,7 @@ dry_run = false
 }
 
 #[test]
-fn missing_toml_fallback_output_directory_uses_effective_data_local() {
+fn missing_toml_output_directory_uses_effective_data_local() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
@@ -298,48 +284,26 @@ deleted_output = "deleted_gc.omwaddon"
 }
 
 #[test]
-fn convert_fallback_output_directory_is_used_when_openmw_has_no_output_directory() {
+fn working_directory_output_is_used_when_openmw_has_no_data_local() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
-    std::fs::write(
-        &config_path,
-        format!(
-            "[convert]\nfallback_output_directory = {:?}\n",
-            dir.path.join("fallback-output").display().to_string()
-        ),
-    )
-    .unwrap();
+    std::fs::write(&config_path, "[convert]\n").unwrap();
     let args = GroundcoverArgs::parse_from(["convert"]);
+    let working_directory = dir.path.join("working-directory");
 
     let config = GroundcoverConfig::get(
         args,
         &config_path,
-        missing_output_directory(),
+        working_directory_output(working_directory.clone()),
         Some(dir.path.join("openmw.cfg")),
     )
     .unwrap();
 
-    assert_eq!(config.output_directory, dir.path.join("fallback-output"));
+    assert_eq!(config.output_directory, working_directory);
     assert_eq!(
         config.output_directory_source,
-        crate::groundcover::openmw::ConvertOutputDirectorySource::ConfiguredFallback
+        crate::groundcover::openmw::ConvertOutputDirectorySource::WorkingDirectoryFallback
     );
-}
-
-#[test]
-fn missing_output_directory_without_fallback_is_a_conversion_error() {
-    let dir = TempDir::new();
-    let args = GroundcoverArgs::parse_from(["convert"]);
-
-    let config = GroundcoverConfig::get(
-        args,
-        &default_config_path(&dir),
-        missing_output_directory(),
-        Some(dir.path.join("openmw.cfg")),
-    )
-    .unwrap();
-
-    assert!(config.output_directory_error().is_some());
 }
 
 #[test]
@@ -360,7 +324,6 @@ fn root_convert_keys_are_not_part_of_the_schema() {
         &config_path,
         r#"
 groundcover_output = "legacy_gc.omwaddon"
-output_directory = "legacy-output"
 ignored_plugins = ["LegacyGenerated"]
 dry_run = true
 "#,
@@ -375,7 +338,6 @@ dry_run = true
         "groundcover.omwaddon"
     );
     assert!(!config.dry_run);
-    assert_eq!(config.output_directory, dir.path.join("data-local"));
     assert!(!config.is_ignored_plugin_name("LegacyGenerated.omwaddon"));
 }
 

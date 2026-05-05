@@ -113,7 +113,7 @@ pub(crate) fn load_config_for_edit(
     let config_path = openmw::resolve_greenmote_config_path(config_path_override, openmw_cfg)?;
     let runtime_config = openmw::load_config_from_path(openmw_cfg)?;
     let persisted_openmw_cfg = openmw::persisted_config_path(&runtime_config);
-    let output_directory = openmw::resolve_convert_output_directory(&runtime_config, None);
+    let output_directory = openmw::resolve_convert_output_directory(&runtime_config)?;
     let config = GroundcoverConfig::load_for_edit(
         &config_path,
         output_directory,
@@ -136,7 +136,7 @@ pub(crate) fn regenerate_config_for_edit(
     let runtime_config = openmw::load_config_from_path(openmw_cfg)?;
     let persisted_openmw_cfg = openmw::persisted_config_path(&runtime_config);
     let config_path = openmw::greenmote_config_path(config_path_override, &runtime_config);
-    let output_directory = openmw::resolve_convert_output_directory(&runtime_config, None);
+    let output_directory = openmw::resolve_convert_output_directory(&runtime_config)?;
     let config =
         config::regenerate_for_edit(&config_path, output_directory, Some(persisted_openmw_cfg))?;
 

@@ -148,8 +148,7 @@ impl GreenmoteApp {
         ui.add_space(8.0);
         let can_start = !self.convert.running
             && !self.settings.is_dirty()
-            && self.config_recovery_error.is_none()
-            && self.settings.output_directory().is_some();
+            && self.config_recovery_error.is_none();
         if ui
             .add_enabled(can_start, egui::Button::new("Start conversion"))
             .clicked()
@@ -161,9 +160,6 @@ impl GreenmoteApp {
         }
         if self.config_recovery_error.is_some() {
             ui.label("Regenerate Settings before converting.");
-        }
-        if self.settings.output_directory().is_none() {
-            ui.label("Select a fallback output directory before converting.");
         }
         ui.separator();
 
@@ -300,15 +296,12 @@ impl GreenmoteApp {
 
             if ui
                 .add_enabled(
-                    actions_enabled
-                        && self.config_recovery_error.is_none()
-                        && self.settings.output_directory().is_some(),
+                    actions_enabled && self.config_recovery_error.is_none(),
                     egui::Button::new("Open output dir"),
                 )
                 .clicked()
-                && let Some(output_directory) =
-                    self.settings.output_directory().map(Path::to_path_buf)
             {
+                let output_directory = self.settings.output_directory().to_path_buf();
                 self.open_directory(&output_directory, "output");
             }
 

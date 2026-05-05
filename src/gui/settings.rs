@@ -25,7 +25,6 @@ pub(super) struct SettingsUiState {
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsDraft {
-    fallback_output_directory: Option<PathBuf>,
     output_directory: PathBuf,
     output_directory_source: ConvertOutputDirectorySource,
     grass_ids: String,
@@ -68,9 +67,8 @@ impl SettingsUiState {
         self.config_path.as_deref()
     }
 
-    pub(super) fn output_directory(&self) -> Option<&Path> {
-        (self.draft.output_directory_source != ConvertOutputDirectorySource::MissingFallback)
-            .then_some(self.draft.output_directory.as_path())
+    pub(super) fn output_directory(&self) -> &Path {
+        self.draft.output_directory.as_path()
     }
 
     pub(super) fn log_directory(&self) -> Option<PathBuf> {
@@ -226,64 +224,17 @@ impl GreenmoteApp {
                 output_path_frame(ui, &self.settings.draft.output_directory);
                 ui.label("From the selected OpenMW configuration's data-local setting.");
             }
-            ConvertOutputDirectorySource::DefaultDataLocalForDefaultConfig => {
-                output_path_frame(ui, &self.settings.draft.output_directory);
-                ui.label(
-                    "Using OpenMW's platform default data-local because the selected root openmw.cfg is the platform default user config.",
-                );
-            }
-            ConvertOutputDirectorySource::ConfiguredFallback
-            | ConvertOutputDirectorySource::MissingFallback => {
-                self.show_fallback_output_directory_picker(ui);
-            }
             ConvertOutputDirectorySource::CliOverride => {
                 output_path_frame(ui, &self.settings.draft.output_directory);
                 ui.label("Overridden for this conversion run.");
             }
-        }
-    }
-
-    fn show_fallback_output_directory_picker(&mut self, ui: &mut egui::Ui) {
-        match &self.settings.draft.fallback_output_directory {
-            Some(path) => output_path_frame(ui, path),
-            None => {
-                egui::Frame::group(ui.style())
-                    .inner_margin(egui::Margin::symmetric(8, 6))
-                    .show(ui, |ui| {
-                        ui.label("No fallback output directory selected.");
-                    });
+            ConvertOutputDirectorySource::WorkingDirectoryFallback => {
+                output_path_frame(ui, &self.settings.draft.output_directory);
+                ui.label(
+                    "Using Greenmote's working directory because the selected OpenMW configuration does not define data-local.",
+                );
             }
         }
-
-        ui.label("Required because the selected OpenMW configuration does not define data-local.");
-        ui.horizontal(|ui| {
-            if ui.button("Select Fallback Output Directory").clicked()
-                && let Some(path) = select_fallback_output_directory(
-                    self.settings.draft.fallback_output_directory.as_deref(),
-                    self.settings.config_path.as_deref().and_then(Path::parent),
-                )
-            {
-                self.settings.draft.fallback_output_directory = Some(path.clone());
-                self.settings.draft.output_directory = path;
-                self.settings.draft.output_directory_source =
-                    ConvertOutputDirectorySource::ConfiguredFallback;
-                self.settings.dirty = true;
-            }
-
-            if ui
-                .add_enabled(
-                    self.settings.draft.fallback_output_directory.is_some(),
-                    egui::Button::new("Clear"),
-                )
-                .clicked()
-            {
-                self.settings.draft.fallback_output_directory = None;
-                self.settings.draft.output_directory = PathBuf::new();
-                self.settings.draft.output_directory_source =
-                    ConvertOutputDirectorySource::MissingFallback;
-                self.settings.dirty = true;
-            }
-        });
     }
 
     pub(super) fn load_settings(&mut self) -> bool {
@@ -416,7 +367,6 @@ impl SettingsDraft {
     fn from_config(config: &GroundcoverConfig) -> Self {
         let run_options = ConvertRunOptions::from_config(config);
         Self {
-            fallback_output_directory: config.fallback_output_directory.clone(),
             output_directory: config.output_directory.clone(),
             output_directory_source: config.output_directory_source.clone(),
             grass_ids: vec_to_lines(&config.grass_ids),
@@ -431,9 +381,6 @@ impl SettingsDraft {
 
     fn to_config(&self) -> GroundcoverConfig {
         let mut config = GroundcoverConfig::default();
-        config
-            .fallback_output_directory
-            .clone_from(&self.fallback_output_directory);
         config.output_directory.clone_from(&self.output_directory);
         config.output_directory_source = self.output_directory_source.clone();
         config.grass_ids = lines_to_vec(&self.grass_ids);
@@ -483,17 +430,4 @@ fn output_path_frame(ui: &mut egui::Ui, path: &Path) {
         .show(ui, |ui| {
             ui.monospace(path.display().to_string());
         });
-}
-
-fn select_fallback_output_directory(
-    current: Option<&Path>,
-    config_directory: Option<&Path>,
-) -> Option<PathBuf> {
-    let dialog = rfd::FileDialog::new().set_title("Select Fallback Output Directory");
-    let dialog = match current.or(config_directory) {
-        Some(directory) => dialog.set_directory(directory),
-        None => dialog,
-    };
-
-    dialog.pick_folder()
 }

@@ -23,7 +23,7 @@ pub fn run(
     let openmw_config = openmw::load_config_with_prompt(openmw_cfg, "convert", &mut stdin, stderr)?;
     let greenmote_config_path = openmw::greenmote_config_path(config_path_override, &openmw_config);
     let persisted_openmw_cfg = openmw::persisted_config_path(&openmw_config);
-    let output_directory = openmw::resolve_convert_output_directory(&openmw_config, None);
+    let output_directory = openmw::resolve_convert_output_directory(&openmw_config)?;
     let config = GroundcoverConfig::get(
         args,
         &greenmote_config_path,
@@ -70,10 +70,6 @@ fn run_loaded_config(
     events: &EventSink<'_>,
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
-    if let Some(error) = config.output_directory_error() {
-        return Err(error);
-    }
-
     check_cancelled(cancellation)?;
     let initial_enablement = auto_enable::status(&openmw_config);
 
