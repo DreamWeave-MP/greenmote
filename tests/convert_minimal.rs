@@ -167,8 +167,47 @@ fn manual_guidance_reports_already_enabled_outputs() {
     .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
-    assert!(stdout.contains("Generated plugins are already enabled in openmw.cfg."));
+    assert!(stdout.contains("Generated plugin entries are already present in openmw.cfg."));
+    assert!(stdout.contains(
+        "Output directory is already visible to OpenMW; no data-local or data= change is needed."
+    ));
+    assert!(!stdout.contains("First make"));
     assert!(!stdout.contains("Add groundcover.omwaddon"));
+}
+
+#[test]
+fn manual_guidance_warns_when_output_is_not_visible() {
+    let config_dir = TempDir::new("manual-invisible-config");
+    let data_dir = TempDir::new("manual-invisible-data");
+    let output_dir = TempDir::new("manual-invisible-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        true,
+        true,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let invisible_output = TempDir::new("manual-invisible-target");
+    let mut args = args_for(config_dir.path());
+    args.output = Some(invisible_output.path().to_owned());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        None,
+        args,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert!(stdout.contains("First make"));
+    assert!(stdout.contains("visible to OpenMW"));
+    assert!(stdout.contains("Generated plugin entries are already present in openmw.cfg."));
 }
 
 #[test]
@@ -198,6 +237,10 @@ fn manual_guidance_reports_only_missing_deleted_output() {
     .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
+    assert!(stdout.contains(
+        "Output directory is already visible to OpenMW; no data-local or data= change is needed."
+    ));
+    assert!(!stdout.contains("First make"));
     assert!(stdout.contains("Add deleted_groundcover.omwaddon as content= in openmw.cfg."));
     assert!(!stdout.contains("groundcover.omwaddon as groundcover="));
 }
@@ -229,6 +272,10 @@ fn manual_guidance_reports_only_missing_groundcover_output() {
     .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
+    assert!(stdout.contains(
+        "Output directory is already visible to OpenMW; no data-local or data= change is needed."
+    ));
+    assert!(!stdout.contains("First make"));
     assert!(stdout.contains("Add groundcover.omwaddon as groundcover= in openmw.cfg."));
     assert!(!stdout.contains("deleted_groundcover.omwaddon as content="));
 }
@@ -354,7 +401,7 @@ fn auto_enable_adds_only_missing_groundcover_output() {
 }
 
 #[test]
-fn auto_enable_allows_invisible_output_when_outputs_are_already_enabled() {
+fn auto_enable_rejects_invisible_output_even_when_outputs_are_already_enabled() {
     let config_dir = TempDir::new("auto-invisible-enabled-config");
     let data_dir = TempDir::new("auto-invisible-enabled-data");
     let output_dir = TempDir::new("auto-invisible-enabled-output");
@@ -374,15 +421,15 @@ fn auto_enable_allows_invisible_output_when_outputs_are_already_enabled() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    greenmote::groundcover::run_with_output(
+    let result = greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
         None,
         args,
         &mut stdout,
         &mut stderr,
-    )
-    .unwrap();
+    );
 
+    assert!(result.is_err());
     assert!(!config_dir.path().join("openmw.cfg.greenmote.bak").exists());
 }
 
@@ -416,6 +463,46 @@ fn auto_enable_rejects_invisible_output_when_an_output_is_missing() {
     );
 
     assert!(result.is_err());
+    assert!(
+        !invisible_output
+            .path()
+            .join(GROUNDCOVER_PLUGIN_NAME)
+            .exists()
+    );
+    assert!(!config_dir.path().join("openmw.cfg.greenmote.bak").exists());
+}
+
+#[test]
+fn auto_enable_dry_run_allows_invisible_output() {
+    let config_dir = TempDir::new("auto-dry-invisible-config");
+    let data_dir = TempDir::new("auto-dry-invisible-data");
+    let output_dir = TempDir::new("auto-dry-invisible-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        true,
+        false,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let invisible_output = TempDir::new("auto-dry-invisible-target");
+    let mut args = args_for(config_dir.path());
+    args.auto_enable = true;
+    args.dry_run = Some(true);
+    args.output = Some(invisible_output.path().to_owned());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        None,
+        args,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
     assert!(
         !invisible_output
             .path()

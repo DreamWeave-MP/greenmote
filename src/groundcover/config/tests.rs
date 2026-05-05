@@ -41,14 +41,28 @@ fn default_config_path(dir: &TempDir) -> PathBuf {
 fn get_config(
     args: GroundcoverArgs,
     dir: &TempDir,
-    default_output_directory: PathBuf,
+    output_directory: PathBuf,
 ) -> io::Result<GroundcoverConfig> {
     GroundcoverConfig::get(
         args,
         &default_config_path(dir),
-        default_output_directory,
+        resolved_output_directory(output_directory),
         Some(dir.path.join("openmw.cfg")),
     )
+}
+
+fn resolved_output_directory(path: PathBuf) -> crate::groundcover::openmw::ConvertOutputDirectory {
+    crate::groundcover::openmw::ConvertOutputDirectory {
+        path,
+        source: crate::groundcover::openmw::ConvertOutputDirectorySource::OpenMwDataLocal,
+    }
+}
+
+fn working_directory_output(path: PathBuf) -> crate::groundcover::openmw::ConvertOutputDirectory {
+    crate::groundcover::openmw::ConvertOutputDirectory {
+        path,
+        source: crate::groundcover::openmw::ConvertOutputDirectorySource::WorkingDirectoryFallback,
+    }
 }
 
 #[test]
@@ -69,6 +83,12 @@ fn missing_config_default_initializes_next_to_user_config() {
     assert!(!contents.contains("openmw_cfg"));
     assert!(!contents.contains("plugin ="));
     assert!(!contents.contains("validate_config"));
+    assert!(!contents.contains("fallback_output_directory"));
+    assert!(
+        !contents
+            .lines()
+            .any(|line| line.starts_with("output_directory ="))
+    );
 }
 
 #[test]
@@ -86,8 +106,12 @@ include_grass_ids = ["flora_.*"]
     )
     .unwrap();
 
-    let mut config =
-        GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local"), None).unwrap();
+    let mut config = GroundcoverConfig::load_for_edit(
+        &config_path,
+        resolved_output_directory(dir.path.join("data-local")),
+        None,
+    )
+    .unwrap();
     config.dry_run = true;
     config.save_for_edit(&config_path).unwrap();
     let contents = read_to_string(config_path).unwrap();
@@ -106,9 +130,12 @@ fn runtime_openmw_cfg_is_not_persisted_to_greenmote_toml() {
     config.openmw_cfg = Some(openmw_cfg.clone());
 
     config.save_for_edit_new(&config_path).unwrap();
-    let loaded =
-        GroundcoverConfig::load_for_edit(&config_path, dir.path.join("fallback-data-local"), None)
-            .unwrap();
+    let loaded = GroundcoverConfig::load_for_edit(
+        &config_path,
+        resolved_output_directory(dir.path.join("fallback-data-local")),
+        None,
+    )
+    .unwrap();
     let contents = read_to_string(config_path).unwrap();
 
     assert_eq!(loaded.openmw_cfg, None);
@@ -249,7 +276,7 @@ deleted_output = "deleted_gc.omwaddon"
     let result = GroundcoverConfig::get(
         GroundcoverArgs::parse_from(["convert"]),
         &default_config_path(&dir),
-        dir.path.join("data-local"),
+        resolved_output_directory(dir.path.join("data-local")),
         None,
     );
 
@@ -257,46 +284,26 @@ deleted_output = "deleted_gc.omwaddon"
 }
 
 #[test]
-fn stale_generated_platform_data_local_yields_to_effective_data_local() {
+fn working_directory_output_is_used_when_openmw_has_no_data_local() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
-    std::fs::write(
+    std::fs::write(&config_path, "[convert]\n").unwrap();
+    let args = GroundcoverArgs::parse_from(["convert"]);
+    let working_directory = dir.path.join("working-directory");
+
+    let config = GroundcoverConfig::get(
+        args,
         &config_path,
-        format!(
-            "output_directory = {:?}\n",
-            openmw_config::default_data_local_path()
-                .display()
-                .to_string()
-        ),
+        working_directory_output(working_directory.clone()),
+        Some(dir.path.join("openmw.cfg")),
     )
     .unwrap();
-    let args = GroundcoverArgs::parse_from(["convert"]);
-    let effective_data_local = dir.path.join("Morrowind").join("overwrite");
 
-    let config = get_config(args, &dir, effective_data_local.clone()).unwrap();
-
-    assert_eq!(config.output_directory, effective_data_local);
-}
-
-#[test]
-fn non_default_toml_output_directory_remains_user_override() {
-    let dir = TempDir::new();
-    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
-    let custom_output = dir.path.join("custom-output");
-    std::fs::write(
-        &config_path,
-        format!(
-            "output_directory = {:?}\n",
-            custom_output.display().to_string()
-        ),
-    )
-    .unwrap();
-    let args = GroundcoverArgs::parse_from(["convert"]);
-    let effective_data_local = dir.path.join("Morrowind").join("overwrite");
-
-    let config = get_config(args, &dir, effective_data_local).unwrap();
-
-    assert_eq!(config.output_directory, custom_output);
+    assert_eq!(config.output_directory, working_directory);
+    assert_eq!(
+        config.output_directory_source,
+        crate::groundcover::openmw::ConvertOutputDirectorySource::WorkingDirectoryFallback
+    );
 }
 
 #[test]
@@ -310,7 +317,7 @@ fn generated_outputs_are_not_name_ignored_by_default() {
 }
 
 #[test]
-fn root_convert_keys_are_not_part_of_the_schema() {
+fn root_convert_keys_are_rejected() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
@@ -324,14 +331,9 @@ dry_run = true
     .unwrap();
     let args = GroundcoverArgs::parse_from(["convert"]);
 
-    let config = get_config(args, &dir, dir.path.join("data-local")).unwrap();
+    let result = get_config(args, &dir, dir.path.join("data-local"));
 
-    assert_eq!(
-        crate::groundcover::GROUNDCOVER_PLUGIN_NAME,
-        "groundcover.omwaddon"
-    );
-    assert!(!config.dry_run);
-    assert!(!config.is_ignored_plugin_name("LegacyGenerated.omwaddon"));
+    assert!(result.is_err());
 }
 
 #[test]
@@ -357,7 +359,11 @@ grass_ids = ["["]
     )
     .unwrap();
 
-    let result = GroundcoverConfig::load_for_edit(&config_path, dir.path.join("data-local"), None);
+    let result = GroundcoverConfig::load_for_edit(
+        &config_path,
+        resolved_output_directory(dir.path.join("data-local")),
+        None,
+    );
 
     assert!(result.is_err());
 }

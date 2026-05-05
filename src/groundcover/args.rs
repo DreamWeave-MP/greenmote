@@ -8,7 +8,10 @@ use std::path::PathBuf;
     about = "Convert vanilla-style static exterior refs into OpenMW groundcover."
 )]
 pub struct GroundcoverArgs {
-    /// Output directory for generated plugins and copied meshes.
+    /// Write generated plugins and copied meshes to this directory.
+    ///
+    /// By default Greenmote uses `OpenMW` data-local, or the current working directory if data-local
+    /// is not set.
     #[arg(short = 'o', long = "output")]
     pub output: Option<PathBuf>,
 

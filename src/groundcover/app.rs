@@ -23,11 +23,11 @@ pub fn run(
     let openmw_config = openmw::load_config_with_prompt(openmw_cfg, "convert", &mut stdin, stderr)?;
     let greenmote_config_path = openmw::greenmote_config_path(config_path_override, &openmw_config);
     let persisted_openmw_cfg = openmw::persisted_config_path(&openmw_config);
-    let default_output_directory = openmw::default_output_directory(&openmw_config);
+    let output_directory = openmw::resolve_convert_output_directory(&openmw_config)?;
     let config = GroundcoverConfig::get(
         args,
         &greenmote_config_path,
-        default_output_directory,
+        output_directory,
         Some(persisted_openmw_cfg),
     )?;
 
@@ -163,7 +163,16 @@ fn run_loaded_config(
         cancellation,
     })?;
 
-    print_success(stdout, config, &log_path, copied_meshes, initial_enablement)?;
+    let output_directory_visible =
+        auto_enable::output_directory_is_visible(&openmw_config, &config.output_directory);
+    print_success(
+        stdout,
+        config,
+        &log_path,
+        copied_meshes,
+        initial_enablement,
+        output_directory_visible,
+    )?;
 
     Ok(())
 }
@@ -286,9 +295,9 @@ fn cancelled_error() -> io::Error {
 fn validate_auto_enable(
     openmw_config: &openmw_config::OpenMWConfiguration,
     config: &GroundcoverConfig,
-    enablement: auto_enable::OutputEnablement,
+    _enablement: auto_enable::OutputEnablement,
 ) -> io::Result<()> {
-    if config.auto_enable && enablement.has_missing_outputs() {
+    if config.auto_enable && !config.dry_run {
         auto_enable::validate_output_directory(openmw_config, config)?;
     }
 
@@ -384,6 +393,7 @@ fn print_success(
     log_path: &Path,
     copied_meshes: usize,
     enablement: auto_enable::OutputEnablement,
+    output_directory_visible: bool,
 ) -> io::Result<()> {
     writeln!(
         writer,
@@ -395,7 +405,7 @@ fn print_success(
     writeln!(writer, "Copied {copied_meshes} meshes under Meshes/grass")?;
     writeln!(writer, "Wrote log to {}", log_path.display())?;
     if !config.auto_enable {
-        print_manual_enablement_guidance(writer, enablement)?;
+        print_manual_enablement_guidance(writer, config, enablement, output_directory_visible)?;
     }
 
     Ok(())
@@ -439,12 +449,27 @@ fn print_auto_enable_result(
 
 fn print_manual_enablement_guidance(
     writer: &mut dyn Write,
+    config: &GroundcoverConfig,
     enablement: auto_enable::OutputEnablement,
+    output_directory_visible: bool,
 ) -> io::Result<()> {
+    if output_directory_visible {
+        writeln!(
+            writer,
+            "Output directory is already visible to OpenMW; no data-local or data= change is needed."
+        )?;
+    } else {
+        writeln!(
+            writer,
+            "First make {} visible to OpenMW by setting it as data-local or adding it as data= in openmw.cfg.",
+            config.output_directory.display()
+        )?;
+    }
+
     match (enablement.groundcover_enabled, enablement.deleted_enabled) {
         (true, true) => writeln!(
             writer,
-            "Generated plugins are already enabled in openmw.cfg."
+            "Generated plugin entries are already present in openmw.cfg."
         ),
         (false, false) => writeln!(
             writer,

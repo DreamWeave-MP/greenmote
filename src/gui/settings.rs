@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
-use crate::groundcover::{self, GroundcoverConfig};
+use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectorySource};
 
 use super::{ConvertRunOptions, GreenmoteApp, PendingNavigation};
 
@@ -25,7 +25,8 @@ pub(super) struct SettingsUiState {
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsDraft {
-    output_directory: String,
+    output_directory: PathBuf,
+    output_directory_source: ConvertOutputDirectorySource,
     grass_ids: String,
     exclude: String,
     ignored_plugins: String,
@@ -66,8 +67,8 @@ impl SettingsUiState {
         self.config_path.as_deref()
     }
 
-    pub(super) fn output_directory(&self) -> PathBuf {
-        PathBuf::from(self.draft.output_directory.trim())
+    pub(super) fn output_directory(&self) -> &Path {
+        self.draft.output_directory.as_path()
     }
 
     pub(super) fn log_directory(&self) -> Option<PathBuf> {
@@ -187,12 +188,7 @@ impl GreenmoteApp {
 
         ui.add_space(8.0);
 
-        setting_text_field(
-            ui,
-            "Output directory",
-            &mut self.settings.draft.output_directory,
-            &mut self.settings.dirty,
-        );
+        self.show_output_directory_settings(ui);
     }
 
     fn show_convert_settings(&mut self, ui: &mut egui::Ui) {
@@ -217,6 +213,28 @@ impl GreenmoteApp {
 
         ui.add_space(8.0);
         ui.label("Run options are configured on the Convert screen.");
+    }
+
+    fn show_output_directory_settings(&mut self, ui: &mut egui::Ui) {
+        ui.label("Convert output directory");
+        ui.add_space(4.0);
+
+        match self.settings.draft.output_directory_source {
+            ConvertOutputDirectorySource::OpenMwDataLocal => {
+                output_path_frame(ui, &self.settings.draft.output_directory);
+                ui.label("From the selected OpenMW configuration's data-local setting.");
+            }
+            ConvertOutputDirectorySource::CliOverride => {
+                output_path_frame(ui, &self.settings.draft.output_directory);
+                ui.label("Overridden for this conversion run.");
+            }
+            ConvertOutputDirectorySource::WorkingDirectoryFallback => {
+                output_path_frame(ui, &self.settings.draft.output_directory);
+                ui.label(
+                    "OpenMW has no data-local setting, so Greenmote will write to the current working directory shown above. OpenMW can only load the generated files if this folder is configured as data-local or data=.",
+                );
+            }
+        }
     }
 
     pub(super) fn load_settings(&mut self) -> bool {
@@ -349,7 +367,8 @@ impl SettingsDraft {
     fn from_config(config: &GroundcoverConfig) -> Self {
         let run_options = ConvertRunOptions::from_config(config);
         Self {
-            output_directory: path_to_string(&config.output_directory),
+            output_directory: config.output_directory.clone(),
+            output_directory_source: config.output_directory_source.clone(),
             grass_ids: vec_to_lines(&config.grass_ids),
             exclude: vec_to_lines(&config.exclude),
             ignored_plugins: vec_to_lines(&config.ignored_plugins),
@@ -362,7 +381,8 @@ impl SettingsDraft {
 
     fn to_config(&self) -> GroundcoverConfig {
         let mut config = GroundcoverConfig::default();
-        config.output_directory = PathBuf::from(self.output_directory.trim());
+        config.output_directory.clone_from(&self.output_directory);
+        config.output_directory_source = self.output_directory_source.clone();
         config.grass_ids = lines_to_vec(&self.grass_ids);
         config.exclude = lines_to_vec(&self.exclude);
         config.ignored_plugins = lines_to_vec(&self.ignored_plugins);
@@ -382,13 +402,6 @@ impl SettingsDraft {
     }
 }
 
-fn setting_text_field(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
-    ui.label(label);
-    if ui.text_edit_singleline(value).changed() {
-        *dirty = true;
-    }
-}
-
 fn setting_multiline_text(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
     ui.label(label);
     let editor = egui::TextEdit::multiline(value)
@@ -397,10 +410,6 @@ fn setting_multiline_text(ui: &mut egui::Ui, label: &str, value: &mut String, di
     if ui.add(editor).changed() {
         *dirty = true;
     }
-}
-
-fn path_to_string(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
 }
 
 fn vec_to_lines(lines: &[String]) -> String {
@@ -413,4 +422,12 @@ fn lines_to_vec(text: &str) -> Vec<String> {
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn output_path_frame(ui: &mut egui::Ui, path: &Path) {
+    egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.monospace(path.display().to_string());
+        });
 }

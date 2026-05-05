@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 #[must_use]
 pub fn output_directory() -> PathBuf {
-    openmw_config::default_data_local_path()
+    std::env::current_dir().unwrap_or_default()
 }
 
 #[must_use]

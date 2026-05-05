@@ -301,7 +301,7 @@ impl GreenmoteApp {
                 )
                 .clicked()
             {
-                let output_directory = self.settings.output_directory();
+                let output_directory = self.settings.output_directory().to_path_buf();
                 self.open_directory(&output_directory, "output");
             }
 

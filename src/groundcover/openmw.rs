@@ -236,13 +236,34 @@ pub fn content_files(config: &OpenMWConfiguration) -> io::Result<Vec<String>> {
     }
 }
 
-#[must_use]
-pub fn default_output_directory(config: &OpenMWConfiguration) -> PathBuf {
-    config
-        .data_local()
-        .map_or_else(openmw_config::default_data_local_path, |data_local| {
-            data_local.parsed().to_owned()
-        })
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ConvertOutputDirectorySource {
+    CliOverride,
+    OpenMwDataLocal,
+    #[default]
+    WorkingDirectoryFallback,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ConvertOutputDirectory {
+    pub(crate) path: PathBuf,
+    pub(crate) source: ConvertOutputDirectorySource,
+}
+
+pub(crate) fn resolve_convert_output_directory(
+    config: &OpenMWConfiguration,
+) -> io::Result<ConvertOutputDirectory> {
+    if let Some(data_local) = config.data_local() {
+        return Ok(ConvertOutputDirectory {
+            path: data_local.parsed().to_owned(),
+            source: ConvertOutputDirectorySource::OpenMwDataLocal,
+        });
+    }
+
+    Ok(ConvertOutputDirectory {
+        path: std::env::current_dir()?,
+        source: ConvertOutputDirectorySource::WorkingDirectoryFallback,
+    })
 }
 
 #[must_use]
