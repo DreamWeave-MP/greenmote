@@ -159,14 +159,21 @@ impl GreenmoteApp {
 
     fn show_general_settings(&mut self, ui: &mut egui::Ui) {
         ui.label("OpenMW config");
-        match &self.session_openmw_cfg {
-            Some(path) => {
-                ui.monospace(path.display().to_string());
-            }
-            None => {
-                ui.label("Using OpenMW autodetection.");
-            }
-        }
+        ui.add_space(4.0);
+
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| match &self.session_openmw_cfg {
+                Some(path) => {
+                    ui.monospace(path.display().to_string());
+                }
+                None => {
+                    ui.label("Using OpenMW autodetection.");
+                }
+            });
+
+        ui.add_space(6.0);
+
         let can_select_config = !self.convert.is_running();
         if ui
             .add_enabled(can_select_config, egui::Button::new("Select OpenMW Config"))

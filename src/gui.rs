@@ -329,11 +329,20 @@ impl GreenmoteApp {
 }
 
 fn select_openmw_config_file() -> Option<PathBuf> {
-    rfd::FileDialog::new()
+    let dialog = rfd::FileDialog::new()
         .set_title("Select OpenMW Config")
         .add_filter("OpenMW config", &["cfg"])
-        .set_file_name("openmw.cfg")
-        .pick_file()
+        .set_file_name("openmw.cfg");
+
+    let dialog = match std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_owned))
+    {
+        Some(directory) => dialog.set_directory(directory),
+        None => dialog,
+    };
+
+    dialog.pick_file()
 }
 
 fn is_openmw_config_settings_error(error: &str) -> bool {
