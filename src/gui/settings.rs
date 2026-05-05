@@ -25,7 +25,6 @@ pub(super) struct SettingsUiState {
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsDraft {
-    openmw_cfg: String,
     output_directory: String,
     grass_ids: String,
     exclude: String,
@@ -159,12 +158,6 @@ impl GreenmoteApp {
     }
 
     fn show_general_settings(&mut self, ui: &mut egui::Ui) {
-        setting_text_field(
-            ui,
-            "OpenMW config path",
-            &mut self.settings.draft.openmw_cfg,
-            &mut self.settings.dirty,
-        );
         setting_text_field(
             ui,
             "Output directory",
@@ -327,7 +320,6 @@ impl SettingsDraft {
     fn from_config(config: &GroundcoverConfig) -> Self {
         let run_options = ConvertRunOptions::from_config(config);
         Self {
-            openmw_cfg: option_path_to_string(config.openmw_cfg.as_deref()),
             output_directory: path_to_string(&config.output_directory),
             grass_ids: vec_to_lines(&config.grass_ids),
             exclude: vec_to_lines(&config.exclude),
@@ -341,7 +333,6 @@ impl SettingsDraft {
 
     fn to_config(&self) -> GroundcoverConfig {
         let mut config = GroundcoverConfig::default();
-        config.openmw_cfg = string_to_path_option(&self.openmw_cfg);
         config.output_directory = PathBuf::from(self.output_directory.trim());
         config.grass_ids = lines_to_vec(&self.grass_ids);
         config.exclude = lines_to_vec(&self.exclude);
@@ -381,15 +372,6 @@ fn setting_multiline_text(ui: &mut egui::Ui, label: &str, value: &mut String, di
 
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
-}
-
-fn option_path_to_string(path: Option<&Path>) -> String {
-    path.map_or_else(String::new, path_to_string)
-}
-
-fn string_to_path_option(path: &str) -> Option<PathBuf> {
-    let path = path.trim();
-    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 fn vec_to_lines(lines: &[String]) -> String {

@@ -257,14 +257,6 @@ pub(crate) fn regenerate_for_edit(
     edit::regenerate(config_path, default_output_directory, openmw_cfg)
 }
 
-pub(crate) fn configured_openmw_cfg(config_path: &Path) -> io::Result<Option<PathBuf>> {
-    match std::fs::symlink_metadata(config_path) {
-        Ok(_) => file::GroundcoverConfigFile::configured_openmw_cfg(&read_to_string(config_path)?),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
 pub(super) fn to_io_error<E: std::fmt::Display>(err: E) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, err.to_string())
 }

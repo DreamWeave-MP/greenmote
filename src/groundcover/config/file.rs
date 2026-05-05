@@ -16,9 +16,6 @@ use super::to_io_error;
 // not supported because this tool is still wet paint, not a museum.
 pub(super) struct GroundcoverConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    openmw_cfg: Option<PathBuf>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     output_directory: Option<PathBuf>,
 
     #[serde(default, skip_serializing)]
@@ -60,7 +57,6 @@ impl GroundcoverConfigFile {
     pub(super) fn from_runtime(config: &GroundcoverConfig) -> Self {
         Self {
             output_directory: Some(config.output_directory.clone()),
-            openmw_cfg: config.openmw_cfg.clone(),
             validate_config: None,
             convert: ConvertConfigFile {
                 grass_ids: Some(config.grass_ids.clone()),
@@ -95,7 +91,7 @@ impl GroundcoverConfigFile {
                 file.output_directory,
                 default_output_directory,
             ),
-            openmw_cfg: openmw_cfg_override.or(file.openmw_cfg),
+            openmw_cfg: openmw_cfg_override,
             grass_ids: convert.grass_ids.unwrap_or_else(default::grass_ids),
             exclude: convert.exclude.unwrap_or_else(default::exclude),
             ignored_plugins: convert
@@ -110,11 +106,6 @@ impl GroundcoverConfigFile {
             exclude_set: RegexSet::empty(),
             ignored_plugin_set: RegexSet::empty(),
         })
-    }
-
-    pub(super) fn configured_openmw_cfg(contents: &str) -> std::io::Result<Option<PathBuf>> {
-        let file = toml::from_str::<Self>(contents).map_err(to_io_error)?;
-        Ok(file.openmw_cfg)
     }
 }
 

@@ -96,30 +96,8 @@ impl UnclipConfig {
         stdin: &mut dyn BufRead,
         stderr: &mut dyn Write,
     ) -> io::Result<Self> {
-        let mut runtime_config = if let Some(config_path) = config_path_override {
-            let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(config_path)?;
-            openmw::load_config_with_prompt(
-                cli_openmw_cfg,
-                configured_openmw_cfg.as_deref(),
-                stdin,
-                stderr,
-            )?
-        } else {
-            openmw::load_config_with_prompt(cli_openmw_cfg, None, stdin, stderr)?
-        };
+        let runtime_config = openmw::load_config_with_prompt(cli_openmw_cfg, stdin, stderr)?;
         let config_path = openmw::greenmote_config_path(config_path_override, &runtime_config);
-        let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(&config_path)?;
-        if config_path_override.is_none()
-            && cli_openmw_cfg.is_none()
-            && configured_openmw_cfg.is_some()
-        {
-            runtime_config = openmw::load_config_with_prompt(
-                None,
-                configured_openmw_cfg.as_deref(),
-                stdin,
-                stderr,
-            )?;
-        }
         let persisted_openmw_cfg = openmw::persisted_config_path(&runtime_config);
         let persisted = match std::fs::symlink_metadata(&config_path) {
             Ok(_) => PersistedUnclipConfig::from_toml(&read_to_string(config_path)?)?,

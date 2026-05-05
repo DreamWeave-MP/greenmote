@@ -66,7 +66,7 @@ fn missing_config_default_initializes_next_to_user_config() {
     let contents = read_to_string(default_config_path(&dir)).unwrap();
     assert!(contents.contains("[convert]"));
     assert!(contents.contains("[unclip]"));
-    assert!(contents.contains("openmw_cfg"));
+    assert!(!contents.contains("openmw_cfg"));
     assert!(!contents.contains("plugin ="));
     assert!(!contents.contains("validate_config"));
 }
@@ -98,7 +98,7 @@ include_grass_ids = ["flora_.*"]
 }
 
 #[test]
-fn root_openmw_cfg_is_persisted_as_global_config() {
+fn runtime_openmw_cfg_is_not_persisted_to_greenmote_toml() {
     let dir = TempDir::new();
     let config_path = default_config_path(&dir);
     let openmw_cfg = dir.path.join("profile").join("openmw.cfg");
@@ -111,8 +111,8 @@ fn root_openmw_cfg_is_persisted_as_global_config() {
             .unwrap();
     let contents = read_to_string(config_path).unwrap();
 
-    assert_eq!(loaded.openmw_cfg, Some(openmw_cfg));
-    assert!(contents.contains("openmw_cfg"));
+    assert_eq!(loaded.openmw_cfg, None);
+    assert!(!contents.contains("openmw_cfg"));
     assert!(contents.contains("[convert]"));
     assert!(contents.contains("[unclip]"));
 }

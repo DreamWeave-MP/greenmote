@@ -24,30 +24,23 @@ pub fn load_config_from_path(openmw_cfg: Option<&Path>) -> io::Result<OpenMWConf
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigPathSource {
     Cli,
-    GreenmoteToml,
 }
 
 impl ConfigPathSource {
     const fn description(self) -> &'static str {
         match self {
             Self::Cli => "requested OpenMW configuration",
-            Self::GreenmoteToml => "greenmote.toml openmw_cfg",
         }
     }
 }
 
 pub(crate) fn load_config_with_prompt(
     cli_openmw_cfg: Option<&Path>,
-    configured_openmw_cfg: Option<&Path>,
     stdin: &mut dyn BufRead,
     stderr: &mut dyn Write,
 ) -> io::Result<OpenMWConfiguration> {
     if let Some(path) = cli_openmw_cfg {
         return load_explicit_or_prompt(path, ConfigPathSource::Cli, stdin, stderr);
-    }
-
-    if let Some(path) = configured_openmw_cfg {
-        return load_explicit_or_prompt(path, ConfigPathSource::GreenmoteToml, stdin, stderr);
     }
 
     match load_config_from_path(None) {
@@ -108,7 +101,7 @@ fn prompt_for_default_config_path(
         io::Error::new(
             error.kind(),
             format!(
-                "default OpenMW config path is not valid:\n  {}\n\nReason: {error}\n\nSet one in greenmote.toml:\n\n  openmw_cfg = \"/path/to/openmw.cfg\"\n\nor pass one explicitly:\n\n  greenmote --openmw-cfg /path/to/openmw.cfg convert",
+                "default OpenMW config path is not valid:\n  {}\n\nReason: {error}\n\nPass one explicitly:\n\n  greenmote --openmw-cfg /path/to/openmw.cfg convert\n\nor place Greenmote where OpenMW-style config discovery can find the desired profile.",
                 default_config_file.display()
             ),
         )
@@ -119,7 +112,7 @@ fn no_config_selected_error(default_config_file: &Path) -> io::Error {
     io::Error::new(
         io::ErrorKind::NotFound,
         format!(
-            "no OpenMW configuration selected\n\nSet one in greenmote.toml:\n\n  openmw_cfg = \"/path/to/openmw.cfg\"\n\nor pass one explicitly:\n\n  greenmote --openmw-cfg {} convert",
+            "no OpenMW configuration selected\n\nPass one explicitly:\n\n  greenmote --openmw-cfg {} convert\n\nor place Greenmote where OpenMW-style config discovery can find the desired profile.",
             default_config_file.display()
         ),
     )
@@ -393,7 +386,7 @@ mod tests {
 
         let mut input = io::Cursor::new(b"y\n");
         let mut stderr = Vec::new();
-        let config = load_config_with_prompt(None, None, &mut input, &mut stderr).unwrap();
+        let config = load_config_with_prompt(None, &mut input, &mut stderr).unwrap();
 
         assert_eq!(config.root_config_file(), default_config);
         let message = String::from_utf8(stderr).unwrap();
@@ -423,7 +416,7 @@ mod tests {
 
         let mut input = io::Cursor::new(b"\n");
         let mut stderr = Vec::new();
-        let error = load_config_with_prompt(None, None, &mut input, &mut stderr).unwrap_err();
+        let error = load_config_with_prompt(None, &mut input, &mut stderr).unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(
@@ -431,12 +424,12 @@ mod tests {
                 .to_string()
                 .contains("no OpenMW configuration selected")
         );
-        assert!(error.to_string().contains("openmw_cfg"));
+        assert!(error.to_string().contains("--openmw-cfg"));
         restore_env(snapshot);
     }
 
     #[test]
-    fn invalid_configured_path_has_distinct_prompt_message() {
+    fn invalid_cli_path_has_distinct_prompt_message() {
         let _guard = env_lock().lock().unwrap();
         let snapshot = snapshot_env(&["XDG_CONFIG_HOME"]);
         let dir = TempDir::new();
@@ -453,12 +446,11 @@ mod tests {
 
         let mut input = io::Cursor::new(b"yes\n");
         let mut stderr = Vec::new();
-        let config =
-            load_config_with_prompt(None, Some(&bad_config), &mut input, &mut stderr).unwrap();
+        let config = load_config_with_prompt(Some(&bad_config), &mut input, &mut stderr).unwrap();
 
         assert_eq!(config.root_config_file(), default_config);
         let message = String::from_utf8(stderr).unwrap();
-        assert!(message.contains("greenmote.toml openmw_cfg"));
+        assert!(message.contains("requested OpenMW configuration"));
         assert!(message.contains(&bad_config.display().to_string()));
         restore_env(snapshot);
     }

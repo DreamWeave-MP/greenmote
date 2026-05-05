@@ -20,27 +20,8 @@ pub fn run(
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
     let mut stdin = io::stdin().lock();
-    let mut openmw_config = if let Some(config_path) = config_path_override {
-        let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(config_path)?;
-        openmw::load_config_with_prompt(
-            openmw_cfg,
-            configured_openmw_cfg.as_deref(),
-            &mut stdin,
-            stderr,
-        )?
-    } else {
-        openmw::load_config_with_prompt(openmw_cfg, None, &mut stdin, stderr)?
-    };
+    let openmw_config = openmw::load_config_with_prompt(openmw_cfg, &mut stdin, stderr)?;
     let greenmote_config_path = openmw::greenmote_config_path(config_path_override, &openmw_config);
-    let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(&greenmote_config_path)?;
-    if config_path_override.is_none() && openmw_cfg.is_none() && configured_openmw_cfg.is_some() {
-        openmw_config = openmw::load_config_with_prompt(
-            None,
-            configured_openmw_cfg.as_deref(),
-            &mut stdin,
-            stderr,
-        )?;
-    }
     let persisted_openmw_cfg = openmw::persisted_config_path(&openmw_config);
     let default_output_directory = openmw::default_output_directory(&openmw_config);
     let config = GroundcoverConfig::get(
