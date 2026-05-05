@@ -102,6 +102,10 @@ impl ConvertUiState {
         self.run_options
     }
 
+    pub(super) fn is_running(&self) -> bool {
+        self.running
+    }
+
     pub(super) fn mark_run_options_saved(&mut self, options: ConvertRunOptions) {
         self.saved_run_options = options;
     }

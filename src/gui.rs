@@ -240,6 +240,7 @@ impl GreenmoteApp {
         let mut use_default = false;
         let mut select_config = false;
         let mut close = false;
+        let can_select_config = !self.convert.is_running();
 
         egui::Window::new("OpenMW config not found")
             .collapsible(false)
@@ -265,11 +266,13 @@ impl GreenmoteApp {
                 ui.horizontal(|ui| {
                     use_default = ui
                         .add_enabled(
-                            default_config.is_ok(),
+                            default_config.is_ok() && can_select_config,
                             egui::Button::new("Use default path"),
                         )
                         .clicked();
-                    select_config = ui.button("Select OpenMW Config").clicked();
+                    select_config = ui
+                        .add_enabled(can_select_config, egui::Button::new("Select OpenMW Config"))
+                        .clicked();
                     close = ui.button("Close").clicked();
                 });
             });
@@ -293,6 +296,10 @@ impl GreenmoteApp {
     }
 
     fn request_openmw_config_selection(&mut self) {
+        if self.convert.is_running() {
+            return;
+        }
+
         let Some(path) = select_openmw_config_file() else {
             return;
         };
@@ -305,11 +312,17 @@ impl GreenmoteApp {
     }
 
     fn apply_selected_openmw_config(&mut self, path: &Path) {
-        self.session_openmw_cfg = Some(path.to_owned());
         if self.load_settings_with_openmw_cfg(path) {
+            self.session_openmw_cfg = Some(path.to_owned());
             self.openmw_config_error = None;
             self.config_recovery_error = None;
         } else {
+            if self
+                .settings_error()
+                .is_some_and(|error| !is_openmw_config_settings_error(error))
+            {
+                self.session_openmw_cfg = Some(path.to_owned());
+            }
             self.record_settings_load_failure();
         }
     }
@@ -317,7 +330,7 @@ impl GreenmoteApp {
 
 fn select_openmw_config_file() -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .set_title("Select OpenMW config")
+        .set_title("Select OpenMW Config")
         .add_filter("OpenMW config", &["cfg"])
         .set_file_name("openmw.cfg")
         .pick_file()

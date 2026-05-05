@@ -167,8 +167,15 @@ impl GreenmoteApp {
                 ui.label("Using OpenMW autodetection.");
             }
         }
-        if ui.button("Select OpenMW Config").clicked() {
+        let can_select_config = !self.convert.is_running();
+        if ui
+            .add_enabled(can_select_config, egui::Button::new("Select OpenMW Config"))
+            .clicked()
+        {
             self.request_openmw_config_selection();
+        }
+        if !can_select_config {
+            ui.label("OpenMW config cannot be changed while conversion is running.");
         }
 
         ui.add_space(8.0);
