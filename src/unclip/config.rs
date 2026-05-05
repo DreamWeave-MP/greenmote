@@ -1,4 +1,8 @@
-use std::{fs::read_to_string, io, path::PathBuf};
+use std::{
+    fs::read_to_string,
+    io::{self, BufRead, Write},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -89,12 +93,33 @@ impl UnclipConfig {
         cli_openmw_cfg: Option<&std::path::Path>,
         config_path_override: Option<&std::path::Path>,
         args: &UnclipArgs,
+        stdin: &mut dyn BufRead,
+        stderr: &mut dyn Write,
     ) -> io::Result<Self> {
-        let config_path =
-            openmw::resolve_greenmote_config_path(config_path_override, cli_openmw_cfg)?;
+        let mut runtime_config = if let Some(config_path) = config_path_override {
+            let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(config_path)?;
+            openmw::load_config_with_prompt(
+                cli_openmw_cfg,
+                configured_openmw_cfg.as_deref(),
+                stdin,
+                stderr,
+            )?
+        } else {
+            openmw::load_config_with_prompt(cli_openmw_cfg, None, stdin, stderr)?
+        };
+        let config_path = openmw::greenmote_config_path(config_path_override, &runtime_config);
         let configured_openmw_cfg = crate::groundcover::configured_openmw_cfg(&config_path)?;
-        let runtime_openmw_cfg = cli_openmw_cfg.or(configured_openmw_cfg.as_deref());
-        let runtime_config = openmw::load_config_from_path(runtime_openmw_cfg)?;
+        if config_path_override.is_none()
+            && cli_openmw_cfg.is_none()
+            && configured_openmw_cfg.is_some()
+        {
+            runtime_config = openmw::load_config_with_prompt(
+                None,
+                configured_openmw_cfg.as_deref(),
+                stdin,
+                stderr,
+            )?;
+        }
         let persisted_openmw_cfg = openmw::persisted_config_path(&runtime_config);
         let persisted = match std::fs::symlink_metadata(&config_path) {
             Ok(_) => PersistedUnclipConfig::from_toml(&read_to_string(config_path)?)?,

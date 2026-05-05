@@ -32,7 +32,8 @@ pub fn run(
     args: &UnclipArgs,
 ) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
-    run_with_output(openmw_cfg, config_path, args, &mut stdout)
+    let mut stderr = io::stderr().lock();
+    run_with_output_and_prompt(openmw_cfg, config_path, args, &mut stdout, &mut stderr)
 }
 
 /// Runs the groundcover unclipping subcommand with an explicit output stream.
@@ -46,6 +47,18 @@ pub fn run_with_output(
     args: &UnclipArgs,
     stdout: &mut dyn Write,
 ) -> io::Result<()> {
-    let config = config::UnclipConfig::get(openmw_cfg, config_path, args)?;
+    let mut stderr = io::stderr().lock();
+    run_with_output_and_prompt(openmw_cfg, config_path, args, stdout, &mut stderr)
+}
+
+pub(crate) fn run_with_output_and_prompt(
+    openmw_cfg: Option<&Path>,
+    config_path: Option<&Path>,
+    args: &UnclipArgs,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> io::Result<()> {
+    let mut stdin = io::stdin().lock();
+    let config = config::UnclipConfig::get(openmw_cfg, config_path, args, &mut stdin, stderr)?;
     app::run(&config, stdout)
 }
