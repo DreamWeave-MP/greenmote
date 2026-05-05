@@ -288,7 +288,7 @@ fn validate_auto_enable(
     config: &GroundcoverConfig,
     _enablement: auto_enable::OutputEnablement,
 ) -> io::Result<()> {
-    if config.auto_enable {
+    if config.auto_enable && !config.dry_run {
         auto_enable::validate_output_directory(openmw_config, config)?;
     }
 
@@ -444,14 +444,14 @@ fn print_manual_enablement_guidance(
 ) -> io::Result<()> {
     writeln!(
         writer,
-        "Ensure {} is data-local or a configured data= directory in openmw.cfg before enabling generated plugins.",
+        "First make {} visible to OpenMW by setting it as data-local or adding it as data= in openmw.cfg.",
         config.output_directory.display()
     )?;
 
     match (enablement.groundcover_enabled, enablement.deleted_enabled) {
         (true, true) => writeln!(
             writer,
-            "Generated plugins are already enabled in openmw.cfg."
+            "Generated plugin entries are already present in openmw.cfg."
         ),
         (false, false) => writeln!(
             writer,

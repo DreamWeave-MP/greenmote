@@ -231,7 +231,7 @@ impl GreenmoteApp {
             ConvertOutputDirectorySource::WorkingDirectoryFallback => {
                 output_path_frame(ui, &self.settings.draft.output_directory);
                 ui.label(
-                    "OpenMW has no data-local setting, so Greenmote will write to the folder it was launched from.",
+                    "OpenMW has no data-local setting, so Greenmote will write to the current working directory shown above. OpenMW can only load the generated files if this folder is configured as data-local or data=.",
                 );
             }
         }
