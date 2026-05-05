@@ -168,9 +168,46 @@ fn manual_guidance_reports_already_enabled_outputs() {
 
     let stdout = String::from_utf8(stdout).unwrap();
     assert!(stdout.contains("Generated plugin entries are already present in openmw.cfg."));
+    assert!(stdout.contains(
+        "Output directory is already visible to OpenMW; no data-local or data= change is needed."
+    ));
+    assert!(!stdout.contains("First make"));
+    assert!(!stdout.contains("Add groundcover.omwaddon"));
+}
+
+#[test]
+fn manual_guidance_warns_when_output_is_not_visible() {
+    let config_dir = TempDir::new("manual-invisible-config");
+    let data_dir = TempDir::new("manual-invisible-data");
+    let output_dir = TempDir::new("manual-invisible-output");
+    write_openmw_cfg_with_outputs(
+        config_dir.path(),
+        data_dir.path(),
+        output_dir.path(),
+        true,
+        true,
+    );
+    write_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/grass.nif", b"mesh");
+    let invisible_output = TempDir::new("manual-invisible-target");
+    let mut args = args_for(config_dir.path());
+    args.output = Some(invisible_output.path().to_owned());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    greenmote::groundcover::run_with_output(
+        Some(&openmw_cfg(config_dir.path())),
+        None,
+        args,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let stdout = String::from_utf8(stdout).unwrap();
     assert!(stdout.contains("First make"));
     assert!(stdout.contains("visible to OpenMW"));
-    assert!(!stdout.contains("Add groundcover.omwaddon"));
+    assert!(stdout.contains("Generated plugin entries are already present in openmw.cfg."));
 }
 
 #[test]
@@ -200,7 +237,10 @@ fn manual_guidance_reports_only_missing_deleted_output() {
     .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
-    assert!(stdout.contains("First make"));
+    assert!(stdout.contains(
+        "Output directory is already visible to OpenMW; no data-local or data= change is needed."
+    ));
+    assert!(!stdout.contains("First make"));
     assert!(stdout.contains("Add deleted_groundcover.omwaddon as content= in openmw.cfg."));
     assert!(!stdout.contains("groundcover.omwaddon as groundcover="));
 }
@@ -232,7 +272,10 @@ fn manual_guidance_reports_only_missing_groundcover_output() {
     .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
-    assert!(stdout.contains("First make"));
+    assert!(stdout.contains(
+        "Output directory is already visible to OpenMW; no data-local or data= change is needed."
+    ));
+    assert!(!stdout.contains("First make"));
     assert!(stdout.contains("Add groundcover.omwaddon as groundcover= in openmw.cfg."));
     assert!(!stdout.contains("deleted_groundcover.omwaddon as content="));
 }

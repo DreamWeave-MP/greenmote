@@ -100,7 +100,10 @@ fn backup_openmw_cfg(openmw_cfg: &Path) -> io::Result<PathBuf> {
     Ok(backup_path)
 }
 
-fn output_directory_is_visible(config: &OpenMWConfiguration, output_directory: &Path) -> bool {
+pub(crate) fn output_directory_is_visible(
+    config: &OpenMWConfiguration,
+    output_directory: &Path,
+) -> bool {
     config
         .data_local()
         .is_some_and(|data_local| paths_equal(data_local.parsed(), output_directory))

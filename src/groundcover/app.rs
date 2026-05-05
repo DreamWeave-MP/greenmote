@@ -163,7 +163,16 @@ fn run_loaded_config(
         cancellation,
     })?;
 
-    print_success(stdout, config, &log_path, copied_meshes, initial_enablement)?;
+    let output_directory_visible =
+        auto_enable::output_directory_is_visible(&openmw_config, &config.output_directory);
+    print_success(
+        stdout,
+        config,
+        &log_path,
+        copied_meshes,
+        initial_enablement,
+        output_directory_visible,
+    )?;
 
     Ok(())
 }
@@ -384,6 +393,7 @@ fn print_success(
     log_path: &Path,
     copied_meshes: usize,
     enablement: auto_enable::OutputEnablement,
+    output_directory_visible: bool,
 ) -> io::Result<()> {
     writeln!(
         writer,
@@ -395,7 +405,7 @@ fn print_success(
     writeln!(writer, "Copied {copied_meshes} meshes under Meshes/grass")?;
     writeln!(writer, "Wrote log to {}", log_path.display())?;
     if !config.auto_enable {
-        print_manual_enablement_guidance(writer, config, enablement)?;
+        print_manual_enablement_guidance(writer, config, enablement, output_directory_visible)?;
     }
 
     Ok(())
@@ -441,12 +451,20 @@ fn print_manual_enablement_guidance(
     writer: &mut dyn Write,
     config: &GroundcoverConfig,
     enablement: auto_enable::OutputEnablement,
+    output_directory_visible: bool,
 ) -> io::Result<()> {
-    writeln!(
-        writer,
-        "First make {} visible to OpenMW by setting it as data-local or adding it as data= in openmw.cfg.",
-        config.output_directory.display()
-    )?;
+    if output_directory_visible {
+        writeln!(
+            writer,
+            "Output directory is already visible to OpenMW; no data-local or data= change is needed."
+        )?;
+    } else {
+        writeln!(
+            writer,
+            "First make {} visible to OpenMW by setting it as data-local or adding it as data= in openmw.cfg.",
+            config.output_directory.display()
+        )?;
+    }
 
     match (enablement.groundcover_enabled, enablement.deleted_enabled) {
         (true, true) => writeln!(
