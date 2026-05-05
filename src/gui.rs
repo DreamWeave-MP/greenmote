@@ -81,13 +81,17 @@ impl GreenmoteApp {
     fn show_active_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         match self.screen {
             Screen::Convert => self.show_convert_screen(ui, ctx),
-            Screen::Settings => self.show_settings_screen(ui),
+            Screen::Settings => self.show_settings_screen(ui, ctx),
         }
     }
 
     fn request_screen(&mut self, screen: Screen) {
         if self.screen == screen {
             return;
+        }
+
+        if self.screen == Screen::Settings {
+            self.settings.commit_active_list_edit();
         }
 
         if self.settings.is_dirty() {
