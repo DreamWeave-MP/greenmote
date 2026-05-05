@@ -224,9 +224,9 @@ impl GreenmoteApp {
     }
 
     fn show_openmw_config_prompt(&mut self, ctx: &egui::Context) {
-        let Some(error) = self.openmw_config_error.clone() else {
+        if self.openmw_config_error.is_none() {
             return;
-        };
+        }
 
         let default_config = crate::groundcover::openmw::default_user_config_file();
         let mut use_default = false;
@@ -253,8 +253,6 @@ impl GreenmoteApp {
                         );
                     }
                 }
-                ui.add_space(8.0);
-                ui.colored_label(ui.visuals().error_fg_color, error);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     use_default = ui
