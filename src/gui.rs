@@ -117,6 +117,8 @@ impl GreenmoteApp {
             return;
         };
 
+        self.openmw_config_error = None;
+        self.config_recovery_error = None;
         if is_openmw_config_settings_error(&error) {
             self.openmw_config_error = Some(openmw_config_error_message(&error).to_owned());
         } else {
@@ -270,16 +272,14 @@ impl GreenmoteApp {
 
         if use_default {
             match default_config {
-                Ok(path) if self.load_settings_with_openmw_cfg(&path) => {
-                    self.session_openmw_cfg = Some(path);
-                    self.openmw_config_error = None;
-                    self.config_recovery_error = None;
-                }
-                Ok(_) => {
-                    self.openmw_config_error = self
-                        .settings_error()
-                        .map(openmw_config_error_message)
-                        .map(str::to_owned);
+                Ok(path) => {
+                    self.session_openmw_cfg = Some(path.clone());
+                    if self.load_settings_with_openmw_cfg(&path) {
+                        self.openmw_config_error = None;
+                        self.config_recovery_error = None;
+                    } else {
+                        self.record_settings_load_failure();
+                    }
                 }
                 Err(error) => {
                     self.openmw_config_error = Some(format!(

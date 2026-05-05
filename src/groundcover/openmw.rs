@@ -120,12 +120,11 @@ fn prompt_for_default_config_path(
     })
 }
 
-fn no_config_selected_error(default_config_file: &Path, active_command: &str) -> io::Error {
+fn no_config_selected_error(_default_config_file: &Path, active_command: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::NotFound,
         format!(
-            "no OpenMW configuration selected\n\nPass one explicitly:\n\n  greenmote --openmw-cfg {} {active_command}\n\nor place Greenmote where OpenMW-style config discovery can find the desired profile.",
-            default_config_file.display()
+            "no OpenMW configuration selected\n\nPass the OpenMW profile you want explicitly:\n\n  greenmote --openmw-cfg /path/to/openmw.cfg {active_command}\n\nor place Greenmote where OpenMW-style config discovery can find that profile."
         ),
     )
 }
