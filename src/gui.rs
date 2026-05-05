@@ -1,4 +1,7 @@
-use std::{io, path::PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 use eframe::egui;
 
@@ -30,10 +33,10 @@ enum Screen {
     Settings,
 }
 
-#[derive(Clone, Copy)]
 enum PendingNavigation {
     Screen(Screen),
     SettingsTab(SettingsTab),
+    OpenMwConfig(PathBuf),
 }
 
 impl Default for GreenmoteApp {
@@ -146,6 +149,7 @@ impl GreenmoteApp {
         match navigation {
             PendingNavigation::Screen(screen) => self.show_screen(screen),
             PendingNavigation::SettingsTab(tab) => self.settings.select_tab(tab),
+            PendingNavigation::OpenMwConfig(path) => self.apply_selected_openmw_config(&path),
         }
     }
 
@@ -169,7 +173,7 @@ impl GreenmoteApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.label("Settings have unsaved changes.");
-                ui.label("Save them before switching views?");
+                ui.label("Save them before continuing?");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     save = ui.button("Save").clicked();
@@ -234,7 +238,7 @@ impl GreenmoteApp {
 
         let default_config = crate::groundcover::openmw::default_user_config_file();
         let mut use_default = false;
-        let mut open_settings = false;
+        let mut select_config = false;
         let mut close = false;
 
         egui::Window::new("OpenMW config not found")
@@ -265,7 +269,7 @@ impl GreenmoteApp {
                             egui::Button::new("Use default path"),
                         )
                         .clicked();
-                    open_settings = ui.button("Open settings").clicked();
+                    select_config = ui.button("Select OpenMW Config").clicked();
                     close = ui.button("Close").clicked();
                 });
             });
@@ -273,13 +277,7 @@ impl GreenmoteApp {
         if use_default {
             match default_config {
                 Ok(path) => {
-                    self.session_openmw_cfg = Some(path.clone());
-                    if self.load_settings_with_openmw_cfg(&path) {
-                        self.openmw_config_error = None;
-                        self.config_recovery_error = None;
-                    } else {
-                        self.record_settings_load_failure();
-                    }
+                    self.apply_selected_openmw_config(&path);
                 }
                 Err(error) => {
                     self.openmw_config_error = Some(format!(
@@ -287,13 +285,42 @@ impl GreenmoteApp {
                     ));
                 }
             }
-        } else if open_settings {
-            self.openmw_config_error = None;
-            self.show_screen(Screen::Settings);
+        } else if select_config {
+            self.request_openmw_config_selection();
         } else if close {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
+
+    fn request_openmw_config_selection(&mut self) {
+        let Some(path) = select_openmw_config_file() else {
+            return;
+        };
+
+        if self.settings.is_dirty() {
+            self.queue_pending_navigation(PendingNavigation::OpenMwConfig(path));
+        } else {
+            self.apply_selected_openmw_config(&path);
+        }
+    }
+
+    fn apply_selected_openmw_config(&mut self, path: &Path) {
+        self.session_openmw_cfg = Some(path.to_owned());
+        if self.load_settings_with_openmw_cfg(path) {
+            self.openmw_config_error = None;
+            self.config_recovery_error = None;
+        } else {
+            self.record_settings_load_failure();
+        }
+    }
+}
+
+fn select_openmw_config_file() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Select OpenMW config")
+        .add_filter("OpenMW config", &["cfg"])
+        .set_file_name("openmw.cfg")
+        .pick_file()
 }
 
 fn is_openmw_config_settings_error(error: &str) -> bool {
