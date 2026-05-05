@@ -286,9 +286,9 @@ fn cancelled_error() -> io::Error {
 fn validate_auto_enable(
     openmw_config: &openmw_config::OpenMWConfiguration,
     config: &GroundcoverConfig,
-    enablement: auto_enable::OutputEnablement,
+    _enablement: auto_enable::OutputEnablement,
 ) -> io::Result<()> {
-    if config.auto_enable && enablement.has_missing_outputs() {
+    if config.auto_enable {
         auto_enable::validate_output_directory(openmw_config, config)?;
     }
 
@@ -395,7 +395,7 @@ fn print_success(
     writeln!(writer, "Copied {copied_meshes} meshes under Meshes/grass")?;
     writeln!(writer, "Wrote log to {}", log_path.display())?;
     if !config.auto_enable {
-        print_manual_enablement_guidance(writer, enablement)?;
+        print_manual_enablement_guidance(writer, config, enablement)?;
     }
 
     Ok(())
@@ -439,8 +439,15 @@ fn print_auto_enable_result(
 
 fn print_manual_enablement_guidance(
     writer: &mut dyn Write,
+    config: &GroundcoverConfig,
     enablement: auto_enable::OutputEnablement,
 ) -> io::Result<()> {
+    writeln!(
+        writer,
+        "Ensure {} is data-local or a configured data= directory in openmw.cfg before enabling generated plugins.",
+        config.output_directory.display()
+    )?;
+
     match (enablement.groundcover_enabled, enablement.deleted_enabled) {
         (true, true) => writeln!(
             writer,

@@ -11,6 +11,7 @@ use crate::{
 use super::to_io_error;
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 // Mirrors the public TOML schema. Convert-specific knobs live under `[convert]`; root-level command
 // knobs are not supported because this tool is still wet paint, not a museum.
 pub(super) struct GroundcoverConfigFile {

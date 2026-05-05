@@ -317,7 +317,7 @@ fn generated_outputs_are_not_name_ignored_by_default() {
 }
 
 #[test]
-fn root_convert_keys_are_not_part_of_the_schema() {
+fn root_convert_keys_are_rejected() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
@@ -331,14 +331,9 @@ dry_run = true
     .unwrap();
     let args = GroundcoverArgs::parse_from(["convert"]);
 
-    let config = get_config(args, &dir, dir.path.join("data-local")).unwrap();
+    let result = get_config(args, &dir, dir.path.join("data-local"));
 
-    assert_eq!(
-        crate::groundcover::GROUNDCOVER_PLUGIN_NAME,
-        "groundcover.omwaddon"
-    );
-    assert!(!config.dry_run);
-    assert!(!config.is_ignored_plugin_name("LegacyGenerated.omwaddon"));
+    assert!(result.is_err());
 }
 
 #[test]

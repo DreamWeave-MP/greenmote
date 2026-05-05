@@ -168,6 +168,8 @@ fn manual_guidance_reports_already_enabled_outputs() {
 
     let stdout = String::from_utf8(stdout).unwrap();
     assert!(stdout.contains("Generated plugins are already enabled in openmw.cfg."));
+    assert!(stdout.contains("Ensure"));
+    assert!(stdout.contains("is data-local or a configured data= directory"));
     assert!(!stdout.contains("Add groundcover.omwaddon"));
 }
 
@@ -198,6 +200,7 @@ fn manual_guidance_reports_only_missing_deleted_output() {
     .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
+    assert!(stdout.contains("Ensure"));
     assert!(stdout.contains("Add deleted_groundcover.omwaddon as content= in openmw.cfg."));
     assert!(!stdout.contains("groundcover.omwaddon as groundcover="));
 }
@@ -229,6 +232,7 @@ fn manual_guidance_reports_only_missing_groundcover_output() {
     .unwrap();
 
     let stdout = String::from_utf8(stdout).unwrap();
+    assert!(stdout.contains("Ensure"));
     assert!(stdout.contains("Add groundcover.omwaddon as groundcover= in openmw.cfg."));
     assert!(!stdout.contains("deleted_groundcover.omwaddon as content="));
 }
@@ -354,7 +358,7 @@ fn auto_enable_adds_only_missing_groundcover_output() {
 }
 
 #[test]
-fn auto_enable_allows_invisible_output_when_outputs_are_already_enabled() {
+fn auto_enable_rejects_invisible_output_even_when_outputs_are_already_enabled() {
     let config_dir = TempDir::new("auto-invisible-enabled-config");
     let data_dir = TempDir::new("auto-invisible-enabled-data");
     let output_dir = TempDir::new("auto-invisible-enabled-output");
@@ -374,15 +378,15 @@ fn auto_enable_allows_invisible_output_when_outputs_are_already_enabled() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    greenmote::groundcover::run_with_output(
+    let result = greenmote::groundcover::run_with_output(
         Some(&openmw_cfg(config_dir.path())),
         None,
         args,
         &mut stdout,
         &mut stderr,
-    )
-    .unwrap();
+    );
 
+    assert!(result.is_err());
     assert!(!config_dir.path().join("openmw.cfg.greenmote.bak").exists());
 }
 
