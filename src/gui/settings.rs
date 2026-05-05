@@ -213,6 +213,27 @@ impl GreenmoteApp {
         self.load_settings_from_disk("Loaded")
     }
 
+    pub(super) fn load_settings_with_openmw_cfg(&mut self, openmw_cfg: &Path) -> bool {
+        match groundcover::load_config_for_edit(Some(openmw_cfg), None) {
+            Ok((path, config)) => {
+                self.settings.replace_saved_config(
+                    path.clone(),
+                    &config,
+                    format!("Loaded {}", path.display()),
+                );
+                self.convert
+                    .sync_run_options(ConvertRunOptions::from_config(&config));
+                true
+            }
+            Err(error) => {
+                self.settings.loaded = false;
+                self.settings.status.clear();
+                self.settings.error = Some(format!("Failed to load settings: {error}"));
+                false
+            }
+        }
+    }
+
     pub(super) fn regenerate_settings(&mut self) -> bool {
         match groundcover::regenerate_config_for_edit(None, None) {
             Ok((path, config)) => {

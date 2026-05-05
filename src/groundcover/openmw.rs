@@ -125,7 +125,7 @@ fn no_config_selected_error(default_config_file: &Path) -> io::Error {
     )
 }
 
-fn default_user_config_file() -> io::Result<PathBuf> {
+pub(crate) fn default_user_config_file() -> io::Result<PathBuf> {
     openmw_config::try_default_config_path()
         .map(|path| path.join("openmw.cfg"))
         .map_err(|error| {
