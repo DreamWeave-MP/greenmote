@@ -8,7 +8,6 @@ use super::{ConvertRunOptions, GreenmoteApp, PendingNavigation};
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
 const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
-const SETTINGS_LIST_CONTROLS_WIDTH: f32 = 160.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsTab {
@@ -288,9 +287,6 @@ impl GreenmoteApp {
         ui.allocate_ui_with_layout(available, egui::Layout::top_down(egui::Align::Min), |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .scroll_bar_visibility(
-                    egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                )
                 .show(ui, |ui| {
                     ui.set_min_width(560.0);
                     match self.settings.selected_tab {
@@ -700,31 +696,15 @@ fn setting_editable_list(
 
             ui.allocate_ui_with_layout(
                 egui::vec2(content_width, ui.spacing().interact_size.y),
-                egui::Layout::left_to_right(egui::Align::Center),
+                egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
-                    let leading_space = (content_width - SETTINGS_LIST_CONTROLS_WIDTH).max(0.0);
-                    ui.add_space(leading_space);
-
-                    let can_move_up = *control.viewport_start > 0;
-                    if ui
-                        .add_enabled(can_move_up, egui::Button::new("Up"))
-                        .on_hover_text("Show previous items")
-                        .clicked()
-                    {
-                        *control.viewport_start -= 1;
+                    if ui.small_button("+").clicked() {
+                        if *control.add_popup != Some(kind) {
+                            control.add_text.clear();
+                        }
+                        *control.add_popup = Some(kind);
+                        *control.focus_add_text = true;
                     }
-
-                    let can_move_down =
-                        *control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS < items.len();
-                    if ui
-                        .add_enabled(can_move_down, egui::Button::new("Down"))
-                        .on_hover_text("Show next items")
-                        .clicked()
-                    {
-                        *control.viewport_start += 1;
-                    }
-
-                    ui.add_space(8.0);
 
                     let can_remove = control
                         .selected_item
@@ -759,12 +739,25 @@ fn setting_editable_list(
                         }
                     }
 
-                    if ui.small_button("+").clicked() {
-                        if *control.add_popup != Some(kind) {
-                            control.add_text.clear();
-                        }
-                        *control.add_popup = Some(kind);
-                        *control.focus_add_text = true;
+                    ui.add_space(8.0);
+
+                    let can_move_down =
+                        *control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS < items.len();
+                    if ui
+                        .add_enabled(can_move_down, egui::Button::new("Down"))
+                        .on_hover_text("Show next items")
+                        .clicked()
+                    {
+                        *control.viewport_start += 1;
+                    }
+
+                    let can_move_up = *control.viewport_start > 0;
+                    if ui
+                        .add_enabled(can_move_up, egui::Button::new("Up"))
+                        .on_hover_text("Show previous items")
+                        .clicked()
+                    {
+                        *control.viewport_start -= 1;
                     }
                 },
             );
