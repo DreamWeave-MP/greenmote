@@ -6,6 +6,8 @@ use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectory
 
 use super::{ConvertRunOptions, GreenmoteApp, PendingNavigation};
 
+const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsTab {
     General,
@@ -30,6 +32,9 @@ pub(super) struct SettingsUiState {
     add_popup: Option<SettingsListKind>,
     add_text: String,
     focus_add_text: bool,
+    grass_ids_viewport_start: usize,
+    exclude_viewport_start: usize,
+    ignored_plugins_viewport_start: usize,
 }
 
 #[derive(Default)]
@@ -70,6 +75,7 @@ struct EditableListControl<'a> {
     add_text: &'a mut String,
     focus_add_text: &'a mut bool,
     dirty: &'a mut bool,
+    viewport_start: &'a mut usize,
 }
 
 impl Default for SettingsUiState {
@@ -91,6 +97,9 @@ impl Default for SettingsUiState {
             add_popup: None,
             add_text: String::new(),
             focus_add_text: false,
+            grass_ids_viewport_start: 0,
+            exclude_viewport_start: 0,
+            ignored_plugins_viewport_start: 0,
         }
     }
 }
@@ -177,6 +186,25 @@ impl SettingsUiState {
             Some(_) => {}
         }
 
+        let items_len = self.draft.items_mut(item.kind).len();
+        if let Some(selected_index) = self.selected_list_item.and_then(|selected| {
+            (selected.kind == item.kind && selected.index < items_len).then_some(selected.index)
+        }) {
+            ensure_settings_list_item_visible(
+                self.viewport_start_mut(item.kind),
+                selected_index,
+                items_len,
+                SETTINGS_LIST_VISIBLE_ROWS,
+            );
+        } else {
+            let viewport_start = self.viewport_start_mut(item.kind);
+            *viewport_start = clamp_settings_list_viewport_start(
+                *viewport_start,
+                items_len,
+                SETTINGS_LIST_VISIBLE_ROWS,
+            );
+        }
+
         self.editing_list_item = None;
         self.queued_edit_list_item = None;
         self.inline_edit_text.clear();
@@ -202,6 +230,9 @@ impl SettingsUiState {
         self.add_popup = None;
         self.add_text.clear();
         self.focus_add_text = false;
+        self.grass_ids_viewport_start = 0;
+        self.exclude_viewport_start = 0;
+        self.ignored_plugins_viewport_start = 0;
     }
 }
 
@@ -253,7 +284,7 @@ impl GreenmoteApp {
         let available = ui.available_size();
 
         ui.allocate_ui_with_layout(available, egui::Layout::top_down(egui::Align::Min), |ui| {
-            egui::ScrollArea::both()
+            egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.set_min_width(560.0);
@@ -312,6 +343,7 @@ impl GreenmoteApp {
             add_text: &mut self.settings.add_text,
             focus_add_text: &mut self.settings.focus_add_text,
             dirty: &mut self.settings.dirty,
+            viewport_start: &mut self.settings.grass_ids_viewport_start,
         };
 
         setting_editable_list(
@@ -322,6 +354,7 @@ impl GreenmoteApp {
             &mut self.settings.draft.grass_ids,
             &mut list_control,
         );
+        list_control.viewport_start = &mut self.settings.exclude_viewport_start;
         setting_editable_list(
             ui,
             "Exclude patterns",
@@ -330,6 +363,7 @@ impl GreenmoteApp {
             &mut self.settings.draft.exclude,
             &mut list_control,
         );
+        list_control.viewport_start = &mut self.settings.ignored_plugins_viewport_start;
         setting_editable_list(
             ui,
             "Ignored plugins",
@@ -393,10 +427,19 @@ impl GreenmoteApp {
             return;
         };
 
-        let items = self.settings.draft.items_mut(kind);
-        items.push(item);
-        let index = items.len() - 1;
+        let items_len = {
+            let items = self.settings.draft.items_mut(kind);
+            items.push(item);
+            items.len()
+        };
+        let index = items_len - 1;
         self.settings.selected_list_item = Some(SettingsListItem { kind, index });
+        ensure_settings_list_item_visible(
+            self.settings.viewport_start_mut(kind),
+            index,
+            items_len,
+            SETTINGS_LIST_VISIBLE_ROWS,
+        );
         self.settings.editing_list_item = None;
         self.settings.inline_edit_text.clear();
         self.settings.inline_edit_original_text.clear();
@@ -606,6 +649,16 @@ impl SettingsDraft {
     }
 }
 
+impl SettingsUiState {
+    fn viewport_start_mut(&mut self, kind: SettingsListKind) -> &mut usize {
+        match kind {
+            SettingsListKind::GrassIds => &mut self.grass_ids_viewport_start,
+            SettingsListKind::Exclude => &mut self.exclude_viewport_start,
+            SettingsListKind::IgnoredPlugins => &mut self.ignored_plugins_viewport_start,
+        }
+    }
+}
+
 fn setting_editable_list(
     ui: &mut egui::Ui,
     label: &str,
@@ -618,18 +671,25 @@ fn setting_editable_list(
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .max_height(120.0)
-                .show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.set_min_height(92.0);
-                    if items.is_empty() {
-                        ui.weak(empty_message);
-                    } else {
-                        show_list_items(ui, kind, items, control);
-                    }
-                });
+            ui.set_min_width(ui.available_width());
+            *control.viewport_start = clamp_settings_list_viewport_start(
+                *control.viewport_start,
+                items.len(),
+                SETTINGS_LIST_VISIBLE_ROWS,
+            );
+
+            if items.is_empty() {
+                ui.weak(empty_message);
+            } else {
+                show_list_items(ui, kind, items, control);
+            }
+
+            let is_long = items.len() > SETTINGS_LIST_VISIBLE_ROWS;
+            if is_long {
+                let start = *control.viewport_start + 1;
+                let end = (*control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS).min(items.len());
+                ui.weak(format!("Showing {start}-{end} of {}", items.len()));
+            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("+").clicked() {
@@ -655,6 +715,41 @@ fn setting_editable_list(
                     *control.focus_inline_edit = false;
                     *control.queued_edit_item = None;
                     *control.dirty = true;
+                    if let Some(selected) = (*control.selected_item).and_then(|item| {
+                        (item.kind == kind && item.index < items.len()).then_some(item.index)
+                    }) {
+                        ensure_settings_list_item_visible(
+                            control.viewport_start,
+                            selected,
+                            items.len(),
+                            SETTINGS_LIST_VISIBLE_ROWS,
+                        );
+                    } else {
+                        *control.viewport_start = clamp_settings_list_viewport_start(
+                            *control.viewport_start,
+                            items.len(),
+                            SETTINGS_LIST_VISIBLE_ROWS,
+                        );
+                    }
+                }
+
+                ui.add_space(8.0);
+
+                let can_move_down =
+                    *control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS < items.len();
+                if ui
+                    .add_enabled(can_move_down, egui::Button::new("▼"))
+                    .clicked()
+                {
+                    *control.viewport_start += 1;
+                }
+
+                let can_move_up = *control.viewport_start > 0;
+                if ui
+                    .add_enabled(can_move_up, egui::Button::new("▲"))
+                    .clicked()
+                {
+                    *control.viewport_start -= 1;
                 }
             });
         });
@@ -667,8 +762,8 @@ fn show_list_items(
     items: &mut Vec<String>,
     control: &mut EditableListControl<'_>,
 ) {
-    let mut index = 0;
-    while index < items.len() {
+    let mut index = *control.viewport_start;
+    while index < items.len() && index < *control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS {
         let item = SettingsListItem { kind, index };
         if control.editing_item.is_none() && *control.queued_edit_item == Some(item) {
             *control.selected_item = Some(item);
@@ -681,6 +776,21 @@ fn show_list_items(
 
         if *control.editing_item == Some(item) {
             if show_inline_list_editor(ui, items, item, control) {
+                *control.viewport_start = clamp_settings_list_viewport_start(
+                    *control.viewport_start,
+                    items.len(),
+                    SETTINGS_LIST_VISIBLE_ROWS,
+                );
+                if let Some(selected) = (*control.selected_item).and_then(|item| {
+                    (item.kind == kind && item.index < items.len()).then_some(item.index)
+                }) {
+                    ensure_settings_list_item_visible(
+                        control.viewport_start,
+                        selected,
+                        items.len(),
+                        SETTINGS_LIST_VISIBLE_ROWS,
+                    );
+                }
                 continue;
             }
         } else {
@@ -707,6 +817,39 @@ fn show_list_items(
         }
         index += 1;
     }
+}
+
+fn clamp_settings_list_viewport_start(
+    viewport_start: usize,
+    item_count: usize,
+    visible_rows: usize,
+) -> usize {
+    if visible_rows == 0 || item_count <= visible_rows {
+        0
+    } else {
+        viewport_start.min(item_count - visible_rows)
+    }
+}
+
+fn ensure_settings_list_item_visible(
+    viewport_start: &mut usize,
+    item_index: usize,
+    item_count: usize,
+    visible_rows: usize,
+) {
+    *viewport_start = clamp_settings_list_viewport_start(*viewport_start, item_count, visible_rows);
+
+    if visible_rows == 0 || item_count == 0 || item_index >= item_count {
+        return;
+    }
+
+    if item_index < *viewport_start {
+        *viewport_start = item_index;
+    } else if item_index >= *viewport_start + visible_rows {
+        *viewport_start = item_index + 1 - visible_rows;
+    }
+
+    *viewport_start = clamp_settings_list_viewport_start(*viewport_start, item_count, visible_rows);
 }
 
 fn show_inline_list_editor(
@@ -849,8 +992,9 @@ fn output_path_frame(ui: &mut egui::Ui, path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{
-        SettingsListItem, SettingsListKind, SettingsUiState, commit_inline_list_edit,
-        list_item_from_text, remove_selected_list_item,
+        SettingsListItem, SettingsListKind, SettingsUiState, clamp_settings_list_viewport_start,
+        commit_inline_list_edit, ensure_settings_list_item_visible, list_item_from_text,
+        remove_selected_list_item,
     };
 
     #[test]
@@ -940,5 +1084,26 @@ mod tests {
         settings.inline_edit_text = "Old.esp".to_owned();
 
         assert!(!settings.is_dirty());
+    }
+
+    #[test]
+    fn list_viewport_clamps_to_valid_start() {
+        assert_eq!(clamp_settings_list_viewport_start(4, 3, 6), 0);
+        assert_eq!(clamp_settings_list_viewport_start(99, 10, 6), 4);
+        assert_eq!(clamp_settings_list_viewport_start(2, 10, 6), 2);
+    }
+
+    #[test]
+    fn list_viewport_ensure_visible_preserves_absolute_indices() {
+        let mut viewport_start = 0;
+
+        ensure_settings_list_item_visible(&mut viewport_start, 8, 10, 6);
+        assert_eq!(viewport_start, 3);
+
+        ensure_settings_list_item_visible(&mut viewport_start, 2, 10, 6);
+        assert_eq!(viewport_start, 2);
+
+        ensure_settings_list_item_visible(&mut viewport_start, 5, 10, 6);
+        assert_eq!(viewport_start, 2);
     }
 }
