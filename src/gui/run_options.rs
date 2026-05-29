@@ -1,4 +1,9 @@
-use crate::groundcover::{self, GroundcoverConfig};
+use std::path::PathBuf;
+
+use crate::{
+    groundcover::{self, GroundcoverConfig},
+    unclip::UnclipArgs,
+};
 
 use super::GreenmoteApp;
 
@@ -7,6 +12,13 @@ pub(super) struct ConvertRunOptions {
     pub(super) dry_run: bool,
     pub(super) debug: bool,
     pub(super) auto_enable: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct UnclipRunOptions {
+    pub(super) plugin: String,
+    pub(super) instances: bool,
+    pub(super) write: bool,
 }
 
 impl ConvertRunOptions {
@@ -53,6 +65,46 @@ impl ConvertRunOptions {
     #[must_use]
     pub(super) fn can_edit_auto_enable(self) -> bool {
         !self.dry_run
+    }
+}
+
+impl UnclipRunOptions {
+    #[must_use]
+    pub(super) fn from_config(config: &GroundcoverConfig) -> Self {
+        Self {
+            plugin: config
+                .unclip
+                .plugin
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            instances: config.unclip.instances.unwrap_or(false),
+            write: false,
+        }
+    }
+
+    pub(super) fn to_args(&self) -> Result<UnclipArgs, String> {
+        let plugin = self.plugin.trim();
+        if plugin.is_empty() {
+            return Err("Choose a target plugin before running Unclip.".to_owned());
+        }
+
+        Ok(UnclipArgs {
+            plugin: Some(PathBuf::from(plugin)),
+            instances: Some(self.instances),
+            structured: Some(false),
+            write: Some(self.write),
+            write_actions: Vec::new(),
+            contact_epsilon: None,
+            origin_epsilon: None,
+            relocation_step: None,
+            relocation_steps: None,
+            orientation_epsilon: None,
+            include_grass_ids: Vec::new(),
+            exclude_grass_ids: Vec::new(),
+            include_occluder_ids: Vec::new(),
+            exclude_occluder_ids: Vec::new(),
+        })
     }
 }
 
@@ -103,7 +155,7 @@ impl GreenmoteApp {
 
 #[cfg(test)]
 mod tests {
-    use super::ConvertRunOptions;
+    use super::{ConvertRunOptions, UnclipRunOptions};
     use crate::groundcover::GroundcoverConfig;
 
     #[test]
@@ -182,5 +234,41 @@ mod tests {
             }
             .can_edit_auto_enable()
         );
+    }
+
+    #[test]
+    fn unclip_run_options_prefill_visible_plugin_and_instances_only() {
+        let mut config = GroundcoverConfig::default();
+        config.unclip.plugin = Some("groundcover.omwaddon".into());
+        config.unclip.instances = Some(true);
+        config.unclip.write = Some(true);
+
+        let options = UnclipRunOptions::from_config(&config);
+
+        assert_eq!(options.plugin, "groundcover.omwaddon");
+        assert!(options.instances);
+        assert!(!options.write);
+    }
+
+    #[test]
+    fn unclip_run_options_build_explicit_safe_args() {
+        let options = UnclipRunOptions {
+            plugin: " groundcover.omwaddon ".to_owned(),
+            instances: true,
+            write: false,
+        };
+
+        let args = options.to_args().unwrap();
+
+        assert_eq!(args.plugin, Some("groundcover.omwaddon".into()));
+        assert_eq!(args.instances, Some(true));
+        assert_eq!(args.structured, Some(false));
+        assert_eq!(args.write, Some(false));
+        assert!(args.write_actions.is_empty());
+    }
+
+    #[test]
+    fn unclip_run_options_reject_empty_plugin() {
+        assert!(UnclipRunOptions::default().to_args().is_err());
     }
 }

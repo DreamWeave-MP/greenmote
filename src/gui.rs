@@ -10,7 +10,7 @@ mod run_options;
 mod settings;
 
 use convert::ConvertUiState;
-use run_options::ConvertRunOptions;
+use run_options::{ConvertRunOptions, UnclipRunOptions};
 use settings::SettingsUiState;
 
 struct GreenmoteApp {

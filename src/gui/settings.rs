@@ -6,7 +6,7 @@ use regex::RegexBuilder;
 use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectorySource};
 use crate::unclip::WriteActionArg;
 
-use super::{ConvertRunOptions, GreenmoteApp};
+use super::{ConvertRunOptions, GreenmoteApp, UnclipRunOptions};
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
 const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
@@ -140,8 +140,21 @@ impl SettingsUiState {
         self.draft.run_options()
     }
 
+    pub(super) fn unclip_write_action_names(&self) -> Vec<&'static str> {
+        self.draft.unclip_policy.write_action_names()
+    }
+
+    pub(super) fn unclip_filter_counts(&self) -> (usize, usize, usize, usize) {
+        self.draft.unclip_policy.filter_counts()
+    }
+
     pub(super) fn config_path(&self) -> Option<&Path> {
         self.config_path.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(super) fn clear_unclip_write_actions_for_test(&mut self) {
+        self.draft.unclip_policy.write_actions = [false; UNCLIP_WRITE_ACTION_COUNT];
     }
 
     pub(super) fn output_directory(&self) -> &Path {
@@ -338,7 +351,7 @@ impl GreenmoteApp {
             self.request_openmw_config_selection();
         }
         if !can_select_config {
-            ui.label("OpenMW config cannot be changed while conversion is running.");
+            ui.label("OpenMW config cannot be changed while a run is active.");
         }
 
         ui.add_space(8.0);
@@ -662,6 +675,8 @@ impl GreenmoteApp {
                 );
                 self.convert
                     .sync_run_options(ConvertRunOptions::from_config(&config));
+                self.convert
+                    .sync_unclip_run_options(UnclipRunOptions::from_config(&config));
                 true
             }
             Err(error) => {
@@ -683,6 +698,8 @@ impl GreenmoteApp {
                 );
                 self.convert
                     .sync_run_options(ConvertRunOptions::from_config(&config));
+                self.convert
+                    .sync_unclip_run_options(UnclipRunOptions::from_config(&config));
                 true
             }
             Err(error) => {
@@ -708,6 +725,8 @@ impl GreenmoteApp {
                 );
                 self.convert
                     .sync_run_options(ConvertRunOptions::from_config(&config));
+                self.convert
+                    .sync_unclip_run_options(UnclipRunOptions::from_config(&config));
                 true
             }
             Err(error) => {
@@ -744,6 +763,7 @@ impl GreenmoteApp {
                 );
                 self.convert
                     .sync_saved_run_options_from_settings(ConvertRunOptions::from_config(&config));
+                self.convert.reset_unclip_write_after_settings_save();
                 true
             }
             Err(error) => {
@@ -914,6 +934,32 @@ impl UnclipPolicyDraft {
             actions.push(WriteActionArg::Orient);
         }
         actions
+    }
+
+    fn write_action_names(&self) -> Vec<&'static str> {
+        let mut actions = Vec::new();
+        if self.write_actions[UNCLIP_TERRAIN_Z_INDEX] {
+            actions.push("terrain-z");
+        }
+        if self.write_actions[UNCLIP_STATIC_DELETE_INDEX] {
+            actions.push("static-delete");
+        }
+        if self.write_actions[UNCLIP_STATIC_MOVE_INDEX] {
+            actions.push("static-move");
+        }
+        if self.write_actions[UNCLIP_ORIENT_INDEX] {
+            actions.push("orient");
+        }
+        actions
+    }
+
+    fn filter_counts(&self) -> (usize, usize, usize, usize) {
+        (
+            self.include_grass_ids.len(),
+            self.exclude_grass_ids.len(),
+            self.include_occluder_ids.len(),
+            self.exclude_occluder_ids.len(),
+        )
     }
 }
 

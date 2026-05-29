@@ -2,9 +2,12 @@ use std::{ffi::OsString, io, path::Path, process::Command, sync::mpsc, thread};
 
 use eframe::egui;
 
-use crate::groundcover::{self, CancellationToken, ConversionEvent, ConversionPhase};
+use crate::{
+    groundcover::{self, CancellationToken, ConversionEvent, ConversionPhase},
+    unclip,
+};
 
-use super::{ConvertRunOptions, GreenmoteApp};
+use super::{ConvertRunOptions, GreenmoteApp, UnclipRunOptions};
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
 const MIN_WIDGET_SIZE: f32 = 1.0;
@@ -17,19 +20,34 @@ pub(super) struct ConvertUiState {
     cancelling: bool,
     progress: Option<ProgressState>,
     phase_reached: Option<ConversionPhase>,
+    active_worker: Option<WorkerKind>,
     event_receiver: Option<mpsc::Receiver<GuiEvent>>,
     cancellation: Option<CancellationToken>,
     run_options: ConvertRunOptions,
     saved_run_options: ConvertRunOptions,
+    unclip: UnclipUiState,
 }
 
 enum GuiEvent {
     Output(String),
     Progress(ConversionEvent),
     Finished {
+        worker: WorkerKind,
         error: Option<String>,
         cancelled: bool,
     },
+}
+
+#[derive(Clone, Copy)]
+enum WorkerKind {
+    Convert,
+    Unclip,
+}
+
+#[derive(Default)]
+struct UnclipUiState {
+    run_options: UnclipRunOptions,
+    pending_write_confirmation: bool,
 }
 
 #[derive(Clone)]
@@ -98,6 +116,11 @@ impl ConvertUiState {
         self.saved_run_options = options;
     }
 
+    pub(super) fn sync_unclip_run_options(&mut self, options: UnclipRunOptions) {
+        self.unclip.run_options = options;
+        self.unclip.pending_write_confirmation = false;
+    }
+
     pub(super) fn current_run_options(&self) -> ConvertRunOptions {
         self.run_options
     }
@@ -128,6 +151,11 @@ impl ConvertUiState {
         self.saved_run_options = options;
     }
 
+    pub(super) fn reset_unclip_write_after_settings_save(&mut self) {
+        self.unclip.run_options.write = false;
+        self.unclip.pending_write_confirmation = false;
+    }
+
     fn run_options_differ_from_saved(&self) -> bool {
         self.run_options != self.saved_run_options
     }
@@ -135,7 +163,7 @@ impl ConvertUiState {
 
 impl GreenmoteApp {
     pub(super) fn show_convert_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Convert");
+        ui.heading("Greenmote");
         if self.convert.progress.is_some() {
             self.show_progress(ui);
         } else {
@@ -143,28 +171,15 @@ impl GreenmoteApp {
         }
         ui.add_space(8.0);
 
-        self.show_convert_run_options(ui);
-
-        ui.add_space(8.0);
-        let can_start = !self.convert.running
-            && !self.settings.is_dirty()
-            && self.config_recovery_error.is_none()
-            && self.openmw_config_error.is_none();
-        if ui
-            .add_enabled(can_start, egui::Button::new("Start conversion"))
-            .clicked()
-        {
-            self.start_conversion(ctx);
-        }
-        if self.settings.is_dirty() {
-            ui.label("Save Settings changes before converting.");
-        }
-        if self.config_recovery_error.is_some() {
-            ui.label("Regenerate Settings before converting.");
-        }
-        if self.openmw_config_error.is_some() {
-            ui.label("Choose an OpenMW config before converting.");
-        }
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                self.show_convert_panel(ui, ctx);
+            });
+            ui.add_space(8.0);
+            ui.vertical(|ui| {
+                self.show_unclip_panel(ui, ctx);
+            });
+        });
         ui.separator();
 
         egui::TopBottomPanel::bottom("convert_output_actions")
@@ -198,6 +213,70 @@ impl GreenmoteApp {
                     });
             },
         );
+
+        self.show_unclip_write_confirmation(ctx);
+    }
+
+    fn show_convert_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.set_min_width(300.0);
+        ui.heading("Convert");
+        self.show_convert_run_options(ui);
+
+        ui.add_space(8.0);
+        let can_start = self.can_start_worker();
+        if ui
+            .add_enabled(can_start, egui::Button::new("Start conversion"))
+            .clicked()
+        {
+            self.start_conversion(ctx);
+        }
+        self.show_worker_blockers(ui, "converting");
+    }
+
+    fn show_unclip_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.set_min_width(360.0);
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Unclip").strong());
+            ui.add_enabled_ui(!self.convert.running, |ui| {
+                ui.label("Target plugin");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
+                            .desired_width(240.0),
+                    );
+                    if ui.button("Browse...").clicked()
+                        && let Some(path) = select_plugin_file()
+                    {
+                        self.convert.unclip.run_options.plugin = path.display().to_string();
+                    }
+                });
+                ui.checkbox(
+                    &mut self.convert.unclip.run_options.instances,
+                    "Show per-reference instances",
+                );
+                ui.checkbox(
+                    &mut self.convert.unclip.run_options.write,
+                    "Write changes to plugin",
+                );
+            });
+
+            ui.add_space(6.0);
+            self.show_unclip_policy_summary(ui);
+
+            ui.add_space(8.0);
+            let label = if self.convert.unclip.run_options.write {
+                "Write changes"
+            } else {
+                "Inspect plugin"
+            };
+            if ui
+                .add_enabled(self.can_start_worker(), egui::Button::new(label))
+                .clicked()
+            {
+                self.request_unclip_run(ctx);
+            }
+            self.show_worker_blockers(ui, "running Unclip");
+        });
     }
 
     fn show_convert_run_options(&mut self, ui: &mut egui::Ui) {
@@ -262,13 +341,162 @@ impl GreenmoteApp {
         });
     }
 
+    fn show_unclip_policy_summary(&self, ui: &mut egui::Ui) {
+        let actions = self.settings.unclip_write_action_names();
+        let actions = if actions.is_empty() {
+            "none".to_owned()
+        } else {
+            actions.join(", ")
+        };
+        let (include_grass, exclude_grass, include_occluder, exclude_occluder) =
+            self.settings.unclip_filter_counts();
+        ui.small(format!("Write actions from Settings: {actions}"));
+        ui.small(format!(
+            "Filters: grass +{include_grass}/-{exclude_grass}, occluders +{include_occluder}/-{exclude_occluder}. Use Settings to edit policy."
+        ));
+    }
+
+    fn can_start_worker(&self) -> bool {
+        !self.has_active_worker_state()
+            && !self.settings.is_dirty()
+            && self.config_recovery_error.is_none()
+            && self.openmw_config_error.is_none()
+    }
+
+    fn has_active_worker_state(&self) -> bool {
+        self.convert.running
+            || self.convert.active_worker.is_some()
+            || self.convert.event_receiver.is_some()
+            || self.convert.cancellation.is_some()
+    }
+
+    fn validate_worker_start(&self) -> Result<(), String> {
+        if self.has_active_worker_state() {
+            return Err("Wait for the current run to finish.".to_owned());
+        }
+        if self.settings.is_dirty() {
+            return Err("Save Settings changes before starting a run.".to_owned());
+        }
+        if self.config_recovery_error.is_some() {
+            return Err("Regenerate Settings before starting a run.".to_owned());
+        }
+        if self.openmw_config_error.is_some() {
+            return Err("Choose an OpenMW config before starting a run.".to_owned());
+        }
+
+        Ok(())
+    }
+
+    fn show_worker_blockers(&self, ui: &mut egui::Ui, action: &str) {
+        if self.convert.running {
+            ui.label("Wait for the current run to finish.");
+        }
+        if self.settings.is_dirty() {
+            ui.label(format!("Save Settings changes before {action}."));
+        }
+        if self.config_recovery_error.is_some() {
+            ui.label(format!("Regenerate Settings before {action}."));
+        }
+        if self.openmw_config_error.is_some() {
+            ui.label(format!("Choose an OpenMW config before {action}."));
+        }
+    }
+
+    fn request_unclip_run(&mut self, ctx: &egui::Context) {
+        if let Err(error) = self.validate_unclip_run() {
+            self.set_status(error);
+            return;
+        }
+
+        if self.convert.unclip.run_options.write {
+            self.convert.unclip.pending_write_confirmation = true;
+        } else {
+            self.start_unclip(ctx);
+        }
+    }
+
+    fn validate_unclip_run(&self) -> Result<(), String> {
+        self.validate_worker_start()?;
+        self.convert.unclip.run_options.to_args()?;
+        if self.convert.unclip.run_options.write
+            && self.settings.unclip_write_action_names().is_empty()
+        {
+            return Err(
+                "Unclip write mode is blocked because no write actions are enabled in Settings."
+                    .to_owned(),
+            );
+        }
+
+        Ok(())
+    }
+
+    fn validate_unclip_write_confirmation(&self) -> Result<(), String> {
+        self.validate_unclip_run()?;
+        if !self.convert.unclip.run_options.write {
+            return Err("Unclip write mode is no longer enabled.".to_owned());
+        }
+
+        Ok(())
+    }
+
+    fn show_unclip_write_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.convert.unclip.pending_write_confirmation {
+            return;
+        }
+
+        if let Err(error) = self.validate_unclip_write_confirmation() {
+            self.convert.unclip.pending_write_confirmation = false;
+            self.set_status(format!("Unclip write confirmation dismissed: {error}"));
+            return;
+        }
+
+        let target = self.convert.unclip.run_options.plugin.trim().to_owned();
+        let actions = self.settings.unclip_write_action_names().join(", ");
+        let mut confirm = false;
+        let mut cancel = false;
+
+        egui::Window::new("Confirm Unclip write")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label("Unclip will modify the target plugin and create a backup.");
+                ui.label(format!("Target: {target}"));
+                ui.label(format!("Enabled write actions: {actions}"));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    confirm = ui.button("Write changes").clicked();
+                    cancel = ui.button("Cancel").clicked();
+                });
+            });
+
+        if confirm {
+            self.confirm_unclip_write(ctx);
+        } else if cancel {
+            self.convert.unclip.pending_write_confirmation = false;
+            self.set_status("Unclip write cancelled.");
+        }
+    }
+
+    fn confirm_unclip_write(&mut self, ctx: &egui::Context) {
+        self.convert.unclip.pending_write_confirmation = false;
+        if let Err(error) = self.validate_unclip_write_confirmation() {
+            self.set_status(format!("Unclip write blocked: {error}"));
+            return;
+        }
+
+        self.start_unclip(ctx);
+    }
+
     fn show_convert_output_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add_space(ui.spacing().item_spacing.y);
         ui.horizontal_wrapped(|ui| {
             let actions_enabled = !self.convert.running;
             if ui
                 .add_enabled(
-                    self.convert.running && !self.convert.cancelling,
+                    self.convert.running
+                        && !self.convert.cancelling
+                        && matches!(self.convert.active_worker, Some(WorkerKind::Convert)),
                     egui::Button::new("Cancel"),
                 )
                 .clicked()
@@ -320,13 +548,22 @@ impl GreenmoteApp {
                 self.open_file(&log_path, "log");
             }
 
-            if ui.button("Settings").clicked() {
+            if ui
+                .add_enabled(!self.convert.running, egui::Button::new("Settings"))
+                .clicked()
+            {
                 self.show_settings();
             }
         });
     }
 
     fn start_conversion(&mut self, ctx: &egui::Context) {
+        if let Err(error) = self.validate_worker_start() {
+            self.convert.unclip.pending_write_confirmation = false;
+            self.set_status(format!("Conversion blocked: {error}"));
+            return;
+        }
+
         let (sender, receiver) = mpsc::channel();
         let sink = GuiEventSink::new(sender, ctx.clone());
         let options = self.convert.run_options;
@@ -335,10 +572,12 @@ impl GreenmoteApp {
         let worker_cancellation = cancellation.clone();
 
         self.convert.running = true;
+        self.convert.unclip.pending_write_confirmation = false;
         self.convert.cancelling = false;
         self.set_status("Converting with current run options...");
         self.convert.progress = None;
         self.convert.phase_reached = None;
+        self.convert.active_worker = Some(WorkerKind::Convert);
         self.convert.event_receiver = Some(receiver);
         self.convert.cancellation = Some(cancellation);
         self.convert.output.clear();
@@ -372,7 +611,57 @@ impl GreenmoteApp {
             let (error, cancelled) =
                 error.map_or((None, false), |(error, cancelled)| (Some(error), cancelled));
 
-            sink.send(GuiEvent::Finished { error, cancelled });
+            sink.send(GuiEvent::Finished {
+                worker: WorkerKind::Convert,
+                error,
+                cancelled,
+            });
+        });
+    }
+
+    fn start_unclip(&mut self, ctx: &egui::Context) {
+        if let Err(error) = self.validate_unclip_run() {
+            self.convert.unclip.pending_write_confirmation = false;
+            self.set_status(format!("Unclip blocked: {error}"));
+            return;
+        }
+
+        let args = match self.convert.unclip.run_options.to_args() {
+            Ok(args) => args,
+            Err(error) => {
+                self.set_status(error);
+                return;
+            }
+        };
+        let (sender, receiver) = mpsc::channel();
+        let sink = GuiEventSink::new(sender, ctx.clone());
+        let openmw_cfg = self.session_openmw_cfg.clone();
+
+        self.convert.running = true;
+        self.convert.unclip.pending_write_confirmation = false;
+        self.convert.cancelling = false;
+        self.convert.progress = None;
+        self.convert.phase_reached = None;
+        self.convert.active_worker = Some(WorkerKind::Unclip);
+        self.convert.event_receiver = Some(receiver);
+        self.convert.cancellation = None;
+        self.convert.output.clear();
+        if self.convert.unclip.run_options.write {
+            self.set_status("Writing Unclip changes...");
+        } else {
+            self.set_status("Inspecting plugin with Unclip...");
+        }
+
+        thread::spawn(move || {
+            let mut stdout = GuiOutput::new(sink.clone());
+            let error = unclip::run_with_output(openmw_cfg.as_deref(), None, &args, &mut stdout)
+                .err()
+                .map(|error| error.to_string());
+            sink.send(GuiEvent::Finished {
+                worker: WorkerKind::Unclip,
+                error,
+                cancelled: false,
+            });
         });
     }
 
@@ -424,8 +713,14 @@ impl GreenmoteApp {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.apply_pending_progress(pending_progress.take());
                     if self.convert.running {
-                        self.finish_conversion(
-                            Some("Conversion worker disconnected.".to_owned()),
+                        let worker = self.convert.active_worker.unwrap_or(WorkerKind::Convert);
+                        let label = match worker {
+                            WorkerKind::Convert => "Conversion",
+                            WorkerKind::Unclip => "Unclip",
+                        };
+                        self.finish_worker(
+                            worker,
+                            Some(format!("{label} worker disconnected.")),
                             false,
                         );
                     }
@@ -439,7 +734,11 @@ impl GreenmoteApp {
         match event {
             GuiEvent::Output(output) => self.convert.output.push_str(&output),
             GuiEvent::Progress(event) => self.handle_progress_event(event),
-            GuiEvent::Finished { error, cancelled } => self.finish_conversion(error, cancelled),
+            GuiEvent::Finished {
+                worker,
+                error,
+                cancelled,
+            } => self.finish_worker(worker, error, cancelled),
         }
     }
 
@@ -506,12 +805,20 @@ impl GreenmoteApp {
         }
     }
 
+    fn finish_worker(&mut self, worker: WorkerKind, error: Option<String>, cancelled: bool) {
+        match worker {
+            WorkerKind::Convert => self.finish_conversion(error, cancelled),
+            WorkerKind::Unclip => self.finish_unclip(error),
+        }
+    }
+
     fn finish_conversion(&mut self, error: Option<String>, cancelled: bool) {
         let cancellation_notice = self.cancellation_notice();
         self.convert.running = false;
         self.convert.cancelling = false;
         self.convert.progress = None;
         self.convert.phase_reached = None;
+        self.convert.active_worker = None;
         self.convert.cancellation = None;
 
         if cancelled {
@@ -522,6 +829,24 @@ impl GreenmoteApp {
             self.set_status(format!("Conversion failed: {error}"));
         } else {
             self.set_status("Conversion finished.");
+        }
+    }
+
+    fn finish_unclip(&mut self, error: Option<String>) {
+        self.convert.running = false;
+        self.convert.cancelling = false;
+        self.convert.progress = None;
+        self.convert.phase_reached = None;
+        self.convert.active_worker = None;
+        self.convert.cancellation = None;
+
+        if let Some(error) = error {
+            append_error(&mut self.convert.output, &error);
+            self.set_status(format!("Unclip failed: {error}"));
+        } else if self.convert.unclip.run_options.write {
+            self.set_status("Unclip write finished.");
+        } else {
+            self.set_status("Unclip inspection finished.");
         }
     }
 
@@ -773,6 +1098,13 @@ fn open_path_native(path: &Path) -> io::Result<()> {
         .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no path opener available")))
 }
 
+fn select_plugin_file() -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .set_title("Select Unclip Target Plugin")
+        .add_filter("OpenMW plugins", &["omwaddon", "esp", "esm"])
+        .pick_file()
+}
+
 #[cfg(target_os = "windows")]
 fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
     vec![OpenCommand {
@@ -816,7 +1148,8 @@ fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
 mod tests {
     use std::{ffi::OsString, path::Path};
 
-    use super::{ConvertRunOptions, ConvertUiState};
+    use super::{ConvertRunOptions, ConvertUiState, UnclipRunOptions, egui};
+    use crate::gui::GreenmoteApp;
 
     #[cfg(all(unix, not(target_os = "macos")))]
     use super::path_open_commands;
@@ -891,6 +1224,47 @@ mod tests {
                 debug: true,
                 auto_enable: false,
             }
+        );
+    }
+
+    #[test]
+    fn pending_unclip_write_confirmation_cannot_start_after_worker_becomes_active() {
+        let mut app = GreenmoteApp::default();
+        app.convert.unclip.run_options = UnclipRunOptions {
+            plugin: "target.omwaddon".to_owned(),
+            instances: false,
+            write: true,
+        };
+        app.convert.unclip.pending_write_confirmation = true;
+        app.convert.running = true;
+
+        app.confirm_unclip_write(&egui::Context::default());
+
+        assert!(!app.convert.unclip.pending_write_confirmation);
+        assert!(app.convert.active_worker.is_none());
+        assert!(app.convert.event_receiver.is_none());
+        assert!(app.convert.cancellation.is_none());
+        assert_eq!(
+            app.convert.status,
+            "Unclip write blocked: Wait for the current run to finish."
+        );
+    }
+
+    #[test]
+    fn no_unclip_write_actions_blocks_write_run() {
+        let mut app = GreenmoteApp::default();
+        app.settings.clear_unclip_write_actions_for_test();
+        app.convert.unclip.run_options = UnclipRunOptions {
+            plugin: "target.omwaddon".to_owned(),
+            instances: false,
+            write: true,
+        };
+
+        let error = app.validate_unclip_run().unwrap_err();
+
+        assert_eq!(
+            error,
+            "Unclip write mode is blocked because no write actions are enabled in Settings."
         );
     }
 
