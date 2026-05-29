@@ -291,24 +291,7 @@ impl GreenmoteApp {
             egui::vec2(finite_widget_extent(ui.available_width()), row_height),
             egui::Sense::hover(),
         );
-        let action_rect = egui::Rect::from_min_max(
-            row_rect.min,
-            egui::pos2(
-                (row_rect.right() - TOP_CONTROLS_RIGHT_MARGIN).max(row_rect.left()),
-                row_rect.bottom(),
-            ),
-        );
-        let left_rect = egui::Rect::from_min_max(
-            action_rect.min,
-            egui::pos2(action_rect.right(), action_rect.bottom()),
-        );
-        let right_rect = egui::Rect::from_min_max(
-            egui::pos2(
-                (action_rect.right() - UNCLIP_RUN_OPTIONS_WIDTH).max(action_rect.left()),
-                action_rect.top(),
-            ),
-            egui::pos2(action_rect.right(), action_rect.bottom()),
-        );
+        let left_rect = row_rect;
 
         let left_response = ui
             .scope_builder(
@@ -318,6 +301,18 @@ impl GreenmoteApp {
                 |ui| self.show_start_conversion_button(ui, ctx),
             )
             .inner;
+
+        let item_spacing = ui.spacing().item_spacing.x;
+        let mirrored_inset = (left_response.rect.left() - row_rect.left()).max(item_spacing);
+        let right_edge = (row_rect.right() - mirrored_inset).max(row_rect.left());
+        let right_rect = egui::Rect::from_min_max(
+            egui::pos2(
+                (right_edge - UNCLIP_RUN_OPTIONS_WIDTH).max(row_rect.left()),
+                row_rect.top(),
+            ),
+            egui::pos2(right_edge, row_rect.bottom()),
+        );
+
         let right_response = ui
             .scope_builder(
                 egui::UiBuilder::new()
@@ -327,13 +322,9 @@ impl GreenmoteApp {
             )
             .inner;
 
-        let item_spacing = ui.spacing().item_spacing.x;
         let status_rect = egui::Rect::from_min_max(
-            egui::pos2(left_response.rect.right() + item_spacing, action_rect.top()),
-            egui::pos2(
-                right_response.rect.left() - item_spacing,
-                action_rect.bottom(),
-            ),
+            egui::pos2(left_response.rect.right() + item_spacing, row_rect.top()),
+            egui::pos2(right_response.rect.left() - item_spacing, row_rect.bottom()),
         );
         if status_rect.width() > 0.0 {
             ui.scope_builder(
