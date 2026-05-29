@@ -167,7 +167,6 @@ impl GreenmoteApp {
     pub(super) fn show_convert_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // Keep the controls row at its natural height. The output area below owns
         // the remaining vertical space so dry-run results stay visible.
-        self.show_run_options_header(ui);
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| self.show_convert_panel(ui));
             let unclip_spacer =
@@ -204,13 +203,6 @@ impl GreenmoteApp {
         self.show_unclip_write_confirmation(ctx);
     }
 
-    fn show_run_options_header(&self, ui: &mut egui::Ui) {
-        ui.horizontal_centered(|ui| {
-            ui.heading("Run Options");
-        });
-        ui.separator();
-    }
-
     fn show_convert_panel(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(300.0);
         ui.heading("Convert");
@@ -222,6 +214,7 @@ impl GreenmoteApp {
             ui.heading("Unclip");
 
             ui.group(|ui| {
+                ui.label(egui::RichText::new("Run options").strong());
                 ui.add_enabled_ui(!self.convert.running, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Target plugin");
@@ -327,6 +320,7 @@ impl GreenmoteApp {
 
     fn show_convert_run_options(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
+            ui.label(egui::RichText::new("Run options").strong());
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(!self.convert.running, |ui| {
                     let mut dry_run = self.convert.run_options.dry_run;
