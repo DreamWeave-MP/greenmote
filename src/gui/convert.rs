@@ -168,24 +168,19 @@ impl GreenmoteApp {
         // Keep the controls row at its natural height. The output area below owns
         // the remaining vertical space so dry-run results stay visible.
         ui.horizontal_top(|ui| {
-            ui.vertical(|ui| self.show_convert_heading(ui));
-            let unclip_spacer =
-                ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
-            ui.add_space(unclip_spacer.max(0.0));
             ui.vertical(|ui| {
-                ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
-                self.show_unclip_heading(ui);
+                self.show_convert_heading(ui);
+                self.show_convert_panel(ui);
             });
-            ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
-        });
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| self.show_convert_panel(ui));
             let unclip_spacer =
                 ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
             ui.add_space(unclip_spacer.max(0.0));
             ui.vertical(|ui| {
-                ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
-                self.show_unclip_panel(ui);
+                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                    ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
+                    self.show_unclip_heading(ui);
+                    self.show_unclip_panel(ui);
+                });
             });
             ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
         });
@@ -225,7 +220,18 @@ impl GreenmoteApp {
     }
 
     fn show_unclip_heading(&self, ui: &mut egui::Ui) {
-        ui.heading("Unclip");
+        let row_height = ui
+            .spacing()
+            .interact_size
+            .y
+            .max(ui.text_style_height(&egui::TextStyle::Heading));
+        ui.allocate_ui_with_layout(
+            egui::vec2(UNCLIP_RUN_OPTIONS_WIDTH, row_height),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.heading("Unclip");
+            },
+        );
     }
 
     fn show_unclip_panel(&mut self, ui: &mut egui::Ui) {
@@ -235,30 +241,44 @@ impl GreenmoteApp {
 
         group_frame.show(ui, |ui| {
             ui.set_min_width(group_content_width);
-            ui.label(egui::RichText::new("Run options").strong());
+            ui.allocate_ui_with_layout(
+                egui::vec2(group_content_width, ui.spacing().interact_size.y),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.label(egui::RichText::new("Run options").strong());
+                },
+            );
             ui.add_enabled_ui(!self.convert.running, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Target plugin");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
-                            .desired_width(190.0),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = select_plugin_file()
-                    {
-                        self.convert.unclip.run_options.plugin = path.display().to_string();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.checkbox(
-                        &mut self.convert.unclip.run_options.instances,
-                        "Show per-reference instances",
-                    );
-                    ui.checkbox(
-                        &mut self.convert.unclip.run_options.write,
-                        "Write changes to plugin",
-                    );
-                });
+                ui.allocate_ui_with_layout(
+                    egui::vec2(group_content_width, ui.spacing().interact_size.y),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        ui.label("Target plugin");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
+                                .desired_width(190.0),
+                        );
+                        if ui.button("Browse...").clicked()
+                            && let Some(path) = select_plugin_file()
+                        {
+                            self.convert.unclip.run_options.plugin = path.display().to_string();
+                        }
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    egui::vec2(group_content_width, ui.spacing().interact_size.y),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        ui.checkbox(
+                            &mut self.convert.unclip.run_options.write,
+                            "Write changes to plugin",
+                        );
+                        ui.checkbox(
+                            &mut self.convert.unclip.run_options.instances,
+                            "Show per-reference instances",
+                        );
+                    },
+                );
             });
         });
     }
@@ -267,42 +287,82 @@ impl GreenmoteApp {
         ui.add_space(8.0);
         let row_height = ui.spacing().interact_size.y;
 
-        ui.horizontal(|ui| {
-            self.show_start_conversion_button(ui, ctx);
+        let (row_rect, _) = ui.allocate_exact_size(
+            egui::vec2(finite_widget_extent(ui.available_width()), row_height),
+            egui::Sense::hover(),
+        );
+        let action_rect = egui::Rect::from_min_max(
+            row_rect.min,
+            egui::pos2(
+                (row_rect.right() - TOP_CONTROLS_RIGHT_MARGIN).max(row_rect.left()),
+                row_rect.bottom(),
+            ),
+        );
+        let left_rect = egui::Rect::from_min_max(
+            action_rect.min,
+            egui::pos2(action_rect.right(), action_rect.bottom()),
+        );
+        let right_rect = egui::Rect::from_min_max(
+            egui::pos2(
+                (action_rect.right() - UNCLIP_RUN_OPTIONS_WIDTH).max(action_rect.left()),
+                action_rect.top(),
+            ),
+            egui::pos2(action_rect.right(), action_rect.bottom()),
+        );
 
-            let item_spacing = ui.spacing().item_spacing.x;
-            let status_width = ui.available_width()
-                - UNCLIP_RUN_OPTIONS_WIDTH
-                - TOP_CONTROLS_RIGHT_MARGIN
-                - item_spacing;
-            ui.allocate_ui_with_layout(
-                egui::vec2(finite_widget_extent(status_width.max(0.0)), row_height),
-                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+        let left_response = ui
+            .scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(left_rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                |ui| self.show_start_conversion_button(ui, ctx),
+            )
+            .inner;
+        let right_response = ui
+            .scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(right_rect)
+                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                |ui| self.show_unclip_action_button(ui, ctx),
+            )
+            .inner;
+
+        let item_spacing = ui.spacing().item_spacing.x;
+        let status_rect = egui::Rect::from_min_max(
+            egui::pos2(left_response.rect.right() + item_spacing, action_rect.top()),
+            egui::pos2(
+                right_response.rect.left() - item_spacing,
+                action_rect.bottom(),
+            ),
+        );
+        if status_rect.width() > 0.0 {
+            ui.scope_builder(
+                egui::UiBuilder::new().max_rect(status_rect).layout(
+                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                ),
                 |ui| self.show_action_row_status(ui),
             );
-
-            ui.allocate_ui_with_layout(
-                egui::vec2(UNCLIP_RUN_OPTIONS_WIDTH, row_height),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    self.show_unclip_action_button(ui, ctx);
-                },
-            );
-            ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
-        });
-    }
-
-    fn show_start_conversion_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let can_start = self.can_start_worker();
-        if ui
-            .add_enabled(can_start, egui::Button::new("Start conversion"))
-            .clicked()
-        {
-            self.start_conversion(ctx);
         }
     }
 
-    fn show_unclip_action_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn show_start_conversion_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) -> egui::Response {
+        let can_start = self.can_start_worker();
+        let response = ui.add_enabled(can_start, egui::Button::new("Start conversion"));
+        if response.clicked() {
+            self.start_conversion(ctx);
+        }
+        response
+    }
+
+    fn show_unclip_action_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) -> egui::Response {
         let can_start = self.can_start_worker();
         let label = if self.convert.unclip.run_options.write {
             "Write changes"
@@ -310,12 +370,11 @@ impl GreenmoteApp {
             "Inspect plugin"
         };
 
-        if ui
-            .add_enabled(can_start, egui::Button::new(label))
-            .clicked()
-        {
+        let response = ui.add_enabled(can_start, egui::Button::new(label));
+        if response.clicked() {
             self.request_unclip_run(ctx);
         }
+        response
     }
 
     fn show_action_row_status(&self, ui: &mut egui::Ui) {
