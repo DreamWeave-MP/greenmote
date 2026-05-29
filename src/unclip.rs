@@ -20,6 +20,7 @@ mod write_status;
 mod writer;
 
 pub use args::UnclipArgs;
+pub(crate) use args::WriteActionArg;
 
 /// Runs the groundcover unclipping subcommand.
 ///

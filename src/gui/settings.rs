@@ -1,13 +1,20 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
+use regex::RegexBuilder;
 
 use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectorySource};
+use crate::unclip::WriteActionArg;
 
 use super::{ConvertRunOptions, GreenmoteApp};
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
 const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
+const UNCLIP_WRITE_ACTION_COUNT: usize = 4;
+const UNCLIP_TERRAIN_Z_INDEX: usize = 0;
+const UNCLIP_STATIC_DELETE_INDEX: usize = 1;
+const UNCLIP_STATIC_MOVE_INDEX: usize = 2;
+const UNCLIP_ORIENT_INDEX: usize = 3;
 
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsUiState {
@@ -29,6 +36,10 @@ pub(super) struct SettingsUiState {
     grass_ids_viewport_start: usize,
     exclude_viewport_start: usize,
     ignored_plugins_viewport_start: usize,
+    include_grass_ids_viewport_start: usize,
+    exclude_grass_ids_viewport_start: usize,
+    include_occluder_ids_viewport_start: usize,
+    exclude_occluder_ids_viewport_start: usize,
 }
 
 #[derive(Default)]
@@ -43,6 +54,21 @@ pub(super) struct SettingsDraft {
     debug: bool,
     auto_enable: bool,
     unclip: crate::unclip::config::PersistedUnclipConfig,
+    unclip_policy: UnclipPolicyDraft,
+}
+
+#[derive(Clone, Debug)]
+struct UnclipPolicyDraft {
+    write_actions: [bool; UNCLIP_WRITE_ACTION_COUNT],
+    contact_epsilon: String,
+    origin_epsilon: String,
+    orientation_epsilon: String,
+    relocation_step: String,
+    relocation_steps: String,
+    include_grass_ids: Vec<String>,
+    exclude_grass_ids: Vec<String>,
+    include_occluder_ids: Vec<String>,
+    exclude_occluder_ids: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +76,10 @@ enum SettingsListKind {
     GrassIds,
     Exclude,
     IgnoredPlugins,
+    IncludeGrassIds,
+    ExcludeGrassIds,
+    IncludeOccluderIds,
+    ExcludeOccluderIds,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +123,10 @@ impl Default for SettingsUiState {
             grass_ids_viewport_start: 0,
             exclude_viewport_start: 0,
             ignored_plugins_viewport_start: 0,
+            include_grass_ids_viewport_start: 0,
+            exclude_grass_ids_viewport_start: 0,
+            include_occluder_ids_viewport_start: 0,
+            exclude_occluder_ids_viewport_start: 0,
         }
     }
 }
@@ -222,6 +256,10 @@ impl SettingsUiState {
         self.grass_ids_viewport_start = 0;
         self.exclude_viewport_start = 0;
         self.ignored_plugins_viewport_start = 0;
+        self.include_grass_ids_viewport_start = 0;
+        self.exclude_grass_ids_viewport_start = 0;
+        self.include_occluder_ids_viewport_start = 0;
+        self.exclude_occluder_ids_viewport_start = 0;
     }
 }
 
@@ -264,6 +302,8 @@ impl GreenmoteApp {
                     self.show_general_settings(ui);
                     ui.add_space(16.0);
                     self.show_convert_settings(ui);
+                    ui.add_space(16.0);
+                    self.show_unclip_settings(ui);
                 });
         });
 
@@ -353,6 +393,152 @@ impl GreenmoteApp {
 
         ui.add_space(8.0);
         ui.label("Run options are configured on the Convert screen.");
+    }
+
+    fn show_unclip_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Unclip");
+        ui.add_space(6.0);
+
+        self.show_unclip_write_actions(ui);
+        self.show_unclip_policy_numbers(ui);
+        self.show_unclip_filter_lists(ui);
+    }
+
+    fn show_unclip_write_actions(&mut self, ui: &mut egui::Ui) {
+        let policy = &mut self.settings.draft.unclip_policy;
+
+        ui.label("Write actions");
+        ui.add_space(4.0);
+        let before_actions = policy.write_actions;
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.checkbox(
+                    &mut policy.write_actions[UNCLIP_TERRAIN_Z_INDEX],
+                    "Terrain Z (terrain-z)",
+                );
+                ui.checkbox(
+                    &mut policy.write_actions[UNCLIP_STATIC_DELETE_INDEX],
+                    "Delete fully static-occluded refs (static-delete)",
+                );
+                ui.checkbox(
+                    &mut policy.write_actions[UNCLIP_STATIC_MOVE_INDEX],
+                    "Move static-occluded refs (static-move)",
+                );
+                ui.checkbox(
+                    &mut policy.write_actions[UNCLIP_ORIENT_INDEX],
+                    "Orient refs to terrain (orient)",
+                );
+            });
+        if before_actions != policy.write_actions {
+            self.settings.dirty = true;
+        }
+        if !policy.has_write_actions() {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                "Warning: write mode will produce no policy actions.",
+            );
+        }
+    }
+
+    fn show_unclip_policy_numbers(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        ui.label("Policy numbers");
+        ui.add_space(4.0);
+        {
+            let policy = &mut self.settings.draft.unclip_policy;
+            egui::Grid::new("unclip_policy_numbers")
+                .num_columns(2)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    setting_text_field(
+                        ui,
+                        "contact_epsilon",
+                        &mut policy.contact_epsilon,
+                        &mut self.settings.dirty,
+                    );
+                    setting_text_field(
+                        ui,
+                        "origin_epsilon",
+                        &mut policy.origin_epsilon,
+                        &mut self.settings.dirty,
+                    );
+                    setting_text_field(
+                        ui,
+                        "orientation_epsilon",
+                        &mut policy.orientation_epsilon,
+                        &mut self.settings.dirty,
+                    );
+                    setting_text_field(
+                        ui,
+                        "relocation_step",
+                        &mut policy.relocation_step,
+                        &mut self.settings.dirty,
+                    );
+                    setting_text_field(
+                        ui,
+                        "relocation_steps",
+                        &mut policy.relocation_steps,
+                        &mut self.settings.dirty,
+                    );
+                });
+        }
+    }
+
+    fn show_unclip_filter_lists(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        ui.label("Regex filters use case-insensitive full-ID regexes. Exclude wins over include. Empty include means all.");
+        ui.add_space(4.0);
+
+        let mut list_control = EditableListControl {
+            selected_item: &mut self.settings.selected_list_item,
+            editing_item: &mut self.settings.editing_list_item,
+            queued_edit_item: &mut self.settings.queued_edit_list_item,
+            inline_edit_text: &mut self.settings.inline_edit_text,
+            inline_edit_original_text: &mut self.settings.inline_edit_original_text,
+            focus_inline_edit: &mut self.settings.focus_inline_edit,
+            add_popup: &mut self.settings.add_popup,
+            add_text: &mut self.settings.add_text,
+            focus_add_text: &mut self.settings.focus_add_text,
+            dirty: &mut self.settings.dirty,
+            viewport_start: &mut self.settings.include_grass_ids_viewport_start,
+        };
+
+        setting_editable_list(
+            ui,
+            "Include grass IDs",
+            "No include grass ID filters configured.",
+            SettingsListKind::IncludeGrassIds,
+            &mut self.settings.draft.unclip_policy.include_grass_ids,
+            &mut list_control,
+        );
+        list_control.viewport_start = &mut self.settings.exclude_grass_ids_viewport_start;
+        setting_editable_list(
+            ui,
+            "Exclude grass IDs",
+            "No exclude grass ID filters configured.",
+            SettingsListKind::ExcludeGrassIds,
+            &mut self.settings.draft.unclip_policy.exclude_grass_ids,
+            &mut list_control,
+        );
+        list_control.viewport_start = &mut self.settings.include_occluder_ids_viewport_start;
+        setting_editable_list(
+            ui,
+            "Include occluder IDs",
+            "No include occluder ID filters configured.",
+            SettingsListKind::IncludeOccluderIds,
+            &mut self.settings.draft.unclip_policy.include_occluder_ids,
+            &mut list_control,
+        );
+        list_control.viewport_start = &mut self.settings.exclude_occluder_ids_viewport_start;
+        setting_editable_list(
+            ui,
+            "Exclude occluder IDs",
+            "No exclude occluder ID filters configured.",
+            SettingsListKind::ExcludeOccluderIds,
+            &mut self.settings.draft.unclip_policy.exclude_occluder_ids,
+            &mut list_control,
+        );
     }
 
     fn show_add_list_item_popup(&mut self, ctx: &egui::Context) {
@@ -541,7 +727,14 @@ impl GreenmoteApp {
             return false;
         };
 
-        let config = self.settings.draft.to_config();
+        let config = match self.settings.draft.validate_and_to_config() {
+            Ok(config) => config,
+            Err(error) => {
+                self.settings.status.clear();
+                self.settings.error = Some(error);
+                return false;
+            }
+        };
         match groundcover::save_config_for_edit(&config, &path) {
             Ok(config) => {
                 self.settings.replace_saved_config(
@@ -575,10 +768,11 @@ impl SettingsDraft {
             debug: run_options.debug,
             auto_enable: run_options.auto_enable,
             unclip: config.unclip.clone(),
+            unclip_policy: UnclipPolicyDraft::from_config(&config.unclip),
         }
     }
 
-    fn to_config(&self) -> GroundcoverConfig {
+    fn validate_and_to_config(&self) -> Result<GroundcoverConfig, String> {
         let mut config = GroundcoverConfig::default();
         config.output_directory.clone_from(&self.output_directory);
         config.output_directory_source = self.output_directory_source.clone();
@@ -589,7 +783,8 @@ impl SettingsDraft {
         config.debug = self.debug;
         config.auto_enable = self.auto_enable;
         config.unclip = self.unclip.clone();
-        config
+        self.unclip_policy.apply_to_config(&mut config.unclip)?;
+        Ok(config)
     }
 
     fn run_options(&self) -> ConvertRunOptions {
@@ -605,7 +800,126 @@ impl SettingsDraft {
             SettingsListKind::GrassIds => &mut self.grass_ids,
             SettingsListKind::Exclude => &mut self.exclude,
             SettingsListKind::IgnoredPlugins => &mut self.ignored_plugins,
+            SettingsListKind::IncludeGrassIds => &mut self.unclip_policy.include_grass_ids,
+            SettingsListKind::ExcludeGrassIds => &mut self.unclip_policy.exclude_grass_ids,
+            SettingsListKind::IncludeOccluderIds => &mut self.unclip_policy.include_occluder_ids,
+            SettingsListKind::ExcludeOccluderIds => &mut self.unclip_policy.exclude_occluder_ids,
         }
+    }
+}
+
+impl UnclipPolicyDraft {
+    fn from_config(config: &crate::unclip::config::PersistedUnclipConfig) -> Self {
+        let defaults = crate::unclip::config::PersistedUnclipConfig::generated_default();
+        let actions = config
+            .write_actions
+            .clone()
+            .or(defaults.write_actions.clone())
+            .unwrap_or_default();
+        let all = actions.contains(&WriteActionArg::All);
+        let none = actions.contains(&WriteActionArg::None);
+
+        let has_action = |action| all || !none && actions.contains(&action);
+
+        Self {
+            write_actions: [
+                has_action(WriteActionArg::TerrainZ),
+                has_action(WriteActionArg::StaticDelete),
+                has_action(WriteActionArg::StaticMove),
+                has_action(WriteActionArg::Orient),
+            ],
+            contact_epsilon: config
+                .contact_epsilon
+                .or(defaults.contact_epsilon)
+                .unwrap_or_default()
+                .to_string(),
+            origin_epsilon: config
+                .origin_epsilon
+                .or(defaults.origin_epsilon)
+                .unwrap_or_default()
+                .to_string(),
+            orientation_epsilon: config
+                .orientation_epsilon
+                .or(defaults.orientation_epsilon)
+                .unwrap_or_default()
+                .to_string(),
+            relocation_step: config
+                .relocation_step
+                .or(defaults.relocation_step)
+                .unwrap_or_default()
+                .to_string(),
+            relocation_steps: config
+                .relocation_steps
+                .or(defaults.relocation_steps)
+                .unwrap_or_default()
+                .to_string(),
+            include_grass_ids: config.include_grass_ids.clone().unwrap_or_default(),
+            exclude_grass_ids: config.exclude_grass_ids.clone().unwrap_or_default(),
+            include_occluder_ids: config.include_occluder_ids.clone().unwrap_or_default(),
+            exclude_occluder_ids: config.exclude_occluder_ids.clone().unwrap_or_default(),
+        }
+    }
+
+    fn has_write_actions(&self) -> bool {
+        self.write_actions.iter().any(|enabled| *enabled)
+    }
+
+    fn apply_to_config(
+        &self,
+        config: &mut crate::unclip::config::PersistedUnclipConfig,
+    ) -> Result<(), String> {
+        validate_regex_list("include_grass_ids", &self.include_grass_ids)?;
+        validate_regex_list("exclude_grass_ids", &self.exclude_grass_ids)?;
+        validate_regex_list("include_occluder_ids", &self.include_occluder_ids)?;
+        validate_regex_list("exclude_occluder_ids", &self.exclude_occluder_ids)?;
+
+        config.write_actions = Some(self.write_actions());
+        config.contact_epsilon = Some(parse_non_negative_f32(
+            "contact_epsilon",
+            &self.contact_epsilon,
+        )?);
+        config.origin_epsilon = Some(parse_non_negative_f32(
+            "origin_epsilon",
+            &self.origin_epsilon,
+        )?);
+        config.orientation_epsilon = Some(parse_non_negative_f32(
+            "orientation_epsilon",
+            &self.orientation_epsilon,
+        )?);
+        config.relocation_step = Some(parse_positive_f32(
+            "relocation_step",
+            &self.relocation_step,
+        )?);
+        config.relocation_steps = Some(parse_relocation_steps(&self.relocation_steps)?);
+        config.include_grass_ids = Some(self.include_grass_ids.clone());
+        config.exclude_grass_ids = Some(self.exclude_grass_ids.clone());
+        config.include_occluder_ids = Some(self.include_occluder_ids.clone());
+        config.exclude_occluder_ids = Some(self.exclude_occluder_ids.clone());
+
+        Ok(())
+    }
+
+    fn write_actions(&self) -> Vec<WriteActionArg> {
+        let mut actions = Vec::new();
+        if self.write_actions[UNCLIP_TERRAIN_Z_INDEX] {
+            actions.push(WriteActionArg::TerrainZ);
+        }
+        if self.write_actions[UNCLIP_STATIC_DELETE_INDEX] {
+            actions.push(WriteActionArg::StaticDelete);
+        }
+        if self.write_actions[UNCLIP_STATIC_MOVE_INDEX] {
+            actions.push(WriteActionArg::StaticMove);
+        }
+        if self.write_actions[UNCLIP_ORIENT_INDEX] {
+            actions.push(WriteActionArg::Orient);
+        }
+        actions
+    }
+}
+
+impl Default for UnclipPolicyDraft {
+    fn default() -> Self {
+        Self::from_config(&crate::unclip::config::PersistedUnclipConfig::generated_default())
     }
 }
 
@@ -615,8 +929,69 @@ impl SettingsUiState {
             SettingsListKind::GrassIds => &mut self.grass_ids_viewport_start,
             SettingsListKind::Exclude => &mut self.exclude_viewport_start,
             SettingsListKind::IgnoredPlugins => &mut self.ignored_plugins_viewport_start,
+            SettingsListKind::IncludeGrassIds => &mut self.include_grass_ids_viewport_start,
+            SettingsListKind::ExcludeGrassIds => &mut self.exclude_grass_ids_viewport_start,
+            SettingsListKind::IncludeOccluderIds => &mut self.include_occluder_ids_viewport_start,
+            SettingsListKind::ExcludeOccluderIds => &mut self.exclude_occluder_ids_viewport_start,
         }
     }
+}
+
+fn setting_text_field(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
+    ui.label(label);
+    if ui
+        .add(egui::TextEdit::singleline(value).desired_width(120.0))
+        .changed()
+    {
+        *dirty = true;
+    }
+    ui.end_row();
+}
+
+fn parse_non_negative_f32(name: &str, value: &str) -> Result<f32, String> {
+    let parsed = value
+        .trim()
+        .parse::<f32>()
+        .map_err(|error| format!("{name} must be a finite non-negative number: {error}"))?;
+    if parsed.is_finite() && parsed >= 0.0 {
+        Ok(parsed)
+    } else {
+        Err(format!("{name} must be a finite non-negative number"))
+    }
+}
+
+fn parse_positive_f32(name: &str, value: &str) -> Result<f32, String> {
+    let parsed = value
+        .trim()
+        .parse::<f32>()
+        .map_err(|error| format!("{name} must be a finite positive number: {error}"))?;
+    if parsed.is_finite() && parsed > 0.0 {
+        Ok(parsed)
+    } else {
+        Err(format!("{name} must be a finite positive number"))
+    }
+}
+
+fn parse_relocation_steps(value: &str) -> Result<u16, String> {
+    let parsed = value
+        .trim()
+        .parse::<u16>()
+        .map_err(|error| format!("relocation_steps must be an integer from 1 to 256: {error}"))?;
+    if (1..=256).contains(&parsed) {
+        Ok(parsed)
+    } else {
+        Err("relocation_steps must be an integer from 1 to 256".to_owned())
+    }
+}
+
+fn validate_regex_list(name: &str, patterns: &[String]) -> Result<(), String> {
+    for pattern in patterns {
+        RegexBuilder::new(&format!(r"\A(?:{pattern})\z"))
+            .case_insensitive(true)
+            .build()
+            .map_err(|error| format!("{name} contains invalid regex {pattern:?}: {error}"))?;
+    }
+    Ok(())
 }
 
 fn setting_editable_list(
@@ -997,6 +1372,10 @@ impl SettingsListKind {
             Self::GrassIds => "Add grass ID pattern",
             Self::Exclude => "Add exclude pattern",
             Self::IgnoredPlugins => "Add ignored plugin",
+            Self::IncludeGrassIds => "Add include grass ID regex",
+            Self::ExcludeGrassIds => "Add exclude grass ID regex",
+            Self::IncludeOccluderIds => "Add include occluder ID regex",
+            Self::ExcludeOccluderIds => "Add exclude occluder ID regex",
         }
     }
 
@@ -1005,6 +1384,10 @@ impl SettingsListKind {
             Self::GrassIds => "Grass ID pattern",
             Self::Exclude => "Exclude pattern",
             Self::IgnoredPlugins => "Ignored plugin",
+            Self::IncludeGrassIds => "Include grass ID regex",
+            Self::ExcludeGrassIds => "Exclude grass ID regex",
+            Self::IncludeOccluderIds => "Include occluder ID regex",
+            Self::ExcludeOccluderIds => "Exclude occluder ID regex",
         }
     }
 }
@@ -1020,10 +1403,11 @@ fn output_path_frame(ui: &mut egui::Ui, path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{
-        SettingsListItem, SettingsListKind, SettingsUiState, clamp_settings_list_viewport_start,
-        commit_inline_list_edit, ensure_settings_list_item_visible, list_item_from_text,
-        remove_selected_list_item,
+        SettingsDraft, SettingsListItem, SettingsListKind, SettingsUiState,
+        clamp_settings_list_viewport_start, commit_inline_list_edit,
+        ensure_settings_list_item_visible, list_item_from_text, remove_selected_list_item,
     };
+    use crate::unclip::WriteActionArg;
 
     #[test]
     fn list_item_from_text_preserves_text_and_rejects_empty_text() {
@@ -1099,19 +1483,61 @@ mod tests {
     fn active_inline_edit_counts_as_dirty_before_commit() {
         let mut settings = SettingsUiState {
             editing_list_item: Some(SettingsListItem {
-                kind: SettingsListKind::IgnoredPlugins,
+                kind: SettingsListKind::IncludeGrassIds,
                 index: 0,
             }),
-            inline_edit_original_text: "Old.esp".to_owned(),
-            inline_edit_text: "New.esp".to_owned(),
+            inline_edit_original_text: "old_.*".to_owned(),
+            inline_edit_text: "new_.*".to_owned(),
             ..SettingsUiState::default()
         };
 
         assert!(settings.is_dirty());
 
-        settings.inline_edit_text = "Old.esp".to_owned();
+        settings.inline_edit_text = "old_.*".to_owned();
 
         assert!(!settings.is_dirty());
+    }
+
+    #[test]
+    fn unclip_policy_save_serializes_concrete_actions_and_preserves_run_keys() {
+        let mut draft = SettingsDraft::default();
+        draft.unclip.plugin = Some("groundcover.omwaddon".into());
+        draft.unclip.write = Some(true);
+        draft.unclip_policy.write_actions = [true, false, true, false];
+        draft.unclip_policy.include_grass_ids = vec!["flora_.*".to_owned()];
+
+        let config = draft.validate_and_to_config().unwrap();
+
+        assert_eq!(config.unclip.plugin, Some("groundcover.omwaddon".into()));
+        assert_eq!(config.unclip.write, Some(true));
+        assert_eq!(
+            config.unclip.write_actions,
+            Some(vec![WriteActionArg::TerrainZ, WriteActionArg::StaticMove])
+        );
+        assert_eq!(
+            config.unclip.include_grass_ids,
+            Some(vec!["flora_.*".to_owned()])
+        );
+    }
+
+    #[test]
+    fn unclip_policy_save_rejects_invalid_numeric_text() {
+        let mut draft = SettingsDraft::default();
+        draft.unclip_policy.relocation_step = "0".to_owned();
+
+        let error = draft.validate_and_to_config().unwrap_err();
+
+        assert!(error.contains("relocation_step"));
+    }
+
+    #[test]
+    fn unclip_policy_save_rejects_invalid_regex() {
+        let mut draft = SettingsDraft::default();
+        draft.unclip_policy.exclude_occluder_ids = vec!["(".to_owned()];
+
+        let error = draft.validate_and_to_config().unwrap_err();
+
+        assert!(error.contains("exclude_occluder_ids"));
     }
 
     #[test]
