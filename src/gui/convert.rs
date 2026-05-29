@@ -11,6 +11,7 @@ use super::{ConvertRunOptions, GreenmoteApp, UnclipRunOptions};
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
 const MIN_WIDGET_SIZE: f32 = 1.0;
+const UNCLIP_RUN_OPTIONS_WIDTH: f32 = 350.0;
 
 #[derive(Default)]
 pub(super) struct ConvertUiState {
@@ -240,30 +241,37 @@ impl GreenmoteApp {
             ui.heading("Unclip");
         });
 
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Run options").strong());
-            ui.add_enabled_ui(!self.convert.running, |ui| {
-                ui.label("Target plugin");
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
-                            .desired_width(240.0),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = select_plugin_file()
-                    {
-                        self.convert.unclip.run_options.plugin = path.display().to_string();
-                    }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(
-                        &mut self.convert.unclip.run_options.instances,
-                        "Show per-reference instances",
-                    );
-                    ui.checkbox(
-                        &mut self.convert.unclip.run_options.write,
-                        "Write changes to plugin",
-                    );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            ui.group(|ui| {
+                ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
+                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                    ui.label(egui::RichText::new("Run options").strong());
+                    ui.add_enabled_ui(!self.convert.running, |ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Browse...").clicked()
+                                && let Some(path) = select_plugin_file()
+                            {
+                                self.convert.unclip.run_options.plugin = path.display().to_string();
+                            }
+                            ui.add(
+                                egui::TextEdit::singleline(
+                                    &mut self.convert.unclip.run_options.plugin,
+                                )
+                                .desired_width(180.0),
+                            );
+                            ui.label("Target plugin");
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                            ui.checkbox(
+                                &mut self.convert.unclip.run_options.write,
+                                "Write changes to plugin",
+                            );
+                            ui.checkbox(
+                                &mut self.convert.unclip.run_options.instances,
+                                "Show per-reference instances",
+                            );
+                        });
+                    });
                 });
             });
         });
