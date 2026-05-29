@@ -462,31 +462,36 @@ impl GreenmoteApp {
                 .show(ui, |ui| {
                     setting_text_field(
                         ui,
-                        "contact_epsilon",
+                        "Mesh contact tolerance",
+                        "Maximum mesh contact/terrain Z delta treated as already on terrain. Config key: contact_epsilon.",
                         &mut policy.contact_epsilon,
                         &mut self.settings.dirty,
                     );
                     setting_text_field(
                         ui,
-                        "origin_epsilon",
+                        "Origin height tolerance",
+                        "Maximum reference origin/terrain Z delta treated as already on terrain. Config key: origin_epsilon.",
                         &mut policy.origin_epsilon,
                         &mut self.settings.dirty,
                     );
                     setting_text_field(
                         ui,
-                        "orientation_epsilon",
+                        "Orientation tolerance",
+                        "Maximum tilt angle in degrees treated as already aligned to terrain. Config key: orientation_epsilon.",
                         &mut policy.orientation_epsilon,
                         &mut self.settings.dirty,
                     );
                     setting_text_field(
                         ui,
-                        "relocation_step",
+                        "Relocation step distance",
+                        "Horizontal distance between static-bounds relocation probes. Config key: relocation_step.",
                         &mut policy.relocation_step,
                         &mut self.settings.dirty,
                     );
                     setting_text_field(
                         ui,
-                        "relocation_steps",
+                        "Relocation probe rings",
+                        "Number of relocation probe rings to try for static-bounds moves. Config key: relocation_steps.",
                         &mut policy.relocation_steps,
                         &mut self.settings.dirty,
                     );
@@ -970,12 +975,18 @@ impl SettingsUiState {
     }
 }
 
-fn setting_text_field(ui: &mut egui::Ui, label: &str, value: &mut String, dirty: &mut bool) {
-    ui.label(label);
-    if ui
+fn setting_text_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    tooltip: &str,
+    value: &mut String,
+    dirty: &mut bool,
+) {
+    ui.label(label).on_hover_text(tooltip);
+    let response = ui
         .add(egui::TextEdit::singleline(value).desired_width(120.0))
-        .changed()
-    {
+        .on_hover_text(tooltip);
+    if response.changed() {
         *dirty = true;
     }
     ui.end_row();
