@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{cmp::Reverse, collections::HashSet};
 
 use tes3::esp::Static;
 
@@ -38,7 +38,7 @@ fn collect_winning_statics(
     let mut static_plans = Vec::new();
 
     let mut plugins_in_reverse_load_order = loaded_plugins.iter().collect::<Vec<_>>();
-    plugins_in_reverse_load_order.sort_by(|left, right| right.load_index.cmp(&left.load_index));
+    plugins_in_reverse_load_order.sort_by_key(|loaded| Reverse(loaded.load_index));
 
     for loaded in plugins_in_reverse_load_order {
         for static_record in loaded.plugin.objects_of_type::<Static>() {

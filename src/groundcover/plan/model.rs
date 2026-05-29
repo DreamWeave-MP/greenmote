@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     collections::{BTreeMap, BTreeSet, HashSet},
     io,
     path::PathBuf,
@@ -184,7 +185,7 @@ pub struct StaticConversionPlan {
 impl StaticConversionPlan {
     #[must_use]
     pub fn with_cell_plans(self, mut cell_plans: Vec<PluginCellPlan>) -> ConversionPlan {
-        cell_plans.sort_by(|left, right| right.load_index.cmp(&left.load_index));
+        cell_plans.sort_by_key(|cell_plan| Reverse(cell_plan.load_index));
         let used_static_ids = cell_plans
             .iter()
             .flat_map(|cell_plan| cell_plan.used_static_ids.iter().cloned())
