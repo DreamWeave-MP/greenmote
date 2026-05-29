@@ -208,14 +208,7 @@ impl GreenmoteApp {
         ui.horizontal_centered(|ui| {
             ui.heading("Run Options");
         });
-
-        let separator_width =
-            finite_widget_extent(ui.available_width() - TOP_CONTROLS_RIGHT_MARGIN * 2.0);
-        ui.horizontal(|ui| {
-            ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
-            ui.set_width(separator_width);
-            ui.separator();
-        });
+        ui.separator();
     }
 
     fn show_convert_panel(&mut self, ui: &mut egui::Ui) {
