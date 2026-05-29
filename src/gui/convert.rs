@@ -172,17 +172,14 @@ impl GreenmoteApp {
         }
         ui.add_space(8.0);
 
+        // Keep the controls row at its natural height. The output area below owns
+        // the remaining vertical space so dry-run results stay visible.
         ui.horizontal_top(|ui| {
+            ui.vertical(|ui| self.show_convert_panel(ui, ctx));
+            ui.add_space(16.0);
             ui.vertical(|ui| {
-                self.show_convert_panel(ui, ctx);
-            });
-
-            let right_margin = ui.spacing().item_spacing.x;
-            let unclip_width = UNCLIP_RUN_OPTIONS_WIDTH
-                .min((ui.available_width() - right_margin).max(UNCLIP_RUN_OPTIONS_WIDTH / 2.0));
-            ui.add_space((ui.available_width() - unclip_width - right_margin).max(8.0));
-            ui.vertical(|ui| {
-                ui.set_width(unclip_width);
+                ui.set_min_width(UNCLIP_RUN_OPTIONS_WIDTH / 2.0);
+                ui.set_max_width(UNCLIP_RUN_OPTIONS_WIDTH);
                 self.show_unclip_panel(ui, ctx);
             });
         });
@@ -195,30 +192,17 @@ impl GreenmoteApp {
                 self.show_convert_output_actions(ui, ctx);
             });
 
-        let output_size = finite_widget_size(ui.available_size());
-        ui.allocate_ui_with_layout(
-            output_size,
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                let output_width = finite_widget_extent(ui.available_width());
-                let output_height = finite_widget_extent(ui.available_height());
-                egui::ScrollArea::vertical()
-                    .max_width(output_width)
-                    .max_height(output_height)
-                    .stick_to_bottom(true)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.set_width(output_width);
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(self.convert.output.as_str()).monospace(),
-                            )
-                            .wrap_mode(egui::TextWrapMode::Wrap)
-                            .selectable(false),
-                        );
-                    });
-            },
-        );
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width(finite_widget_extent(ui.available_width()));
+                ui.add(
+                    egui::Label::new(egui::RichText::new(self.convert.output.as_str()).monospace())
+                        .wrap_mode(egui::TextWrapMode::Wrap)
+                        .selectable(false),
+                );
+            });
 
         self.show_unclip_write_confirmation(ctx);
     }
@@ -242,9 +226,7 @@ impl GreenmoteApp {
     fn show_unclip_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.set_min_width(UNCLIP_RUN_OPTIONS_WIDTH / 2.0);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            ui.heading("Unclip");
-        });
+        ui.heading("Unclip");
 
         ui.group(|ui| {
             ui.label(egui::RichText::new("Run options").strong());
@@ -280,14 +262,12 @@ impl GreenmoteApp {
         } else {
             "Inspect plugin"
         };
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add_enabled(self.can_start_worker(), egui::Button::new(label))
-                .clicked()
-            {
-                self.request_unclip_run(ctx);
-            }
-        });
+        if ui
+            .add_enabled(self.can_start_worker(), egui::Button::new(label))
+            .clicked()
+        {
+            self.request_unclip_run(ctx);
+        }
         self.show_worker_blockers(ui, "running Unclip");
     }
 
@@ -1052,10 +1032,6 @@ fn progress_fraction(current: usize, total: usize) -> f32 {
     let basis_points = u16::try_from((current * 10_000) / total).unwrap_or(10_000);
 
     f32::from(basis_points) / 10_000.0
-}
-
-fn finite_widget_size(size: egui::Vec2) -> egui::Vec2 {
-    egui::vec2(finite_widget_extent(size.x), finite_widget_extent(size.y))
 }
 
 fn finite_widget_extent(extent: f32) -> f32 {
