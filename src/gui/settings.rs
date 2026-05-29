@@ -242,6 +242,10 @@ impl GreenmoteApp {
                         self.save_settings();
                     }
 
+                    if ui.button("Back").clicked() {
+                        self.request_convert();
+                    }
+
                     if let Some(error) = &self.settings.error {
                         ui.colored_label(ui.visuals().error_fg_color, error);
                     } else if !self.settings.status.is_empty() {

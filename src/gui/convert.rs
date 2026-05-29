@@ -148,7 +148,8 @@ impl GreenmoteApp {
         ui.add_space(8.0);
         let can_start = !self.convert.running
             && !self.settings.is_dirty()
-            && self.config_recovery_error.is_none();
+            && self.config_recovery_error.is_none()
+            && self.openmw_config_error.is_none();
         if ui
             .add_enabled(can_start, egui::Button::new("Start conversion"))
             .clicked()
@@ -160,6 +161,9 @@ impl GreenmoteApp {
         }
         if self.config_recovery_error.is_some() {
             ui.label("Regenerate Settings before converting.");
+        }
+        if self.openmw_config_error.is_some() {
+            ui.label("Choose an OpenMW config before converting.");
         }
         ui.separator();
 
@@ -314,6 +318,10 @@ impl GreenmoteApp {
                 && let Some(log_path) = self.settings.log_path()
             {
                 self.open_file(&log_path, "log");
+            }
+
+            if ui.button("Settings").clicked() {
+                self.show_settings();
             }
         });
     }

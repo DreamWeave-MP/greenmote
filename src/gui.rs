@@ -6,20 +6,17 @@ use std::{
 use eframe::egui;
 
 mod convert;
-mod nav;
 mod run_options;
 mod settings;
 
 use convert::ConvertUiState;
-use nav::{NavUiState, nav_bar_height};
 use run_options::ConvertRunOptions;
 use settings::SettingsUiState;
 
 struct GreenmoteApp {
-    screen: Screen,
+    showing_settings: bool,
     convert: ConvertUiState,
     settings: SettingsUiState,
-    nav: NavUiState,
     pending_navigation: Option<PendingNavigation>,
     checked_initial_config: bool,
     config_recovery_error: Option<String>,
@@ -27,24 +24,17 @@ struct GreenmoteApp {
     session_openmw_cfg: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Screen {
-    Convert,
-    Settings,
-}
-
 enum PendingNavigation {
-    Screen(Screen),
+    Convert,
     OpenMwConfig(PathBuf),
 }
 
 impl Default for GreenmoteApp {
     fn default() -> Self {
         Self {
-            screen: Screen::Convert,
+            showing_settings: false,
             convert: ConvertUiState::ready(),
             settings: SettingsUiState::default(),
-            nav: NavUiState::default(),
             pending_navigation: None,
             checked_initial_config: false,
             config_recovery_error: None,
@@ -59,13 +49,6 @@ impl eframe::App for GreenmoteApp {
         self.receive_conversion_events(ctx);
         self.check_initial_config();
 
-        egui::TopBottomPanel::top("greenmote_navigation_bar")
-            .resizable(false)
-            .exact_height(nav_bar_height(ctx))
-            .show(ctx, |ui| {
-                self.show_navigation_bar(ui);
-            });
-
         egui::CentralPanel::default().show(ctx, |ui| {
             self.show_active_screen(ui, ctx);
         });
@@ -78,33 +61,40 @@ impl eframe::App for GreenmoteApp {
 
 impl GreenmoteApp {
     fn show_active_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        match self.screen {
-            Screen::Convert => self.show_convert_screen(ui, ctx),
-            Screen::Settings => self.show_settings_screen(ui, ctx),
+        if self.showing_settings {
+            self.show_settings_screen(ui, ctx);
+        } else {
+            self.show_convert_screen(ui, ctx);
         }
     }
 
-    fn request_screen(&mut self, screen: Screen) {
-        if self.screen == screen {
+    fn show_settings(&mut self) {
+        if self.showing_settings {
             return;
         }
 
-        if self.screen == Screen::Settings {
-            self.settings.commit_active_list_edit();
-        }
-
-        if self.settings.is_dirty() {
-            self.queue_pending_navigation(PendingNavigation::Screen(screen));
-        } else {
-            self.show_screen(screen);
+        self.showing_settings = true;
+        if !self.load_settings() {
+            self.record_settings_load_failure();
         }
     }
 
-    fn show_screen(&mut self, screen: Screen) {
-        self.screen = screen;
-        if screen == Screen::Settings && !self.load_settings() {
-            self.record_settings_load_failure();
+    fn request_convert(&mut self) {
+        if !self.showing_settings {
+            return;
         }
+
+        self.settings.commit_active_list_edit();
+
+        if self.settings.is_dirty() {
+            self.queue_pending_navigation(PendingNavigation::Convert);
+        } else {
+            self.show_convert();
+        }
+    }
+
+    fn show_convert(&mut self) {
+        self.showing_settings = false;
     }
 
     fn check_initial_config(&mut self) {
@@ -150,7 +140,7 @@ impl GreenmoteApp {
         };
 
         match navigation {
-            PendingNavigation::Screen(screen) => self.show_screen(screen),
+            PendingNavigation::Convert => self.show_convert(),
             PendingNavigation::OpenMwConfig(path) => self.apply_selected_openmw_config(&path),
         }
     }
@@ -282,7 +272,7 @@ impl GreenmoteApp {
         if use_default {
             match default_config {
                 Ok(path) => {
-                    self.apply_selected_openmw_config(&path);
+                    self.request_openmw_config_path(path);
                 }
                 Err(error) => {
                     self.openmw_config_error = Some(format!(
@@ -305,6 +295,18 @@ impl GreenmoteApp {
         let Some(path) = select_openmw_config_file() else {
             return;
         };
+
+        self.request_openmw_config_path(path);
+    }
+
+    fn request_openmw_config_path(&mut self, path: PathBuf) {
+        if self.convert.is_running() {
+            return;
+        }
+
+        if self.showing_settings {
+            self.settings.commit_active_list_edit();
+        }
 
         if self.settings.is_dirty() {
             self.queue_pending_navigation(PendingNavigation::OpenMwConfig(path));
