@@ -7,6 +7,7 @@ use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectory
 use super::{ConvertRunOptions, GreenmoteApp, PendingNavigation};
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
+const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsTab {
@@ -668,10 +669,11 @@ fn setting_editable_list(
     control: &mut EditableListControl<'_>,
 ) {
     ui.label(label);
+    let list_width = finite_settings_list_width(ui.available_width());
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
+            ui.set_width(list_width);
             *control.viewport_start = clamp_settings_list_viewport_start(
                 *control.viewport_start,
                 items.len(),
@@ -738,7 +740,8 @@ fn setting_editable_list(
                 let can_move_down =
                     *control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS < items.len();
                 if ui
-                    .add_enabled(can_move_down, egui::Button::new("▼"))
+                    .add_enabled(can_move_down, egui::Button::new("Down"))
+                    .on_hover_text("Show next items")
                     .clicked()
                 {
                     *control.viewport_start += 1;
@@ -746,7 +749,8 @@ fn setting_editable_list(
 
                 let can_move_up = *control.viewport_start > 0;
                 if ui
-                    .add_enabled(can_move_up, egui::Button::new("▲"))
+                    .add_enabled(can_move_up, egui::Button::new("Up"))
+                    .on_hover_text("Show previous items")
                     .clicked()
                 {
                     *control.viewport_start -= 1;
@@ -795,7 +799,13 @@ fn show_list_items(
             }
         } else {
             let selected = *control.selected_item == Some(item);
-            let response = ui.selectable_label(selected, items[index].as_str());
+            let row_width = finite_settings_list_width(ui.available_width());
+            let response = ui
+                .add_sized(
+                    [row_width, ui.spacing().interact_size.y],
+                    egui::Button::selectable(selected, items[index].as_str()),
+                )
+                .on_hover_text(items[index].as_str());
             if response.double_clicked() {
                 *control.selected_item = Some(item);
                 if control.editing_item.is_none() {
@@ -858,9 +868,10 @@ fn show_inline_list_editor(
     item: SettingsListItem,
     control: &mut EditableListControl<'_>,
 ) -> bool {
+    let editor_width = finite_settings_list_width(ui.available_width());
     let response = ui.add(
         egui::TextEdit::singleline(control.inline_edit_text)
-            .desired_width(f32::INFINITY)
+            .desired_width(editor_width)
             .clip_text(false),
     );
     if *control.focus_inline_edit {
@@ -961,6 +972,14 @@ fn remove_selected_list_item(
 
 fn list_item_from_text(text: &str) -> Option<String> {
     (!text.trim().is_empty()).then(|| text.to_owned())
+}
+
+fn finite_settings_list_width(width: f32) -> f32 {
+    if width.is_finite() {
+        width.max(1.0)
+    } else {
+        SETTINGS_LIST_FALLBACK_WIDTH
+    }
 }
 
 impl SettingsListKind {
