@@ -800,11 +800,7 @@ fn show_list_items(
         } else {
             let selected = *control.selected_item == Some(item);
             let row_width = finite_settings_list_width(ui.available_width());
-            let response = ui
-                .add_sized(
-                    [row_width, ui.spacing().interact_size.y],
-                    egui::Button::selectable(selected, items[index].as_str()),
-                )
+            let response = selectable_list_row(ui, row_width, selected, items[index].as_str())
                 .on_hover_text(items[index].as_str());
             if response.double_clicked() {
                 *control.selected_item = Some(item);
@@ -980,6 +976,46 @@ fn finite_settings_list_width(width: f32) -> f32 {
     } else {
         SETTINGS_LIST_FALLBACK_WIDTH
     }
+}
+
+fn selectable_list_row(
+    ui: &mut egui::Ui,
+    width: f32,
+    selected: bool,
+    text: &str,
+) -> egui::Response {
+    let desired_size = egui::vec2(width, ui.spacing().interact_size.y);
+    let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, selected);
+        let visible_frame = selected
+            || response.hovered()
+            || response.is_pointer_button_down_on()
+            || response.has_focus();
+        if visible_frame {
+            let stroke = visuals.bg_stroke;
+            ui.painter().rect(
+                rect.expand(visuals.expansion),
+                visuals.corner_radius,
+                visuals.weak_bg_fill,
+                stroke,
+                egui::StrokeKind::Outside,
+            );
+        }
+
+        let text_pos = egui::pos2(rect.left() + ui.spacing().button_padding.x, rect.center().y);
+        let text_clip_rect = rect.shrink2(egui::vec2(ui.spacing().button_padding.x, 0.0));
+        ui.painter().with_clip_rect(text_clip_rect).text(
+            text_pos,
+            egui::Align2::LEFT_CENTER,
+            text,
+            egui::TextStyle::Button.resolve(ui.style()),
+            visuals.text_color(),
+        );
+    }
+
+    response
 }
 
 impl SettingsListKind {
