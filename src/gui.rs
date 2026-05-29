@@ -13,7 +13,7 @@ mod settings;
 use convert::ConvertUiState;
 use nav::{NavUiState, nav_bar_height};
 use run_options::ConvertRunOptions;
-use settings::{SettingsTab, SettingsUiState};
+use settings::SettingsUiState;
 
 struct GreenmoteApp {
     screen: Screen,
@@ -35,7 +35,6 @@ enum Screen {
 
 enum PendingNavigation {
     Screen(Screen),
-    SettingsTab(SettingsTab),
     OpenMwConfig(PathBuf),
 }
 
@@ -152,7 +151,6 @@ impl GreenmoteApp {
 
         match navigation {
             PendingNavigation::Screen(screen) => self.show_screen(screen),
-            PendingNavigation::SettingsTab(tab) => self.settings.select_tab(tab),
             PendingNavigation::OpenMwConfig(path) => self.apply_selected_openmw_config(&path),
         }
     }

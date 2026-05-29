@@ -4,20 +4,13 @@ use eframe::egui;
 
 use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectorySource};
 
-use super::{ConvertRunOptions, GreenmoteApp, PendingNavigation};
+use super::{ConvertRunOptions, GreenmoteApp};
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
 const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum SettingsTab {
-    General,
-    Convert,
-}
-
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsUiState {
-    selected_tab: SettingsTab,
     draft: SettingsDraft,
     config_path: Option<PathBuf>,
     loaded: bool,
@@ -82,7 +75,6 @@ struct EditableListControl<'a> {
 impl Default for SettingsUiState {
     fn default() -> Self {
         Self {
-            selected_tab: SettingsTab::General,
             draft: SettingsDraft::from_config(&GroundcoverConfig::default()),
             config_path: None,
             loaded: false,
@@ -108,10 +100,6 @@ impl Default for SettingsUiState {
 impl SettingsUiState {
     pub(super) fn is_dirty(&self) -> bool {
         self.dirty || self.active_list_edit_changed()
-    }
-
-    pub(super) fn select_tab(&mut self, tab: SettingsTab) {
-        self.selected_tab = tab;
     }
 
     pub(super) fn run_options(&self) -> ConvertRunOptions {
@@ -240,26 +228,6 @@ impl SettingsUiState {
 impl GreenmoteApp {
     pub(super) fn show_settings_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Settings");
-        ui.horizontal(|ui| {
-            if ui
-                .selectable_label(
-                    self.settings.selected_tab == SettingsTab::General,
-                    "General",
-                )
-                .clicked()
-            {
-                self.request_settings_tab(SettingsTab::General);
-            }
-            if ui
-                .selectable_label(
-                    self.settings.selected_tab == SettingsTab::Convert,
-                    "Convert",
-                )
-                .clicked()
-            {
-                self.request_settings_tab(SettingsTab::Convert);
-            }
-        });
         ui.separator();
 
         egui::TopBottomPanel::bottom("settings_footer")
@@ -289,10 +257,9 @@ impl GreenmoteApp {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.set_min_width(560.0);
-                    match self.settings.selected_tab {
-                        SettingsTab::General => self.show_general_settings(ui),
-                        SettingsTab::Convert => self.show_convert_settings(ui),
-                    }
+                    self.show_general_settings(ui);
+                    ui.add_space(16.0);
+                    self.show_convert_settings(ui);
                 });
         });
 
@@ -300,6 +267,9 @@ impl GreenmoteApp {
     }
 
     fn show_general_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("General");
+        ui.add_space(6.0);
+
         ui.label("OpenMW config");
         ui.add_space(4.0);
 
@@ -333,6 +303,9 @@ impl GreenmoteApp {
     }
 
     fn show_convert_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Convert");
+        ui.add_space(6.0);
+
         let mut list_control = EditableListControl {
             selected_item: &mut self.settings.selected_list_item,
             editing_item: &mut self.settings.editing_list_item,
@@ -581,24 +554,6 @@ impl GreenmoteApp {
                 self.settings.error = Some(format!("Failed to save settings: {error}"));
                 false
             }
-        }
-    }
-
-    fn request_settings_tab(&mut self, tab: SettingsTab) {
-        if self.settings.selected_tab == tab {
-            return;
-        }
-
-        self.settings.commit_active_list_edit();
-
-        if self.settings.dirty {
-            if self.has_pending_navigation_request() {
-                return;
-            }
-
-            self.queue_pending_navigation(PendingNavigation::SettingsTab(tab));
-        } else {
-            self.settings.select_tab(tab);
         }
     }
 }
