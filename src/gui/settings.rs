@@ -144,10 +144,6 @@ impl SettingsUiState {
         self.draft.unclip_policy.write_action_names()
     }
 
-    pub(super) fn unclip_filter_counts(&self) -> (usize, usize, usize, usize) {
-        self.draft.unclip_policy.filter_counts()
-    }
-
     pub(super) fn config_path(&self) -> Option<&Path> {
         self.config_path.as_deref()
     }
@@ -951,15 +947,6 @@ impl UnclipPolicyDraft {
             actions.push("orient");
         }
         actions
-    }
-
-    fn filter_counts(&self) -> (usize, usize, usize, usize) {
-        (
-            self.include_grass_ids.len(),
-            self.exclude_grass_ids.len(),
-            self.include_occluder_ids.len(),
-            self.exclude_occluder_ids.len(),
-        )
     }
 }
 

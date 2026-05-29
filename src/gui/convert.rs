@@ -250,20 +250,19 @@ impl GreenmoteApp {
                         self.convert.unclip.run_options.plugin = path.display().to_string();
                     }
                 });
-                ui.checkbox(
-                    &mut self.convert.unclip.run_options.instances,
-                    "Show per-reference instances",
-                );
-                ui.checkbox(
-                    &mut self.convert.unclip.run_options.write,
-                    "Write changes to plugin",
-                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(
+                        &mut self.convert.unclip.run_options.instances,
+                        "Show per-reference instances",
+                    );
+                    ui.checkbox(
+                        &mut self.convert.unclip.run_options.write,
+                        "Write changes to plugin",
+                    );
+                });
             });
 
             ui.add_space(6.0);
-            self.show_unclip_policy_summary(ui);
-
-            ui.add_space(8.0);
             let label = if self.convert.unclip.run_options.write {
                 "Write changes"
             } else {
@@ -339,21 +338,6 @@ impl GreenmoteApp {
                 ui.label("Save or discard Settings changes before saving these as defaults.");
             }
         });
-    }
-
-    fn show_unclip_policy_summary(&self, ui: &mut egui::Ui) {
-        let actions = self.settings.unclip_write_action_names();
-        let actions = if actions.is_empty() {
-            "none".to_owned()
-        } else {
-            actions.join(", ")
-        };
-        let (include_grass, exclude_grass, include_occluder, exclude_occluder) =
-            self.settings.unclip_filter_counts();
-        ui.small(format!("Write actions from Settings: {actions}"));
-        ui.small(format!(
-            "Filters: grass +{include_grass}/-{exclude_grass}, occluders +{include_occluder}/-{exclude_occluder}. Use Settings to edit policy."
-        ));
     }
 
     fn can_start_worker(&self) -> bool {
