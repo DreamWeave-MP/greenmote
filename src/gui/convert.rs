@@ -167,24 +167,27 @@ impl GreenmoteApp {
     pub(super) fn show_convert_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // Keep the controls row at its natural height. The output area below owns
         // the remaining vertical space so dry-run results stay visible.
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                self.show_convert_heading(ui);
-                self.show_convert_panel(ui);
-            });
-            let unclip_spacer =
-                ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
-            ui.add_space(unclip_spacer.max(0.0));
-            ui.vertical(|ui| {
-                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
-                    ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
-                    self.show_unclip_heading(ui);
-                    self.show_unclip_panel(ui);
+        let unclip_right = ui
+            .horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    self.show_convert_heading(ui);
+                    self.show_convert_panel(ui);
                 });
-            });
-            ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
-        });
-        self.show_convert_action_row(ui, ctx);
+                let unclip_spacer =
+                    ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
+                ui.add_space(unclip_spacer.max(0.0));
+                let unclip_response = ui.vertical(|ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                        ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
+                        self.show_unclip_heading(ui);
+                        self.show_unclip_panel(ui);
+                    });
+                });
+                ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
+                unclip_response.response.rect.right()
+            })
+            .inner;
+        self.show_convert_action_row(ui, ctx, unclip_right);
         ui.separator();
 
         egui::TopBottomPanel::bottom("convert_output_actions")
@@ -283,12 +286,18 @@ impl GreenmoteApp {
         });
     }
 
-    fn show_convert_action_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn show_convert_action_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        unclip_right: f32,
+    ) {
         ui.add_space(8.0);
         let row_height = ui.spacing().interact_size.y;
+        let available_rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
 
         let (row_rect, _) = ui.allocate_exact_size(
-            egui::vec2(finite_widget_extent(ui.available_width()), row_height),
+            egui::vec2(finite_widget_extent(available_rect.width()), row_height),
             egui::Sense::hover(),
         );
         let left_rect = row_rect;
@@ -303,8 +312,8 @@ impl GreenmoteApp {
             .inner;
 
         let item_spacing = ui.spacing().item_spacing.x;
-        let mirrored_margin = TOP_CONTROLS_RIGHT_MARGIN.max(item_spacing);
-        let right_edge = row_rect.right() - mirrored_margin;
+        // Align to the measured Unclip column edge instead of reconstructing spacer geometry.
+        let right_edge = unclip_right.min(row_rect.right()).max(row_rect.left());
         let right_rect = egui::Rect::from_min_max(
             egui::pos2(
                 (right_edge - UNCLIP_RUN_OPTIONS_WIDTH).max(row_rect.left()),
