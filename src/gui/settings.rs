@@ -670,11 +670,12 @@ fn setting_editable_list(
     control: &mut EditableListControl<'_>,
 ) {
     ui.label(label);
-    let list_width = finite_settings_list_width(ui.available_width());
+    let inner_margin = settings_list_frame_inner_margin();
+    let content_width = settings_list_content_width(ui.available_width(), inner_margin);
     egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::symmetric(8, 6))
+        .inner_margin(inner_margin)
         .show(ui, |ui| {
-            ui.set_width(list_width);
+            ui.set_width(content_width);
             *control.viewport_start = clamp_settings_list_viewport_start(
                 *control.viewport_start,
                 items.len(),
@@ -684,7 +685,7 @@ fn setting_editable_list(
             if items.is_empty() {
                 ui.weak(empty_message);
             } else {
-                show_list_items(ui, kind, items, control);
+                show_list_items(ui, kind, items, control, content_width);
             }
 
             let is_long = items.len() > SETTINGS_LIST_VISIBLE_ROWS;
@@ -695,11 +696,10 @@ fn setting_editable_list(
             }
 
             ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                egui::vec2(content_width, ui.spacing().interact_size.y),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    let leading_space =
-                        (ui.available_width() - SETTINGS_LIST_CONTROLS_WIDTH).max(0.0);
+                    let leading_space = (content_width - SETTINGS_LIST_CONTROLS_WIDTH).max(0.0);
                     ui.add_space(leading_space);
 
                     let can_move_up = *control.viewport_start > 0;
@@ -774,6 +774,7 @@ fn show_list_items(
     kind: SettingsListKind,
     items: &mut Vec<String>,
     control: &mut EditableListControl<'_>,
+    row_width: f32,
 ) {
     let mut index = *control.viewport_start;
     while index < items.len() && index < *control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS {
@@ -788,7 +789,7 @@ fn show_list_items(
         }
 
         if *control.editing_item == Some(item) {
-            if show_inline_list_editor(ui, items, item, control) {
+            if show_inline_list_editor(ui, items, item, control, row_width) {
                 *control.viewport_start = clamp_settings_list_viewport_start(
                     *control.viewport_start,
                     items.len(),
@@ -808,7 +809,6 @@ fn show_list_items(
             }
         } else {
             let selected = *control.selected_item == Some(item);
-            let row_width = finite_settings_list_width(ui.available_width());
             let response = selectable_list_row(ui, row_width, selected, items[index].as_str())
                 .on_hover_text(items[index].as_str());
             if response.double_clicked() {
@@ -872,8 +872,8 @@ fn show_inline_list_editor(
     items: &mut Vec<String>,
     item: SettingsListItem,
     control: &mut EditableListControl<'_>,
+    editor_width: f32,
 ) -> bool {
-    let editor_width = finite_settings_list_width(ui.available_width());
     let response = ui.add(
         egui::TextEdit::singleline(control.inline_edit_text)
             .desired_width(editor_width)
@@ -985,6 +985,15 @@ fn finite_settings_list_width(width: f32) -> f32 {
     } else {
         SETTINGS_LIST_FALLBACK_WIDTH
     }
+}
+
+fn settings_list_frame_inner_margin() -> egui::Margin {
+    egui::Margin::symmetric(8, 6)
+}
+
+fn settings_list_content_width(outer_width: f32, inner_margin: egui::Margin) -> f32 {
+    let horizontal_margin = f32::from(inner_margin.left + inner_margin.right);
+    finite_settings_list_width(outer_width - horizontal_margin)
 }
 
 fn selectable_list_row(
