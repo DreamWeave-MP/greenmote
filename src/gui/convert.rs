@@ -303,14 +303,13 @@ impl GreenmoteApp {
             .inner;
 
         let item_spacing = ui.spacing().item_spacing.x;
-        let mirrored_inset = (left_response.rect.left() - row_rect.left()).max(item_spacing);
-        let right_edge = (row_rect.right() - mirrored_inset).max(row_rect.left());
+        let desired_right_margin = item_spacing;
         let right_rect = egui::Rect::from_min_max(
             egui::pos2(
-                (right_edge - UNCLIP_RUN_OPTIONS_WIDTH).max(row_rect.left()),
+                (row_rect.right() - UNCLIP_RUN_OPTIONS_WIDTH).max(row_rect.left()),
                 row_rect.top(),
             ),
-            egui::pos2(right_edge, row_rect.bottom()),
+            egui::pos2(row_rect.right(), row_rect.bottom()),
         );
 
         let right_response = ui
@@ -318,7 +317,10 @@ impl GreenmoteApp {
                 egui::UiBuilder::new()
                     .max_rect(right_rect)
                     .layout(egui::Layout::right_to_left(egui::Align::Center)),
-                |ui| self.show_unclip_action_button(ui, ctx),
+                |ui| {
+                    ui.add_space(desired_right_margin);
+                    self.show_unclip_action_button(ui, ctx)
+                },
             )
             .inner;
 
