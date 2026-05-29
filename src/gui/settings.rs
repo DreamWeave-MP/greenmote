@@ -288,6 +288,9 @@ impl GreenmoteApp {
         ui.allocate_ui_with_layout(available, egui::Layout::top_down(egui::Align::Min), |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
+                .scroll_bar_visibility(
+                    egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                )
                 .show(ui, |ui| {
                     ui.set_min_width(560.0);
                     match self.settings.selected_tab {
