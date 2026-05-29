@@ -168,6 +168,18 @@ impl GreenmoteApp {
         // Keep the controls row at its natural height. The output area below owns
         // the remaining vertical space so dry-run results stay visible.
         ui.horizontal_top(|ui| {
+            ui.vertical(|ui| self.show_convert_heading(ui));
+            let unclip_spacer =
+                ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
+            ui.add_space(unclip_spacer.max(0.0));
+            ui.vertical(|ui| {
+                ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
+                self.show_unclip_heading(ui);
+            });
+            ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
+        });
+        show_run_options_header(ui);
+        ui.horizontal_top(|ui| {
             ui.vertical(|ui| self.show_convert_panel(ui));
             let unclip_spacer =
                 ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
@@ -205,39 +217,42 @@ impl GreenmoteApp {
 
     fn show_convert_panel(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(300.0);
-        ui.heading("Convert");
         self.show_convert_run_options(ui);
     }
 
-    fn show_unclip_panel(&mut self, ui: &mut egui::Ui) {
-        ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
-            ui.heading("Unclip");
+    fn show_convert_heading(&self, ui: &mut egui::Ui) {
+        ui.set_min_width(300.0);
+        ui.heading("Convert");
+    }
 
-            ui.group(|ui| {
-                ui.label(egui::RichText::new("Run options").strong());
-                ui.add_enabled_ui(!self.convert.running, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Target plugin");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
-                                .desired_width(190.0),
-                        );
-                        if ui.button("Browse...").clicked()
-                            && let Some(path) = select_plugin_file()
-                        {
-                            self.convert.unclip.run_options.plugin = path.display().to_string();
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.checkbox(
-                            &mut self.convert.unclip.run_options.instances,
-                            "Show per-reference instances",
-                        );
-                        ui.checkbox(
-                            &mut self.convert.unclip.run_options.write,
-                            "Write changes to plugin",
-                        );
-                    });
+    fn show_unclip_heading(&self, ui: &mut egui::Ui) {
+        ui.heading("Unclip");
+    }
+
+    fn show_unclip_panel(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.add_enabled_ui(!self.convert.running, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Target plugin");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
+                            .desired_width(190.0),
+                    );
+                    if ui.button("Browse...").clicked()
+                        && let Some(path) = select_plugin_file()
+                    {
+                        self.convert.unclip.run_options.plugin = path.display().to_string();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.checkbox(
+                        &mut self.convert.unclip.run_options.instances,
+                        "Show per-reference instances",
+                    );
+                    ui.checkbox(
+                        &mut self.convert.unclip.run_options.write,
+                        "Write changes to plugin",
+                    );
                 });
             });
         });
@@ -320,7 +335,6 @@ impl GreenmoteApp {
 
     fn show_convert_run_options(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.label(egui::RichText::new("Run options").strong());
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(!self.convert.running, |ui| {
                     let mut dry_run = self.convert.run_options.dry_run;
@@ -1043,6 +1057,22 @@ const fn phase_order(phase: ConversionPhase) -> u8 {
         ConversionPhase::AutoEnabling => 7,
         ConversionPhase::WritingLog => 8,
     }
+}
+
+fn show_run_options_header(ui: &mut egui::Ui) {
+    let font_id = egui::TextStyle::Heading.resolve(ui.style());
+    let row_height = font_id.size + ui.spacing().item_spacing.y;
+    let row_width = finite_widget_extent(ui.available_width());
+    let (rect, _response) =
+        ui.allocate_exact_size(egui::vec2(row_width, row_height), egui::Sense::hover());
+
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "Run Options",
+        font_id,
+        ui.visuals().strong_text_color(),
+    );
 }
 
 fn progress_fraction(current: usize, total: usize) -> f32 {
