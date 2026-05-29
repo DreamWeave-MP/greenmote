@@ -12,6 +12,7 @@ use super::{ConvertRunOptions, GreenmoteApp, UnclipRunOptions};
 const MAX_EVENTS_PER_FRAME: usize = 256;
 const MIN_WIDGET_SIZE: f32 = 1.0;
 const UNCLIP_RUN_OPTIONS_WIDTH: f32 = 420.0;
+const TOP_CONTROLS_RIGHT_MARGIN: f32 = 8.0;
 
 #[derive(Default)]
 pub(super) struct ConvertUiState {
@@ -176,11 +177,14 @@ impl GreenmoteApp {
         // the remaining vertical space so dry-run results stay visible.
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| self.show_convert_panel(ui, ctx));
-            ui.add_space(16.0);
+            let unclip_spacer =
+                ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
+            ui.add_space(unclip_spacer.max(0.0));
             ui.vertical(|ui| {
                 ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
                 self.show_unclip_panel(ui, ctx);
             });
+            ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
         });
         ui.separator();
 
