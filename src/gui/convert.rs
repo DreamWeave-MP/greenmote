@@ -245,46 +245,76 @@ impl GreenmoteApp {
 
     fn show_convert_action_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add_space(8.0);
-        ui.horizontal_centered(|ui| {
-            let can_start = self.can_start_worker();
-            if ui
-                .add_enabled(can_start, egui::Button::new("Start conversion"))
-                .clicked()
-            {
-                self.start_conversion(ctx);
-            }
+        let row_height = ui.spacing().interact_size.y;
+        let row_size = egui::vec2(finite_widget_extent(ui.available_width()), row_height);
 
-            let label = if self.convert.unclip.run_options.write {
-                "Write changes"
-            } else {
-                "Inspect plugin"
-            };
-            ui.add_space(48.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), 0.0),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    if ui
-                        .add_enabled(can_start, egui::Button::new(label))
-                        .clicked()
-                    {
-                        self.request_unclip_run(ctx);
-                    }
+        ui.allocate_ui_with_layout(
+            row_size,
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.columns(3, |columns| {
+                    columns[0].with_layout(
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            self.show_start_conversion_button(ui, ctx);
+                        },
+                    );
 
-                    ui.add_space(48.0);
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        self.show_action_row_status(ui);
-                    });
-                },
-            );
-        });
+                    columns[1].allocate_ui_with_layout(
+                        egui::vec2(
+                            finite_widget_extent(columns[1].available_width()),
+                            row_height,
+                        ),
+                        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                        |ui| self.show_action_row_status(ui),
+                    );
+
+                    columns[2].with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            self.show_unclip_action_button(ui, ctx);
+                        },
+                    );
+                });
+            },
+        );
+    }
+
+    fn show_start_conversion_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let can_start = self.can_start_worker();
+        if ui
+            .add_enabled(can_start, egui::Button::new("Start conversion"))
+            .clicked()
+        {
+            self.start_conversion(ctx);
+        }
+    }
+
+    fn show_unclip_action_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let can_start = self.can_start_worker();
+        let label = if self.convert.unclip.run_options.write {
+            "Write changes"
+        } else {
+            "Inspect plugin"
+        };
+
+        if ui
+            .add_enabled(can_start, egui::Button::new(label))
+            .clicked()
+        {
+            self.request_unclip_run(ctx);
+        }
     }
 
     fn show_action_row_status(&self, ui: &mut egui::Ui) {
-        if self.convert.progress.is_some() {
-            self.show_progress(ui);
+        if let Some(progress) = &self.convert.progress {
+            ui.add(
+                progress
+                    .progress_bar(finite_widget_extent(ui.available_width()))
+                    .text(progress.label()),
+            );
         } else {
-            ui.label(&self.convert.status);
+            ui.add(egui::Label::new(&self.convert.status).wrap_mode(egui::TextWrapMode::Truncate));
         }
     }
 
@@ -847,15 +877,6 @@ impl GreenmoteApp {
                 CancellationNotice::config_side_effects()
             }
         }
-    }
-
-    fn show_progress(&self, ui: &mut egui::Ui) {
-        let Some(progress) = &self.convert.progress else {
-            return;
-        };
-
-        ui.label(progress.label());
-        ui.add(progress.progress_bar(finite_widget_extent(ui.available_width())));
     }
 
     pub(super) fn set_status(&mut self, status: impl Into<String>) {
