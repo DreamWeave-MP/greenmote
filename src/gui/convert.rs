@@ -278,7 +278,12 @@ impl GreenmoteApp {
                         );
                         ui.checkbox(
                             &mut self.convert.unclip.run_options.instances,
-                            "Show per-reference instances",
+                            "Show detailed ref diagnostics",
+                        )
+                        .on_hover_text(
+                            "Output one diagnostic entry per inspected placed reference instead \
+                             of only the summary. Includes cell/ref key, terrain contact, \
+                             static occlusion, and write-status details.",
                         );
                     },
                 );
