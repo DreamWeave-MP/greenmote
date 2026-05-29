@@ -229,7 +229,12 @@ impl GreenmoteApp {
     }
 
     fn show_unclip_panel(&mut self, ui: &mut egui::Ui) {
-        ui.group(|ui| {
+        let group_frame = egui::Frame::group(ui.style());
+        let group_content_width =
+            (UNCLIP_RUN_OPTIONS_WIDTH - group_frame.total_margin().sum().x).max(0.0);
+
+        group_frame.show(ui, |ui| {
+            ui.set_min_width(group_content_width);
             ui.label(egui::RichText::new("Run options").strong());
             ui.add_enabled_ui(!self.convert.running, |ui| {
                 ui.horizontal(|ui| {
@@ -261,38 +266,30 @@ impl GreenmoteApp {
     fn show_convert_action_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add_space(8.0);
         let row_height = ui.spacing().interact_size.y;
-        let row_size = egui::vec2(finite_widget_extent(ui.available_width()), row_height);
 
-        ui.allocate_ui_with_layout(
-            row_size,
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.columns(3, |columns| {
-                    columns[0].with_layout(
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            self.show_start_conversion_button(ui, ctx);
-                        },
-                    );
+        ui.horizontal(|ui| {
+            self.show_start_conversion_button(ui, ctx);
 
-                    columns[1].allocate_ui_with_layout(
-                        egui::vec2(
-                            finite_widget_extent(columns[1].available_width()),
-                            row_height,
-                        ),
-                        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                        |ui| self.show_action_row_status(ui),
-                    );
+            let item_spacing = ui.spacing().item_spacing.x;
+            let status_width = ui.available_width()
+                - UNCLIP_RUN_OPTIONS_WIDTH
+                - TOP_CONTROLS_RIGHT_MARGIN
+                - item_spacing;
+            ui.allocate_ui_with_layout(
+                egui::vec2(finite_widget_extent(status_width.max(0.0)), row_height),
+                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                |ui| self.show_action_row_status(ui),
+            );
 
-                    columns[2].with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            self.show_unclip_action_button(ui, ctx);
-                        },
-                    );
-                });
-            },
-        );
+            ui.allocate_ui_with_layout(
+                egui::vec2(UNCLIP_RUN_OPTIONS_WIDTH, row_height),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    self.show_unclip_action_button(ui, ctx);
+                },
+            );
+            ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
+        });
     }
 
     fn show_start_conversion_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
