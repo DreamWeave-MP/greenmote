@@ -235,8 +235,13 @@ impl GreenmoteApp {
 
     fn show_unclip_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.set_min_width(360.0);
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            ui.heading("Unclip");
+        });
+
         ui.group(|ui| {
-            ui.label(egui::RichText::new("Unclip").strong());
+            ui.label(egui::RichText::new("Run options").strong());
             ui.add_enabled_ui(!self.convert.running, |ui| {
                 ui.label("Target plugin");
                 ui.horizontal(|ui| {
@@ -261,21 +266,23 @@ impl GreenmoteApp {
                     );
                 });
             });
+        });
 
-            ui.add_space(6.0);
-            let label = if self.convert.unclip.run_options.write {
-                "Write changes"
-            } else {
-                "Inspect plugin"
-            };
+        ui.add_space(8.0);
+        let label = if self.convert.unclip.run_options.write {
+            "Write changes"
+        } else {
+            "Inspect plugin"
+        };
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             if ui
                 .add_enabled(self.can_start_worker(), egui::Button::new(label))
                 .clicked()
             {
                 self.request_unclip_run(ctx);
             }
-            self.show_worker_blockers(ui, "running Unclip");
         });
+        self.show_worker_blockers(ui, "running Unclip");
     }
 
     fn show_convert_run_options(&mut self, ui: &mut egui::Ui) {
