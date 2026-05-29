@@ -236,39 +236,44 @@ impl GreenmoteApp {
 
     fn show_unclip_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.set_min_width(360.0);
+        let unclip_width = UNCLIP_RUN_OPTIONS_WIDTH.min(ui.available_width());
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            ui.heading("Unclip");
+        ui.horizontal(|ui| {
+            ui.add_space((ui.available_width() - unclip_width).max(0.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.heading("Unclip");
+            });
         });
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        ui.horizontal(|ui| {
+            ui.add_space((ui.available_width() - unclip_width).max(0.0));
             ui.group(|ui| {
-                ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
-                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                ui.set_width(unclip_width);
+                ui.vertical(|ui| {
                     ui.label(egui::RichText::new("Run options").strong());
                     ui.add_enabled_ui(!self.convert.running, |ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Target plugin");
+                            ui.add(
+                                egui::TextEdit::singleline(
+                                    &mut self.convert.unclip.run_options.plugin,
+                                )
+                                .desired_width(160.0),
+                            );
                             if ui.button("Browse...").clicked()
                                 && let Some(path) = select_plugin_file()
                             {
                                 self.convert.unclip.run_options.plugin = path.display().to_string();
                             }
-                            ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.convert.unclip.run_options.plugin,
-                                )
-                                .desired_width(180.0),
-                            );
-                            ui.label("Target plugin");
                         });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                            ui.checkbox(
-                                &mut self.convert.unclip.run_options.write,
-                                "Write changes to plugin",
-                            );
+                        ui.horizontal_wrapped(|ui| {
                             ui.checkbox(
                                 &mut self.convert.unclip.run_options.instances,
                                 "Show per-reference instances",
+                            );
+                            ui.checkbox(
+                                &mut self.convert.unclip.run_options.write,
+                                "Write changes to plugin",
                             );
                         });
                     });
@@ -282,13 +287,16 @@ impl GreenmoteApp {
         } else {
             "Inspect plugin"
         };
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            if ui
-                .add_enabled(self.can_start_worker(), egui::Button::new(label))
-                .clicked()
-            {
-                self.request_unclip_run(ctx);
-            }
+        ui.horizontal(|ui| {
+            ui.add_space((ui.available_width() - unclip_width).max(0.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(self.can_start_worker(), egui::Button::new(label))
+                    .clicked()
+                {
+                    self.request_unclip_run(ctx);
+                }
+            });
         });
         self.show_worker_blockers(ui, "running Unclip");
     }
