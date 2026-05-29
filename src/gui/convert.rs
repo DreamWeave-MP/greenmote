@@ -178,8 +178,7 @@ impl GreenmoteApp {
             ui.vertical(|ui| self.show_convert_panel(ui, ctx));
             ui.add_space(16.0);
             ui.vertical(|ui| {
-                ui.set_min_width(UNCLIP_RUN_OPTIONS_WIDTH / 2.0);
-                ui.set_max_width(UNCLIP_RUN_OPTIONS_WIDTH);
+                ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
                 self.show_unclip_panel(ui, ctx);
             });
         });
@@ -224,51 +223,51 @@ impl GreenmoteApp {
     }
 
     fn show_unclip_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.set_min_width(UNCLIP_RUN_OPTIONS_WIDTH / 2.0);
+        ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+            ui.heading("Unclip");
 
-        ui.heading("Unclip");
-
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Run options").strong());
-            ui.add_enabled_ui(!self.convert.running, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Target plugin");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
-                            .desired_width(190.0),
-                    );
-                    if ui.button("Browse...").clicked()
-                        && let Some(path) = select_plugin_file()
-                    {
-                        self.convert.unclip.run_options.plugin = path.display().to_string();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.checkbox(
-                        &mut self.convert.unclip.run_options.instances,
-                        "Show per-reference instances",
-                    );
-                    ui.checkbox(
-                        &mut self.convert.unclip.run_options.write,
-                        "Write changes to plugin",
-                    );
+            ui.group(|ui| {
+                ui.label(egui::RichText::new("Run options").strong());
+                ui.add_enabled_ui(!self.convert.running, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Target plugin");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
+                                .desired_width(190.0),
+                        );
+                        if ui.button("Browse...").clicked()
+                            && let Some(path) = select_plugin_file()
+                        {
+                            self.convert.unclip.run_options.plugin = path.display().to_string();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(
+                            &mut self.convert.unclip.run_options.instances,
+                            "Show per-reference instances",
+                        );
+                        ui.checkbox(
+                            &mut self.convert.unclip.run_options.write,
+                            "Write changes to plugin",
+                        );
+                    });
                 });
             });
-        });
 
-        ui.add_space(8.0);
-        let label = if self.convert.unclip.run_options.write {
-            "Write changes"
-        } else {
-            "Inspect plugin"
-        };
-        if ui
-            .add_enabled(self.can_start_worker(), egui::Button::new(label))
-            .clicked()
-        {
-            self.request_unclip_run(ctx);
-        }
-        self.show_worker_blockers(ui, "running Unclip");
+            ui.add_space(8.0);
+            let label = if self.convert.unclip.run_options.write {
+                "Write changes"
+            } else {
+                "Inspect plugin"
+            };
+            if ui
+                .add_enabled(self.can_start_worker(), egui::Button::new(label))
+                .clicked()
+            {
+                self.request_unclip_run(ctx);
+            }
+            self.show_worker_blockers(ui, "running Unclip");
+        });
     }
 
     fn show_convert_run_options(&mut self, ui: &mut egui::Ui) {
