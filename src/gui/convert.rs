@@ -167,6 +167,7 @@ impl GreenmoteApp {
     pub(super) fn show_convert_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // Keep the controls row at its natural height. The output area below owns
         // the remaining vertical space so dry-run results stay visible.
+        show_run_options_header(ui);
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| self.show_convert_heading(ui));
             let unclip_spacer =
@@ -178,7 +179,6 @@ impl GreenmoteApp {
             });
             ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
         });
-        show_run_options_header(ui);
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| self.show_convert_panel(ui));
             let unclip_spacer =
