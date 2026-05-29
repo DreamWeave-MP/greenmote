@@ -165,27 +165,20 @@ impl ConvertUiState {
 
 impl GreenmoteApp {
     pub(super) fn show_convert_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Greenmote");
-        if self.convert.progress.is_some() {
-            self.show_progress(ui);
-        } else {
-            ui.label(&self.convert.status);
-        }
-        ui.add_space(8.0);
-
         // Keep the controls row at its natural height. The output area below owns
         // the remaining vertical space so dry-run results stay visible.
         ui.horizontal_top(|ui| {
-            ui.vertical(|ui| self.show_convert_panel(ui, ctx));
+            ui.vertical(|ui| self.show_convert_panel(ui));
             let unclip_spacer =
                 ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
             ui.add_space(unclip_spacer.max(0.0));
             ui.vertical(|ui| {
                 ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
-                self.show_unclip_panel(ui, ctx);
+                self.show_unclip_panel(ui);
             });
             ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
         });
+        self.show_convert_action_row(ui, ctx);
         ui.separator();
 
         egui::TopBottomPanel::bottom("convert_output_actions")
@@ -210,23 +203,13 @@ impl GreenmoteApp {
         self.show_unclip_write_confirmation(ctx);
     }
 
-    fn show_convert_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn show_convert_panel(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(300.0);
         ui.heading("Convert");
         self.show_convert_run_options(ui);
-
-        ui.add_space(8.0);
-        let can_start = self.can_start_worker();
-        if ui
-            .add_enabled(can_start, egui::Button::new("Start conversion"))
-            .clicked()
-        {
-            self.start_conversion(ctx);
-        }
-        self.show_worker_blockers(ui, "converting");
     }
 
-    fn show_unclip_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn show_unclip_panel(&mut self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
             ui.heading("Unclip");
 
@@ -257,21 +240,52 @@ impl GreenmoteApp {
                     });
                 });
             });
+        });
+    }
 
-            ui.add_space(8.0);
+    fn show_convert_action_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(8.0);
+        ui.horizontal_centered(|ui| {
+            let can_start = self.can_start_worker();
+            if ui
+                .add_enabled(can_start, egui::Button::new("Start conversion"))
+                .clicked()
+            {
+                self.start_conversion(ctx);
+            }
+
             let label = if self.convert.unclip.run_options.write {
                 "Write changes"
             } else {
                 "Inspect plugin"
             };
-            if ui
-                .add_enabled(self.can_start_worker(), egui::Button::new(label))
-                .clicked()
-            {
-                self.request_unclip_run(ctx);
-            }
-            self.show_worker_blockers(ui, "running Unclip");
+            ui.add_space(48.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 0.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    if ui
+                        .add_enabled(can_start, egui::Button::new(label))
+                        .clicked()
+                    {
+                        self.request_unclip_run(ctx);
+                    }
+
+                    ui.add_space(48.0);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        self.show_action_row_status(ui);
+                    });
+                },
+            );
         });
+    }
+
+    fn show_action_row_status(&self, ui: &mut egui::Ui) {
+        if self.convert.progress.is_some() {
+            self.show_progress(ui);
+        } else {
+            ui.label(&self.convert.status);
+        }
     }
 
     fn show_convert_run_options(&mut self, ui: &mut egui::Ui) {
@@ -365,21 +379,6 @@ impl GreenmoteApp {
         }
 
         Ok(())
-    }
-
-    fn show_worker_blockers(&self, ui: &mut egui::Ui, action: &str) {
-        if self.convert.running {
-            ui.label("Wait for the current run to finish.");
-        }
-        if self.settings.is_dirty() {
-            ui.label(format!("Save Settings changes before {action}."));
-        }
-        if self.config_recovery_error.is_some() {
-            ui.label(format!("Regenerate Settings before {action}."));
-        }
-        if self.openmw_config_error.is_some() {
-            ui.label(format!("Choose an OpenMW config before {action}."));
-        }
     }
 
     fn request_unclip_run(&mut self, ctx: &egui::Context) {
