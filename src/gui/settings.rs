@@ -693,69 +693,73 @@ fn setting_editable_list(
                 ui.weak(format!("Showing {start}-{end} of {}", items.len()));
             }
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("+").clicked() {
-                    if *control.add_popup != Some(kind) {
-                        control.add_text.clear();
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    if ui.small_button("+").clicked() {
+                        if *control.add_popup != Some(kind) {
+                            control.add_text.clear();
+                        }
+                        *control.add_popup = Some(kind);
+                        *control.focus_add_text = true;
                     }
-                    *control.add_popup = Some(kind);
-                    *control.focus_add_text = true;
-                }
 
-                let can_remove = control
-                    .selected_item
-                    .is_some_and(|item| item.kind == kind && item.index < items.len());
-                if ui.add_enabled(can_remove, egui::Button::new("-")).clicked() {
-                    remove_selected_list_item(
-                        kind,
-                        items,
-                        control.selected_item,
-                        control.editing_item,
-                    );
-                    control.inline_edit_text.clear();
-                    control.inline_edit_original_text.clear();
-                    *control.focus_inline_edit = false;
-                    *control.queued_edit_item = None;
-                    *control.dirty = true;
-                    if let Some(selected) = (*control.selected_item).and_then(|item| {
-                        (item.kind == kind && item.index < items.len()).then_some(item.index)
-                    }) {
-                        ensure_settings_list_item_visible(
-                            control.viewport_start,
-                            selected,
-                            items.len(),
-                            SETTINGS_LIST_VISIBLE_ROWS,
+                    let can_remove = control
+                        .selected_item
+                        .is_some_and(|item| item.kind == kind && item.index < items.len());
+                    if ui.add_enabled(can_remove, egui::Button::new("-")).clicked() {
+                        remove_selected_list_item(
+                            kind,
+                            items,
+                            control.selected_item,
+                            control.editing_item,
                         );
-                    } else {
-                        *control.viewport_start = clamp_settings_list_viewport_start(
-                            *control.viewport_start,
-                            items.len(),
-                            SETTINGS_LIST_VISIBLE_ROWS,
-                        );
+                        control.inline_edit_text.clear();
+                        control.inline_edit_original_text.clear();
+                        *control.focus_inline_edit = false;
+                        *control.queued_edit_item = None;
+                        *control.dirty = true;
+                        if let Some(selected) = (*control.selected_item).and_then(|item| {
+                            (item.kind == kind && item.index < items.len()).then_some(item.index)
+                        }) {
+                            ensure_settings_list_item_visible(
+                                control.viewport_start,
+                                selected,
+                                items.len(),
+                                SETTINGS_LIST_VISIBLE_ROWS,
+                            );
+                        } else {
+                            *control.viewport_start = clamp_settings_list_viewport_start(
+                                *control.viewport_start,
+                                items.len(),
+                                SETTINGS_LIST_VISIBLE_ROWS,
+                            );
+                        }
                     }
-                }
 
-                ui.add_space(8.0);
+                    ui.add_space(8.0);
 
-                let can_move_down =
-                    *control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS < items.len();
-                if ui
-                    .add_enabled(can_move_down, egui::Button::new("Down"))
-                    .on_hover_text("Show next items")
-                    .clicked()
-                {
-                    *control.viewport_start += 1;
-                }
+                    let can_move_down =
+                        *control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS < items.len();
+                    if ui
+                        .add_enabled(can_move_down, egui::Button::new("Down"))
+                        .on_hover_text("Show next items")
+                        .clicked()
+                    {
+                        *control.viewport_start += 1;
+                    }
 
-                let can_move_up = *control.viewport_start > 0;
-                if ui
-                    .add_enabled(can_move_up, egui::Button::new("Up"))
-                    .on_hover_text("Show previous items")
-                    .clicked()
-                {
-                    *control.viewport_start -= 1;
-                }
-            });
+                    let can_move_up = *control.viewport_start > 0;
+                    if ui
+                        .add_enabled(can_move_up, egui::Button::new("Up"))
+                        .on_hover_text("Show previous items")
+                        .clicked()
+                    {
+                        *control.viewport_start -= 1;
+                    }
+                },
+            );
         });
     ui.add_space(6.0);
 }
