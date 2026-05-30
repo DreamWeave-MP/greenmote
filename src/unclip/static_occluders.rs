@@ -31,27 +31,43 @@ pub(crate) fn build_static_occluders(
     target_static_ids: &BTreeSet<String>,
     occluder_filter: &IdFilter,
 ) -> (StaticOccluderIndex, StaticOccluderBuildReport) {
-    let effective_refs = effective_active_refs(active_plugins, active_cells);
+    let effective_refs = effective_static_occluder_refs(
+        active_plugins,
+        active_cells,
+        static_index,
+        target_static_ids,
+        occluder_filter,
+    );
     let mut build_report = StaticOccluderBuildReport {
         active_refs_scanned: effective_refs.len(),
+        target_refs_excluded: effective_refs
+            .values()
+            .filter(|state| matches!(state, EffectiveRefState::Excluded(ExclusionReason::Target)))
+            .count(),
+        regex_excluded: effective_refs
+            .values()
+            .filter(|state| matches!(state, EffectiveRefState::Excluded(ExclusionReason::Regex)))
+            .count(),
+        unresolved_static: effective_refs
+            .values()
+            .filter(|state| {
+                matches!(
+                    state,
+                    EffectiveRefState::Excluded(ExclusionReason::UnresolvedStatic)
+                )
+            })
+            .count(),
         huge_footprint_side_threshold: HUGE_OCCLUDER_FOOTPRINT_SIDE,
         ..StaticOccluderBuildReport::default()
     };
     let mut occluders = Vec::new();
 
-    for (key, reference) in effective_refs {
-        let reference_id_key = reference.id.to_lowercase();
-        if target_static_ids.contains(&reference_id_key) {
-            build_report.target_refs_excluded += 1;
-            continue;
-        }
-        if !occluder_filter.includes(&reference.id) {
-            build_report.regex_excluded += 1;
-            continue;
-        }
-
-        let Some(static_mesh) = static_index.get_normalized_key(&reference_id_key) else {
-            build_report.unresolved_static += 1;
+    for (key, state) in effective_refs {
+        let EffectiveRefState::Candidate {
+            reference,
+            static_mesh,
+        } = state
+        else {
             continue;
         };
         let Ok(bounds) = mesh_bounds.bounds(static_mesh) else {
@@ -98,10 +114,28 @@ struct EffectiveRefKey {
     reference: (u32, u32),
 }
 
-fn effective_active_refs<'a>(
+enum EffectiveRefState<'a> {
+    Candidate {
+        reference: &'a tes3::esp::Reference,
+        static_mesh: &'a super::mesh::StaticMesh,
+    },
+    Excluded(ExclusionReason),
+}
+
+#[derive(Clone, Copy)]
+enum ExclusionReason {
+    Target,
+    Regex,
+    UnresolvedStatic,
+}
+
+fn effective_static_occluder_refs<'a>(
     active_plugins: &'a [Plugin],
     active_cells: &BTreeSet<CellCoord>,
-) -> BTreeMap<EffectiveRefKey, &'a tes3::esp::Reference> {
+    static_index: &'a StaticMeshIndex,
+    target_static_ids: &BTreeSet<String>,
+    occluder_filter: &IdFilter,
+) -> BTreeMap<EffectiveRefKey, EffectiveRefState<'a>> {
     let mut refs = BTreeMap::new();
 
     for plugin in active_plugins {
@@ -118,7 +152,22 @@ fn effective_active_refs<'a>(
                 if reference.deleted == Some(true) {
                     refs.remove(&key);
                 } else {
-                    refs.insert(key, reference);
+                    let reference_id_key = reference.id.to_lowercase();
+                    let state = if target_static_ids.contains(&reference_id_key) {
+                        EffectiveRefState::Excluded(ExclusionReason::Target)
+                    } else if !occluder_filter.includes(&reference.id) {
+                        EffectiveRefState::Excluded(ExclusionReason::Regex)
+                    } else if let Some(static_mesh) =
+                        static_index.get_normalized_key(&reference_id_key)
+                    {
+                        EffectiveRefState::Candidate {
+                            reference,
+                            static_mesh,
+                        }
+                    } else {
+                        EffectiveRefState::Excluded(ExclusionReason::UnresolvedStatic)
+                    };
+                    refs.insert(key, state);
                 }
             }
         }
@@ -129,16 +178,23 @@ fn effective_active_refs<'a>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        path::PathBuf,
+    };
 
-    use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
+    use tes3::esp::{Cell, CellData, Plugin, Reference, Static, TES3Object};
+    use vfstool_lib::VFS;
 
-    use crate::unclip::args::IdFilter;
+    use crate::unclip::{args::IdFilter, cells::CellCoord};
 
-    use super::{effective_active_refs, should_include_occluder};
+    use super::{
+        EffectiveRefState, ExclusionReason, build_static_occluders, effective_static_occluder_refs,
+        should_include_occluder,
+    };
 
     #[test]
-    fn effective_active_refs_apply_later_deletions() {
+    fn effective_static_occluder_refs_apply_later_deletions() {
         let first = Plugin {
             objects: vec![TES3Object::Cell(exterior_cell([(
                 (1, 2),
@@ -150,13 +206,19 @@ mod tests {
         };
 
         let plugins = [first, deleted];
-        let refs = effective_active_refs(&plugins, &BTreeSet::from([(0, 0)]));
+        let static_index = static_index();
+        let refs = effective_occluder_refs(
+            &plugins,
+            &BTreeSet::from([(0, 0)]),
+            &static_index,
+            &BTreeSet::new(),
+        );
 
         assert!(refs.is_empty());
     }
 
     #[test]
-    fn effective_active_refs_key_moved_refs_by_original_cell() {
+    fn effective_static_occluder_refs_key_moved_refs_by_original_cell() {
         let mut moved = reference_at_z(0.0);
         moved.moved_cell = Some((0, 0));
         let mut deleted = deleted_ref();
@@ -172,9 +234,211 @@ mod tests {
         };
 
         let plugins = [first, second];
-        let refs = effective_active_refs(&plugins, &BTreeSet::from([(0, 0), (1, 0)]));
+        let static_index = static_index();
+        let refs = effective_occluder_refs(
+            &plugins,
+            &BTreeSet::from([(0, 0), (1, 0)]),
+            &static_index,
+            &BTreeSet::new(),
+        );
 
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn later_live_non_candidate_suppresses_earlier_candidate() {
+        let first = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_with_id("rock"),
+            )]))],
+        };
+        let second = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_with_id("grass"),
+            )]))],
+        };
+        let plugins = [first, second];
+        let static_index = static_index();
+        let refs = effective_occluder_refs(
+            &plugins,
+            &BTreeSet::from([(0, 0)]),
+            &static_index,
+            &BTreeSet::from(["grass".to_owned()]),
+        );
+
+        assert_eq!(refs.len(), 1);
+        assert!(matches!(
+            refs.values().next(),
+            Some(EffectiveRefState::Excluded(ExclusionReason::Target))
+        ));
+    }
+
+    #[test]
+    fn moved_cell_non_candidate_suppresses_earlier_candidate() {
+        let first = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_with_id("rock"),
+            )]))],
+        };
+        let mut moved_non_candidate = reference_with_id("grass");
+        moved_non_candidate.moved_cell = Some((0, 0));
+        let second = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell_at(
+                (1, 0),
+                [((1, 2), moved_non_candidate)],
+            ))],
+        };
+        let plugins = [first, second];
+        let static_index = static_index();
+        let refs = effective_occluder_refs(
+            &plugins,
+            &BTreeSet::from([(0, 0), (1, 0)]),
+            &static_index,
+            &BTreeSet::from(["grass".to_owned()]),
+        );
+
+        assert_eq!(refs.len(), 1);
+        assert!(matches!(
+            refs.values().next(),
+            Some(EffectiveRefState::Excluded(ExclusionReason::Target))
+        ));
+    }
+
+    #[test]
+    fn active_refs_scanned_stays_final_effective_live_ref_count() {
+        let first = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([
+                ((1, 1), reference_with_id("rock")),
+                ((1, 2), reference_with_id("rock")),
+            ]))],
+        };
+        let second = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([
+                ((1, 2), deleted_ref()),
+                ((1, 3), reference_with_id("unknown")),
+            ]))],
+        };
+        let plugins = [first, second];
+        let static_index = static_index();
+        let vfs = VFS::from_directories(Vec::<PathBuf>::new(), None);
+        let mut mesh_bounds = crate::unclip::mesh::MeshCache::new(&vfs);
+        let (_, report) = build_static_occluders(
+            &plugins,
+            &BTreeSet::from([(0, 0)]),
+            &static_index,
+            &mut mesh_bounds,
+            &BTreeSet::new(),
+            &IdFilter::new(&[], &[]).unwrap(),
+        );
+
+        assert_eq!(report.active_refs_scanned, 2);
+        assert_eq!(report.missing_bounds, 1);
+        assert_eq!(report.unresolved_static, 1);
+    }
+
+    #[test]
+    fn overwritten_candidate_does_not_load_missing_mesh_bounds() {
+        let first = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_with_id("rock"),
+            )]))],
+        };
+        let second = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_with_id("grass"),
+            )]))],
+        };
+        let plugins = [first, second];
+        let static_index = static_index();
+        let vfs = VFS::from_directories(Vec::<PathBuf>::new(), None);
+        let mut mesh_bounds = crate::unclip::mesh::MeshCache::new(&vfs);
+
+        let (_, report) = build_static_occluders(
+            &plugins,
+            &BTreeSet::from([(0, 0)]),
+            &static_index,
+            &mut mesh_bounds,
+            &BTreeSet::from(["grass".to_owned()]),
+            &IdFilter::new(&[], &[]).unwrap(),
+        );
+
+        assert_eq!(report.active_refs_scanned, 1);
+        assert_eq!(report.target_refs_excluded, 1);
+        assert_eq!(report.missing_bounds, 0);
+        assert_eq!(report.resolved_bounds, 0);
+    }
+
+    #[test]
+    fn overwritten_candidate_by_regex_excluded_ref_does_not_load_missing_mesh_bounds() {
+        let first = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_with_id("rock"),
+            )]))],
+        };
+        let second = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_with_id("tree_huge"),
+            )]))],
+        };
+        let plugins = [first, second];
+        let static_index = static_index();
+        let vfs = VFS::from_directories(Vec::<PathBuf>::new(), None);
+        let mut mesh_bounds = crate::unclip::mesh::MeshCache::new(&vfs);
+
+        let (_, report) = build_static_occluders(
+            &plugins,
+            &BTreeSet::from([(0, 0)]),
+            &static_index,
+            &mut mesh_bounds,
+            &BTreeSet::new(),
+            &IdFilter::new(&[], &["^tree_huge$".to_owned()]).unwrap(),
+        );
+
+        assert_eq!(report.active_refs_scanned, 1);
+        assert_eq!(report.regex_excluded, 1);
+        assert_eq!(report.missing_bounds, 0);
+        assert_eq!(report.resolved_bounds, 0);
+    }
+
+    #[test]
+    fn overwritten_candidate_by_unresolved_static_does_not_load_missing_mesh_bounds() {
+        let first = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_with_id("rock"),
+            )]))],
+        };
+        let second = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([(
+                (1, 2),
+                reference_with_id("unknown"),
+            )]))],
+        };
+        let plugins = [first, second];
+        let static_index = static_index();
+        let vfs = VFS::from_directories(Vec::<PathBuf>::new(), None);
+        let mut mesh_bounds = crate::unclip::mesh::MeshCache::new(&vfs);
+
+        let (_, report) = build_static_occluders(
+            &plugins,
+            &BTreeSet::from([(0, 0)]),
+            &static_index,
+            &mut mesh_bounds,
+            &BTreeSet::new(),
+            &IdFilter::new(&[], &[]).unwrap(),
+        );
+
+        assert_eq!(report.active_refs_scanned, 1);
+        assert_eq!(report.unresolved_static, 1);
+        assert_eq!(report.missing_bounds, 0);
+        assert_eq!(report.resolved_bounds, 0);
     }
 
     #[test]
@@ -204,6 +468,13 @@ mod tests {
         }
     }
 
+    fn reference_with_id(id: &str) -> Reference {
+        Reference {
+            id: id.to_owned(),
+            ..Reference::default()
+        }
+    }
+
     fn deleted_ref() -> Reference {
         Reference {
             deleted: Some(true),
@@ -229,5 +500,34 @@ mod tests {
         };
         cell.references.extend(refs);
         cell
+    }
+
+    fn static_index() -> crate::unclip::mesh::StaticMeshIndex {
+        let rock = Static {
+            id: "rock".to_owned(),
+            mesh: "rock.nif".to_owned(),
+            ..Static::default()
+        };
+        let grass = Static {
+            id: "grass".to_owned(),
+            mesh: "grass.nif".to_owned(),
+            ..Static::default()
+        };
+        crate::unclip::mesh::StaticMeshIndex::from_statics([&rock, &grass])
+    }
+
+    fn effective_occluder_refs<'a>(
+        plugins: &'a [Plugin],
+        active_cells: &BTreeSet<CellCoord>,
+        static_index: &'a crate::unclip::mesh::StaticMeshIndex,
+        target_static_ids: &BTreeSet<String>,
+    ) -> BTreeMap<super::EffectiveRefKey, EffectiveRefState<'a>> {
+        effective_static_occluder_refs(
+            plugins,
+            active_cells,
+            static_index,
+            target_static_ids,
+            &IdFilter::new(&[], &[]).unwrap(),
+        )
     }
 }
