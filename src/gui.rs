@@ -108,7 +108,32 @@ impl GreenmoteApp {
 
         self.checked_initial_config = true;
         if !self.load_settings() {
+            if self.try_load_default_openmw_config_after_initial_failure() {
+                return;
+            }
             self.record_settings_load_failure();
+        }
+    }
+
+    fn try_load_default_openmw_config_after_initial_failure(&mut self) -> bool {
+        let Some(error) = self.settings_error().map(str::to_owned) else {
+            return false;
+        };
+        if !is_openmw_config_settings_error(&error) {
+            return false;
+        }
+
+        let Ok(path) = crate::groundcover::openmw::default_user_config_file() else {
+            return false;
+        };
+
+        if self.load_settings_with_openmw_cfg(&path) {
+            self.session_openmw_cfg = Some(path);
+            self.openmw_config_error = None;
+            self.config_recovery_error = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -234,8 +259,6 @@ impl GreenmoteApp {
             return;
         }
 
-        let default_config = crate::groundcover::openmw::default_user_config_file();
-        let mut use_default = false;
         let mut select_config = false;
         let mut close = false;
         let can_select_config = !self.convert.is_running();
@@ -251,26 +274,11 @@ impl GreenmoteApp {
                         .text(UiText::ChooseOpenMwConfigBeforeContinuing),
                 );
                 ui.add_space(8.0);
-                match &default_config {
-                    Ok(path) => {
-                        ui.label(self.localizer.text(UiText::DefaultOpenMwUserConfigPath));
-                        ui.monospace(path.display().to_string());
-                    }
-                    Err(path_error) => {
-                        ui.colored_label(
-                            ui.visuals().error_fg_color,
-                            format!("Could not determine default OpenMW config path: {path_error}"),
-                        );
-                    }
+                if let Some(error) = &self.openmw_config_error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                    ui.add_space(8.0);
                 }
-                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    use_default = ui
-                        .add_enabled(
-                            default_config.is_ok() && can_select_config,
-                            egui::Button::new(self.localizer.text(UiText::UseDefaultPath)),
-                        )
-                        .clicked();
                     select_config = ui
                         .add_enabled(
                             can_select_config,
@@ -281,18 +289,7 @@ impl GreenmoteApp {
                 });
             });
 
-        if use_default {
-            match default_config {
-                Ok(path) => {
-                    self.request_openmw_config_path(path);
-                }
-                Err(error) => {
-                    self.openmw_config_error = Some(format!(
-                        "Failed to determine default OpenMW config path: {error}"
-                    ));
-                }
-            }
-        } else if select_config {
+        if select_config {
             self.request_openmw_config_selection();
         } else if close {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

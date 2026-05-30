@@ -123,6 +123,12 @@ impl ConvertUiState {
         self.unclip.pending_write_confirmation = false;
     }
 
+    pub(super) fn sync_loaded_openmw_config_status(&mut self, openmw_cfg: Option<&Path>) {
+        if let Some(path) = openmw_cfg {
+            self.status = loaded_openmw_config_status(path);
+        }
+    }
+
     pub(super) fn current_run_options(&self) -> ConvertRunOptions {
         self.run_options
     }
@@ -161,6 +167,10 @@ impl ConvertUiState {
     fn run_options_differ_from_saved(&self) -> bool {
         self.run_options != self.saved_run_options
     }
+}
+
+fn loaded_openmw_config_status(path: &Path) -> String {
+    format!("Loaded OpenMW config: {}", path.display())
 }
 
 impl GreenmoteApp {
@@ -1242,7 +1252,9 @@ fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
 mod tests {
     use std::{ffi::OsString, path::Path};
 
-    use super::{ConvertRunOptions, ConvertUiState, UnclipRunOptions, egui};
+    use super::{
+        ConvertRunOptions, ConvertUiState, UnclipRunOptions, egui, loaded_openmw_config_status,
+    };
     use crate::gui::GreenmoteApp;
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -1318,6 +1330,16 @@ mod tests {
                 debug: true,
                 auto_enable: false,
             }
+        );
+    }
+
+    #[test]
+    fn loaded_openmw_config_status_includes_path() {
+        let path = Path::new("/tmp/openmw.cfg");
+
+        assert_eq!(
+            loaded_openmw_config_status(path),
+            "Loaded OpenMW config: /tmp/openmw.cfg"
         );
     }
 

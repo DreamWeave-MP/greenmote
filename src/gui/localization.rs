@@ -58,8 +58,6 @@ macro_rules! route_text {
             | UiText::OpenMwConfigNotFoundTitle
             | UiText::OpenMwConfigNotFoundMessage
             | UiText::ChooseOpenMwConfigBeforeContinuing
-            | UiText::DefaultOpenMwUserConfigPath
-            | UiText::UseDefaultPath
             | UiText::SelectOpenMwConfig
             | UiText::SelectUnclipTargetPlugin => $dialogs($key),
             UiText::OpenMwConfig
@@ -205,8 +203,6 @@ pub(super) enum UiText {
     OpenMwConfigNotFoundTitle,
     OpenMwConfigNotFoundMessage,
     ChooseOpenMwConfigBeforeContinuing,
-    DefaultOpenMwUserConfigPath,
-    UseDefaultPath,
     SelectOpenMwConfig,
     SelectUnclipTargetPlugin,
     OpenMwConfig,

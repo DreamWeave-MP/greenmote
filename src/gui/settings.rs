@@ -715,6 +715,8 @@ impl GreenmoteApp {
                     .sync_run_options(ConvertRunOptions::from_config(&config));
                 self.convert
                     .sync_unclip_run_options(UnclipRunOptions::from_config(&config));
+                self.convert
+                    .sync_loaded_openmw_config_status(config.openmw_cfg.as_deref());
                 true
             }
             Err(error) => {
@@ -738,6 +740,8 @@ impl GreenmoteApp {
                     .sync_run_options(ConvertRunOptions::from_config(&config));
                 self.convert
                     .sync_unclip_run_options(UnclipRunOptions::from_config(&config));
+                self.convert
+                    .sync_loaded_openmw_config_status(config.openmw_cfg.as_deref());
                 true
             }
             Err(error) => {
@@ -765,6 +769,8 @@ impl GreenmoteApp {
                     .sync_run_options(ConvertRunOptions::from_config(&config));
                 self.convert
                     .sync_unclip_run_options(UnclipRunOptions::from_config(&config));
+                self.convert
+                    .sync_loaded_openmw_config_status(config.openmw_cfg.as_deref());
                 true
             }
             Err(error) => {

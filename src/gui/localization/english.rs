@@ -87,8 +87,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         UiText::ChooseOpenMwConfigBeforeContinuing => {
             "Choose a valid OpenMW config path before continuing."
         }
-        UiText::DefaultOpenMwUserConfigPath => "Default OpenMW user config path:",
-        UiText::UseDefaultPath => "Use default path",
         UiText::SelectOpenMwConfig => "Select OpenMW Config",
         UiText::SelectUnclipTargetPlugin => "Select Unclip Target Plugin",
         _ => unreachable!(),
