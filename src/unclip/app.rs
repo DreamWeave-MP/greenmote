@@ -89,11 +89,7 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
     } else {
         Some(WritePlan::default())
     };
-    let write_status = if config.instances || !config.write {
-        write_plan.as_ref().map(WriteStatusIndex::from_plan)
-    } else {
-        None
-    };
+    let write_status = write_plan.as_ref().map(WriteStatusIndex::from_plan);
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
     let mut log = File::create(log_path)?;
     let mut output_writer = TeeWriter::new(stdout, &mut log);
@@ -198,25 +194,9 @@ fn write_output(
     write_status: Option<&WriteStatusIndex>,
 ) -> io::Result<TerrainInspectionReport> {
     match (config.structured, config.instances) {
-        (false, false) => Ok(write_text_summary(
-            output.plugin,
-            output.target_refs,
-            output.terrain,
-            output.static_index,
-            output.mesh_contacts,
-            output.static_occluders,
-            output.policy,
-        )),
+        (false, false) => Ok(write_text_summary(output, write_status)),
         (false, true) => write_instance_text(stdout, output, write_status),
-        (true, false) => Ok(write_structured_summary(
-            output.plugin,
-            output.target_refs,
-            output.terrain,
-            output.static_index,
-            output.mesh_contacts,
-            output.static_occluders,
-            output.policy,
-        )),
+        (true, false) => Ok(write_structured_summary(output, write_status)),
         (true, true) => write_structured_instances(stdout, output, write_status),
     }
 }
@@ -244,22 +224,20 @@ fn write_output_footer(
 }
 
 fn write_text_summary(
-    plugin: &Plugin,
-    target_refs: &TargetRefIndex,
-    terrain: &TerrainIndex,
-    static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshCache<'_>,
-    static_occluders: &StaticOccluderIndex,
-    policy: &UnclipPolicy,
+    output: &mut OutputContext<'_, '_>,
+    write_status: Option<&WriteStatusIndex>,
 ) -> TerrainInspectionReport {
     count_target_refs(
-        plugin,
-        target_refs,
-        terrain,
-        static_index,
-        mesh_contacts,
-        static_occluders,
-        policy,
+        output.plugin,
+        output.target_refs,
+        &mut ReferenceInspectionContext {
+            terrain: output.terrain,
+            static_index: output.static_index,
+            mesh_contacts: output.mesh_contacts,
+            static_occluders: output.static_occluders,
+            policy: output.policy,
+            write: write_status,
+        },
     )
 }
 
@@ -275,34 +253,32 @@ fn write_instance_text(
         mesh_contacts: output.mesh_contacts,
         static_occluders: output.static_occluders,
         policy: output.policy,
+        write: write_status,
     };
     let inspection = inspect_target_refs(
         output.plugin,
         output.target_refs,
         &mut context,
-        write_status,
         |reference| report::write_reference_text(stdout, reference),
     )?;
     Ok(inspection)
 }
 
 fn write_structured_summary(
-    plugin: &Plugin,
-    target_refs: &TargetRefIndex,
-    terrain: &TerrainIndex,
-    static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshCache<'_>,
-    static_occluders: &StaticOccluderIndex,
-    policy: &UnclipPolicy,
+    output: &mut OutputContext<'_, '_>,
+    write_status: Option<&WriteStatusIndex>,
 ) -> TerrainInspectionReport {
     count_target_refs(
-        plugin,
-        target_refs,
-        terrain,
-        static_index,
-        mesh_contacts,
-        static_occluders,
-        policy,
+        output.plugin,
+        output.target_refs,
+        &mut ReferenceInspectionContext {
+            terrain: output.terrain,
+            static_index: output.static_index,
+            mesh_contacts: output.mesh_contacts,
+            static_occluders: output.static_occluders,
+            policy: output.policy,
+            write: write_status,
+        },
     )
 }
 
@@ -319,12 +295,12 @@ fn write_structured_instances(
         mesh_contacts: output.mesh_contacts,
         static_occluders: output.static_occluders,
         policy: output.policy,
+        write: write_status,
     };
     let inspection = inspect_target_refs(
         output.plugin,
         output.target_refs,
         &mut context,
-        write_status,
         |reference| report::write_structured_reference_record(stdout, reference),
     )?;
     Ok(inspection)

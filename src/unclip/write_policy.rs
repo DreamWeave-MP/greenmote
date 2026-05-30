@@ -5,7 +5,7 @@ use tes3::esp::{Plugin, TES3Object};
 use super::{
     args::{RelocationPolicy, UnclipPolicy},
     cells::CellCoord,
-    mesh::{MeshAabb, MeshCache, MeshContact, MeshGeometry, StaticMeshIndex},
+    mesh::{MeshAabb, MeshCache, MeshContact, MeshGeometry, StaticMeshIndex, WorldAabb},
     occlusion::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
         translate_bounds_xy,
@@ -14,8 +14,8 @@ use super::{
     target::TargetRefIndex,
     terrain::TerrainIndex,
     write_plan::{
-        WriteAdjustment, WriteOrientation, WritePlan, WriteStaticBoundsDeletion,
-        WriteStaticBoundsMove,
+        WriteAdjustment, WriteOrientation, WritePlan, WriteStaticBoundsAnalysis,
+        WriteStaticBoundsDeletion, WriteStaticBoundsMove,
     },
 };
 
@@ -162,9 +162,16 @@ impl<'a> WriteChangesByCell<'a> {
 
 fn record_reference_change(change: WriteReferenceChange, plan: &mut WritePlan) {
     match change {
-        WriteReferenceChange::None => {}
+        WriteReferenceChange::None(analysis) => {
+            if let Some(analysis) = analysis {
+                plan.static_bounds_analysis.push(analysis);
+            }
+        }
         WriteReferenceChange::Changes(changes) => {
             let changes = *changes;
+            if let Some(analysis) = changes.static_bounds_analysis {
+                plan.static_bounds_analysis.push(analysis);
+            }
             if let Some(adjustment) = changes.adjustment {
                 plan.adjusted_refs += 1;
                 plan.adjustments.push(adjustment);
@@ -186,7 +193,7 @@ fn record_reference_change(change: WriteReferenceChange, plan: &mut WritePlan) {
 }
 
 enum WriteReferenceChange {
-    None,
+    None(Option<WriteStaticBoundsAnalysis>),
     Changes(Box<WriteReferenceChanges>),
 }
 
@@ -196,6 +203,7 @@ struct WriteReferenceChanges {
     deletion: Option<WriteStaticBoundsDeletion>,
     move_: Option<WriteStaticBoundsMove>,
     orientation: Option<WriteOrientation>,
+    static_bounds_analysis: Option<WriteStaticBoundsAnalysis>,
 }
 
 #[derive(Clone, Copy)]
@@ -224,7 +232,7 @@ fn adjust_reference_for_terrain_and_static_bounds(
     context: &mut WritePlanningContext<'_, '_>,
 ) -> WriteReferenceChange {
     if reference.deleted == Some(true) {
-        return WriteReferenceChange::None;
+        return WriteReferenceChange::None(None);
     }
     let terrain = context.terrain;
     let static_occluders = context.static_occluders;
@@ -235,11 +243,16 @@ fn adjust_reference_for_terrain_and_static_bounds(
         static_occluders,
         policy,
     };
+    let static_bounds_context = StaticBoundsPlanningContext {
+        terrain,
+        static_occluders,
+        policy,
+    };
     let Some(static_mesh) = context.static_index.get(&reference.id) else {
-        return WriteReferenceChange::None;
+        return WriteReferenceChange::None(None);
     };
     let Ok(geometry) = context.mesh_contacts.geometry(static_mesh) else {
-        return WriteReferenceChange::None;
+        return WriteReferenceChange::None(None);
     };
 
     let contact_position =
@@ -261,48 +274,24 @@ fn adjust_reference_for_terrain_and_static_bounds(
         corrected_translation[2] -= contact_position[2] - terrain_z;
     }
     let mut changes = WriteReferenceChanges::default();
-    let mut final_translation = reference.translation;
-    let static_bounds_action = decide_static_bounds_action(
-        geometry
-            .bounds
-            .world_aabb(corrected_translation, reference.rotation, reference.scale),
-        static_occluders,
-    );
-    match static_bounds_action {
-        StaticBoundsAction::Delete { ratio, occluder } if policy.write_actions.static_delete() => {
-            changes.deletion = Some(static_bounds_deletion(
-                cell, key, reference, ratio, occluder,
-            ));
-            return changes_to_result(changes);
+    let final_translation = match plan_static_bounds_change(
+        &mut changes,
+        target,
+        reference,
+        corrected_translation,
+        geometry,
+        static_bounds_context,
+    ) {
+        StaticBoundsPlanResult::Continue(final_translation) => final_translation,
+        StaticBoundsPlanResult::FinishTerrainAndOrientation(final_translation) => {
+            return finish_with_terrain_and_orientation(
+                changes,
+                final_translation,
+                adjustment_context,
+            );
         }
-        StaticBoundsAction::Move {
-            ratio, occluder, ..
-        } if policy.write_actions.static_move() => {
-            let Some(move_) = try_static_bounds_move(
-                target,
-                reference,
-                corrected_translation,
-                MoveSearchContext {
-                    geometry,
-                    terrain,
-                    static_occluders,
-                    relocation: policy.relocation,
-                },
-                StaticBoundsMoveCause { ratio, occluder },
-            ) else {
-                return finish_with_terrain_and_orientation(
-                    changes,
-                    final_translation,
-                    adjustment_context,
-                );
-            };
-            final_translation = move_.new_position;
-            changes.move_ = Some(move_);
-        }
-        StaticBoundsAction::None
-        | StaticBoundsAction::Delete { .. }
-        | StaticBoundsAction::Move { .. } => {}
-    }
+        StaticBoundsPlanResult::Stop => return changes_to_result(changes),
+    };
 
     if changes.move_.is_none() {
         return finish_with_terrain_and_orientation(changes, final_translation, adjustment_context);
@@ -316,6 +305,98 @@ fn adjust_reference_for_terrain_and_static_bounds(
         orientation_context,
     );
     changes_to_result(changes)
+}
+
+enum StaticBoundsPlanResult {
+    Continue([f32; 3]),
+    FinishTerrainAndOrientation([f32; 3]),
+    Stop,
+}
+
+#[derive(Clone, Copy)]
+struct StaticBoundsPlanningContext<'a> {
+    terrain: &'a TerrainIndex,
+    static_occluders: &'a StaticOccluderIndex,
+    policy: &'a UnclipPolicy,
+}
+
+fn plan_static_bounds_change(
+    changes: &mut WriteReferenceChanges,
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    corrected_translation: [f32; 3],
+    geometry: &MeshGeometry,
+    context: StaticBoundsPlanningContext<'_>,
+) -> StaticBoundsPlanResult {
+    let corrected_bounds =
+        geometry
+            .bounds
+            .world_aabb(corrected_translation, reference.rotation, reference.scale);
+    match decide_static_bounds_action(corrected_bounds, context.static_occluders) {
+        StaticBoundsAction::None => {
+            changes.static_bounds_analysis = Some(static_bounds_analysis(
+                target,
+                "static_bounds_clear",
+                0.0,
+                None,
+                corrected_bounds,
+            ));
+        }
+        StaticBoundsAction::Delete { ratio, occluder } => {
+            changes.static_bounds_analysis = Some(static_bounds_analysis(
+                target,
+                "static_bounds_fully_occluded",
+                ratio,
+                Some(occluder),
+                corrected_bounds,
+            ));
+            if context.policy.write_actions.static_delete() {
+                changes.deletion = Some(static_bounds_deletion(
+                    target.cell,
+                    target.key,
+                    reference,
+                    ratio,
+                    occluder,
+                ));
+                return StaticBoundsPlanResult::Stop;
+            }
+        }
+        StaticBoundsAction::Move { ratio, occluder }
+            if context.policy.write_actions.static_move() =>
+        {
+            let move_ = try_static_bounds_move(
+                target,
+                reference,
+                corrected_translation,
+                MoveSearchContext {
+                    geometry,
+                    terrain: context.terrain,
+                    static_occluders: context.static_occluders,
+                    relocation: context.policy.relocation,
+                },
+                StaticBoundsMoveCause { ratio, occluder },
+            );
+            changes.static_bounds_analysis = Some(static_bounds_analysis(
+                target,
+                if move_.is_some() {
+                    "static_bounds_relocatable"
+                } else {
+                    "static_bounds_blocked"
+                },
+                ratio,
+                Some(occluder),
+                corrected_bounds,
+            ));
+            let Some(move_) = move_ else {
+                return StaticBoundsPlanResult::FinishTerrainAndOrientation(reference.translation);
+            };
+            let new_position = move_.new_position;
+            changes.move_ = Some(move_);
+            return StaticBoundsPlanResult::Continue(new_position);
+        }
+        StaticBoundsAction::Move { .. } => {}
+    }
+    StaticBoundsPlanResult::Continue(reference.translation)
 }
 
 #[derive(Clone, Copy)]
@@ -384,6 +465,29 @@ fn static_bounds_deletion(
     }
 }
 
+fn static_bounds_analysis(
+    target: WriteTarget,
+    status: &'static str,
+    ratio: f32,
+    occluder: Option<&StaticOccluder>,
+    target_bounds: WorldAabb,
+) -> WriteStaticBoundsAnalysis {
+    WriteStaticBoundsAnalysis {
+        cell: [target.cell.0, target.cell.1],
+        reference_key: [target.key.0, target.key.1],
+        status,
+        ratio,
+        occluder_id: occluder.map(|occluder| occluder.id.clone()),
+        occluder_cell: occluder.map(|occluder| occluder.cell),
+        occluder_reference_key: occluder.map(|occluder| occluder.reference_key),
+        target_bounds: Some(target_bounds),
+        occluder_bounds: occluder.map(|occluder| occluder.bounds),
+        intersection_volume: occluder
+            .and_then(|occluder| target_bounds.intersection(occluder.bounds))
+            .map(WorldAabb::volume),
+    }
+}
+
 fn try_static_bounds_move(
     target: WriteTarget,
     reference: &tes3::esp::Reference,
@@ -434,7 +538,7 @@ fn changes_to_result(changes: WriteReferenceChanges) -> WriteReferenceChange {
         && changes.move_.is_none()
         && changes.orientation.is_none()
     {
-        WriteReferenceChange::None
+        WriteReferenceChange::None(changes.static_bounds_analysis)
     } else {
         WriteReferenceChange::Changes(Box::new(changes))
     }

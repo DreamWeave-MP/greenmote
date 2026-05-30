@@ -1,8 +1,11 @@
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use serde::Serialize;
 
-use super::cells::CellCoord;
+use super::{cells::CellCoord, mesh::WorldAabb};
 
 #[derive(Serialize)]
 pub(crate) struct WriteReport {
@@ -111,6 +114,7 @@ pub(crate) struct WritePlan {
     pub(crate) deletions: Vec<WriteStaticBoundsDeletion>,
     pub(crate) moves: Vec<WriteStaticBoundsMove>,
     pub(crate) orientations: Vec<WriteOrientation>,
+    pub(crate) static_bounds_analysis: Vec<WriteStaticBoundsAnalysis>,
 }
 
 impl WritePlan {
@@ -176,6 +180,20 @@ pub(crate) struct WriteOrientation {
     pub(crate) terrain_normal: [f32; 3],
     pub(crate) angle_degrees: f32,
     pub(crate) contact_position: [f32; 3],
+}
+
+#[derive(Clone)]
+pub(crate) struct WriteStaticBoundsAnalysis {
+    pub(crate) cell: [i32; 2],
+    pub(crate) reference_key: [u32; 2],
+    pub(crate) status: &'static str,
+    pub(crate) ratio: f32,
+    pub(crate) occluder_id: Option<String>,
+    pub(crate) occluder_cell: Option<[i32; 2]>,
+    pub(crate) occluder_reference_key: Option<[u32; 2]>,
+    pub(crate) target_bounds: Option<WorldAabb>,
+    pub(crate) occluder_bounds: Option<WorldAabb>,
+    pub(crate) intersection_volume: Option<f32>,
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -246,6 +264,7 @@ pub(crate) struct WriteStatusIndex {
     deleted: BTreeSet<AdjustedRefKey>,
     moved: BTreeSet<AdjustedRefKey>,
     oriented: BTreeSet<AdjustedRefKey>,
+    static_bounds: BTreeMap<AdjustedRefKey, WriteStaticBoundsAnalysis>,
 }
 
 impl WriteStatusIndex {
@@ -255,6 +274,20 @@ impl WriteStatusIndex {
             deleted: adjusted_ref_keys_from_deletions(&plan.deletions),
             moved: adjusted_ref_keys_from_moves(&plan.moves),
             oriented: adjusted_ref_keys_from_orientations(&plan.orientations),
+            static_bounds: plan
+                .static_bounds_analysis
+                .iter()
+                .cloned()
+                .map(|analysis| {
+                    (
+                        AdjustedRefKey {
+                            cell: analysis.cell,
+                            reference_key: analysis.reference_key,
+                        },
+                        analysis,
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -272,6 +305,14 @@ impl WriteStatusIndex {
 
     pub(crate) fn is_oriented(&self, cell: CellCoord, key: (u32, u32)) -> bool {
         self.oriented.contains(&AdjustedRefKey::new(cell, key))
+    }
+
+    pub(crate) fn static_bounds_analysis(
+        &self,
+        cell: CellCoord,
+        key: (u32, u32),
+    ) -> Option<&WriteStaticBoundsAnalysis> {
+        self.static_bounds.get(&AdjustedRefKey::new(cell, key))
     }
 }
 

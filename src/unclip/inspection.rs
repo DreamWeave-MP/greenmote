@@ -28,7 +28,6 @@ pub(super) fn inspect_target_refs(
     plugin: &Plugin,
     target_refs: &TargetRefIndex,
     context: &mut ReferenceInspectionContext<'_, '_>,
-    write: Option<&WriteStatusIndex>,
     mut reference_sink: impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<TerrainInspectionReport> {
     let mut report = TerrainInspectionReport::default();
@@ -40,7 +39,6 @@ pub(super) fn inspect_target_refs(
             cell,
             key,
             reference,
-            write,
             &mut reference_sink,
         )?;
     }
@@ -51,23 +49,12 @@ pub(super) fn inspect_target_refs(
 pub(super) fn count_target_refs(
     plugin: &Plugin,
     target_refs: &TargetRefIndex,
-    terrain: &TerrainIndex,
-    static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshCache<'_>,
-    static_occluders: &StaticOccluderIndex,
-    policy: &UnclipPolicy,
+    context: &mut ReferenceInspectionContext<'_, '_>,
 ) -> TerrainInspectionReport {
     let mut report = TerrainInspectionReport::default();
-    let mut context = ReferenceInspectionContext {
-        terrain,
-        static_index,
-        mesh_contacts,
-        static_occluders,
-        policy,
-    };
 
-    for (cell, _, reference) in target_refs.iter_refs(plugin) {
-        count_reference(&mut report, &mut context, cell, reference);
+    for (cell, key, reference) in target_refs.iter_refs(plugin) {
+        count_reference(&mut report, context, cell, key, reference);
     }
 
     report
@@ -79,6 +66,7 @@ pub(super) struct ReferenceInspectionContext<'a, 'b> {
     pub(super) mesh_contacts: &'a mut MeshCache<'b>,
     pub(super) static_occluders: &'a StaticOccluderIndex,
     pub(super) policy: &'a UnclipPolicy,
+    pub(super) write: Option<&'a WriteStatusIndex>,
 }
 
 struct OriginDetails {
@@ -93,7 +81,6 @@ fn inspect_reference(
     cell: CellCoord,
     key: (u32, u32),
     reference: &tes3::esp::Reference,
-    write: Option<&WriteStatusIndex>,
     reference_sink: &mut impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<()> {
     report.refs += 1;
@@ -103,7 +90,10 @@ fn inspect_reference(
             cell,
             key,
             reference,
-            if write.is_some_and(|write| write.is_deleted(cell, key)) {
+            if context
+                .write
+                .is_some_and(|write| write.is_deleted(cell, key))
+            {
                 "deleted_static_bounds_occluded"
             } else {
                 "skipped_deleted_ref"
@@ -112,6 +102,12 @@ fn inspect_reference(
         return reference_sink(&inspection);
     }
 
+    let static_bounds_context = StaticBoundsContext {
+        terrain: context.terrain,
+        static_occluders: context.static_occluders,
+        policy: context.policy,
+        write: context.write,
+    };
     let mesh_contact = resolve_ref_mesh_contact(
         report,
         reference,
@@ -132,12 +128,13 @@ fn inspect_reference(
     };
     let static_bounds_occlusion = classify_static_bounds_occlusion(
         report,
-        cell,
-        context.terrain,
-        reference,
-        &mesh_contact,
-        context.static_occluders,
-        context.policy,
+        StaticBoundsOcclusionInput {
+            cell,
+            key,
+            reference,
+            mesh_resolution: &mesh_contact,
+            context: static_bounds_context,
+        },
     );
     let origin = classify_origin(
         report,
@@ -154,7 +151,7 @@ fn inspect_reference(
         contact_details: contact_details.as_ref(),
         static_bounds_occlusion: static_bounds_occlusion.as_ref(),
         write: WriteStatusEvidence {
-            plan: write_plan_evidence(write, cell, key),
+            plan: write_plan_evidence(context.write, cell, key),
             actions: context.policy.write_actions,
         },
         contact_epsilon: context.policy.contact_epsilon,
@@ -167,6 +164,7 @@ fn count_reference(
     report: &mut TerrainInspectionReport,
     context: &mut ReferenceInspectionContext<'_, '_>,
     cell: CellCoord,
+    key: (u32, u32),
     reference: &tes3::esp::Reference,
 ) {
     report.refs += 1;
@@ -175,6 +173,12 @@ fn count_reference(
         return;
     }
 
+    let static_bounds_context = StaticBoundsContext {
+        terrain: context.terrain,
+        static_occluders: context.static_occluders,
+        policy: context.policy,
+        write: context.write,
+    };
     let mesh_contact = resolve_ref_mesh_contact(
         report,
         reference,
@@ -192,12 +196,13 @@ fn count_reference(
     }
     let _ = classify_static_bounds_occlusion(
         report,
-        cell,
-        context.terrain,
-        reference,
-        &mesh_contact,
-        context.static_occluders,
-        context.policy,
+        StaticBoundsOcclusionInput {
+            cell,
+            key,
+            reference,
+            mesh_resolution: &mesh_contact,
+            context: static_bounds_context,
+        },
     );
     let _ = classify_origin(
         report,
@@ -380,35 +385,78 @@ struct StaticBoundsOcclusionDetails {
     intersection_volume: Option<f32>,
 }
 
+#[derive(Clone, Copy)]
+struct StaticBoundsOcclusionInput<'a, 'b> {
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &'a tes3::esp::Reference,
+    mesh_resolution: &'a MeshContactResolution<'b>,
+    context: StaticBoundsContext<'a>,
+}
+
+#[derive(Clone, Copy)]
+struct StaticBoundsContext<'a> {
+    terrain: &'a TerrainIndex,
+    static_occluders: &'a StaticOccluderIndex,
+    policy: &'a UnclipPolicy,
+    write: Option<&'a WriteStatusIndex>,
+}
+
 fn classify_static_bounds_occlusion(
     report: &mut TerrainInspectionReport,
-    cell: CellCoord,
-    terrain: &TerrainIndex,
-    reference: &tes3::esp::Reference,
-    mesh_resolution: &MeshContactResolution<'_>,
-    static_occluders: &StaticOccluderIndex,
-    policy: &UnclipPolicy,
+    input: StaticBoundsOcclusionInput<'_, '_>,
 ) -> Option<StaticBoundsOcclusionDetails> {
     let MeshContactResolution::Resolved {
         contact, bounds, ..
-    } = mesh_resolution
+    } = input.mesh_resolution
     else {
         return None;
     };
-    let mut corrected_translation = reference.translation;
-    let contact_position =
-        contact.world_position(reference.translation, reference.rotation, reference.scale);
-    if let Some(terrain_z) = terrain.height_at(contact_position[0], contact_position[1]) {
+    if let Some(analysis) = input
+        .context
+        .write
+        .and_then(|write| write.static_bounds_analysis(input.cell, input.key))
+    {
+        record_static_bounds_report_counts(report, analysis.status);
+        return Some(StaticBoundsOcclusionDetails {
+            status: analysis.status,
+            ratio: analysis.ratio,
+            occluder: analysis.occluder_id.as_ref().map(|id| StaticOccluder {
+                id: id.clone(),
+                cell: analysis.occluder_cell.unwrap_or([0, 0]),
+                reference_key: analysis.occluder_reference_key.unwrap_or([0, 0]),
+                bounds: analysis.occluder_bounds.unwrap_or(WorldAabb {
+                    min: [0.0; 3],
+                    max: [0.0; 3],
+                }),
+            }),
+            target_bounds: analysis.target_bounds,
+            intersection_volume: analysis.intersection_volume,
+        });
+    }
+    let mut corrected_translation = input.reference.translation;
+    let contact_position = contact.world_position(
+        input.reference.translation,
+        input.reference.rotation,
+        input.reference.scale,
+    );
+    if let Some(terrain_z) = input
+        .context
+        .terrain
+        .height_at(contact_position[0], contact_position[1])
+    {
         corrected_translation[2] -= contact_position[2] - terrain_z;
     }
-    let corrected_bounds =
-        bounds.world_aabb(corrected_translation, reference.rotation, reference.scale);
-    let action = decide_static_bounds_action(corrected_bounds, static_occluders);
+    let corrected_bounds = bounds.world_aabb(
+        corrected_translation,
+        input.reference.rotation,
+        input.reference.scale,
+    );
+    let action = decide_static_bounds_action(corrected_bounds, input.context.static_occluders);
     let (status, ratio, occluder) = match action {
         StaticBoundsAction::None => ("static_bounds_clear", 0.0, None),
         StaticBoundsAction::Delete { ratio, occluder } => {
-            report.refs_static_bounds_occluded += 1;
-            report.refs_static_bounds_fully_occluded += 1;
+            record_static_bounds_report_counts(report, "static_bounds_fully_occluded");
             (
                 "static_bounds_fully_occluded",
                 ratio,
@@ -418,29 +466,27 @@ fn classify_static_bounds_occlusion(
         StaticBoundsAction::Move {
             ratio, occluder, ..
         } if find_valid_relocation_transform(
-            cell,
+            input.cell,
             RefTransform {
                 translation: corrected_translation,
-                rotation: reference.rotation,
-                scale: reference.scale,
+                rotation: input.reference.rotation,
+                scale: input.reference.scale,
             },
             contact,
             *bounds,
-            terrain,
-            static_occluders,
-            policy.relocation,
+            input.context.terrain,
+            input.context.static_occluders,
+            input.context.policy.relocation,
         )
         .is_some() =>
         {
-            report.refs_static_bounds_occluded += 1;
-            report.refs_static_bounds_relocatable += 1;
+            record_static_bounds_report_counts(report, "static_bounds_relocatable");
             ("static_bounds_relocatable", ratio, Some(occluder.clone()))
         }
         StaticBoundsAction::Move {
             ratio, occluder, ..
         } => {
-            report.refs_static_bounds_occluded += 1;
-            report.refs_static_bounds_blocked += 1;
+            record_static_bounds_report_counts(report, "static_bounds_blocked");
             ("static_bounds_blocked", ratio, Some(occluder.clone()))
         }
     };
@@ -456,6 +502,25 @@ fn classify_static_bounds_occlusion(
         target_bounds: Some(corrected_bounds),
         intersection_volume,
     })
+}
+
+fn record_static_bounds_report_counts(report: &mut TerrainInspectionReport, status: &str) {
+    match status {
+        "static_bounds_fully_occluded" => {
+            report.refs_static_bounds_occluded += 1;
+            report.refs_static_bounds_fully_occluded += 1;
+        }
+        "static_bounds_relocatable" => {
+            report.refs_static_bounds_occluded += 1;
+            report.refs_static_bounds_relocatable += 1;
+        }
+        "static_bounds_blocked" => {
+            report.refs_static_bounds_occluded += 1;
+            report.refs_static_bounds_blocked += 1;
+        }
+        "static_bounds_clear" => {}
+        _ => unreachable!("unknown static bounds status"),
+    }
 }
 
 fn bounds_inspection(bounds: WorldAabb) -> BoundsInspection {
@@ -659,7 +724,18 @@ fn classify_contact_delta(delta: f32, epsilon: f32) -> ContactTerrainClassificat
 mod tests {
     use tes3::esp::Reference;
 
-    use super::deleted_reference_inspection;
+    use super::{
+        MeshContactResolution, StaticBoundsContext, StaticBoundsOcclusionInput,
+        classify_static_bounds_occlusion, deleted_reference_inspection,
+    };
+    use crate::unclip::{
+        args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
+        mesh::{MeshAabb, MeshContact, StaticMesh, WorldAabb},
+        model::TerrainInspectionReport,
+        occlusion::StaticOccluderIndex,
+        terrain::TerrainIndex,
+        write_plan::{WritePlan, WriteStaticBoundsAnalysis, WriteStatusIndex},
+    };
 
     #[test]
     fn deleted_reference_inspection_skips_actionable_details() {
@@ -677,11 +753,141 @@ mod tests {
         assert!(inspection.mesh_contact.is_none());
     }
 
+    #[test]
+    fn static_bounds_classification_uses_relocatable_write_analysis() {
+        let mut report = TerrainInspectionReport::default();
+        let mesh = static_mesh();
+        let contact = MeshContact::new(vec![[0.0; 3]]);
+        let resolution = MeshContactResolution::Resolved {
+            static_mesh: &mesh,
+            contact: &contact,
+            bounds: MeshAabb {
+                min: [0.0; 3],
+                max: [1.0; 3],
+            },
+        };
+        let write = WriteStatusIndex::from_plan(&WritePlan {
+            static_bounds_analysis: vec![static_bounds_analysis("static_bounds_relocatable")],
+            ..WritePlan::default()
+        });
+
+        let terrain = TerrainIndex::from_landscapes(std::iter::empty());
+        let static_occluders = StaticOccluderIndex::default();
+        let policy = test_policy();
+        let reference = reference_at_z(10.0);
+        let details = classify_static_bounds_occlusion(
+            &mut report,
+            StaticBoundsOcclusionInput {
+                cell: (1, 2),
+                key: (3, 4),
+                reference: &reference,
+                mesh_resolution: &resolution,
+                context: StaticBoundsContext {
+                    terrain: &terrain,
+                    static_occluders: &static_occluders,
+                    policy: &policy,
+                    write: Some(&write),
+                },
+            },
+        )
+        .expect("static bounds evidence should produce details");
+
+        assert_eq!(details.status, "static_bounds_relocatable");
+        assert_eq!(report.refs_static_bounds_occluded, 1);
+        assert_eq!(report.refs_static_bounds_relocatable, 1);
+        assert_eq!(report.refs_static_bounds_blocked, 0);
+    }
+
+    #[test]
+    fn static_bounds_classification_uses_blocked_write_analysis() {
+        let mut report = TerrainInspectionReport::default();
+        let mesh = static_mesh();
+        let contact = MeshContact::new(vec![[0.0; 3]]);
+        let resolution = MeshContactResolution::Resolved {
+            static_mesh: &mesh,
+            contact: &contact,
+            bounds: MeshAabb {
+                min: [0.0; 3],
+                max: [1.0; 3],
+            },
+        };
+        let write = WriteStatusIndex::from_plan(&WritePlan {
+            static_bounds_analysis: vec![static_bounds_analysis("static_bounds_blocked")],
+            ..WritePlan::default()
+        });
+
+        let terrain = TerrainIndex::from_landscapes(std::iter::empty());
+        let static_occluders = StaticOccluderIndex::default();
+        let policy = test_policy();
+        let reference = reference_at_z(10.0);
+        let details = classify_static_bounds_occlusion(
+            &mut report,
+            StaticBoundsOcclusionInput {
+                cell: (1, 2),
+                key: (3, 4),
+                reference: &reference,
+                mesh_resolution: &resolution,
+                context: StaticBoundsContext {
+                    terrain: &terrain,
+                    static_occluders: &static_occluders,
+                    policy: &policy,
+                    write: Some(&write),
+                },
+            },
+        )
+        .expect("static bounds evidence should produce details");
+
+        assert_eq!(details.status, "static_bounds_blocked");
+        assert_eq!(report.refs_static_bounds_occluded, 1);
+        assert_eq!(report.refs_static_bounds_relocatable, 0);
+        assert_eq!(report.refs_static_bounds_blocked, 1);
+    }
+
     fn reference_at_z(z: f32) -> Reference {
         Reference {
             id: "grass".to_owned(),
             translation: [0.0, 0.0, z],
             ..Reference::default()
+        }
+    }
+
+    fn static_mesh() -> StaticMesh {
+        StaticMesh::new_for_test("grass", "grass.nif")
+    }
+
+    fn static_bounds_analysis(status: &'static str) -> WriteStaticBoundsAnalysis {
+        WriteStaticBoundsAnalysis {
+            cell: [1, 2],
+            reference_key: [3, 4],
+            status,
+            ratio: 0.5,
+            occluder_id: Some("rock".to_owned()),
+            occluder_cell: Some([1, 2]),
+            occluder_reference_key: Some([9, 8]),
+            target_bounds: Some(WorldAabb {
+                min: [0.0; 3],
+                max: [2.0; 3],
+            }),
+            occluder_bounds: Some(WorldAabb {
+                min: [1.0; 3],
+                max: [3.0; 3],
+            }),
+            intersection_volume: Some(1.0),
+        }
+    }
+
+    fn test_policy() -> UnclipPolicy {
+        UnclipPolicy {
+            write_actions: WriteActions::all(),
+            contact_epsilon: 0.5,
+            origin_epsilon: 0.5,
+            orientation_epsilon_degrees: 1.0,
+            relocation: RelocationPolicy {
+                step: 32.0,
+                steps: 8,
+            },
+            target_filter: IdFilter::new(&[], &[]).unwrap(),
+            occluder_filter: IdFilter::new(&[], &[]).unwrap(),
         }
     }
 }

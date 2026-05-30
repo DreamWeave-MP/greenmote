@@ -61,6 +61,17 @@ impl StaticMeshIndex {
     }
 }
 
+#[cfg(test)]
+impl StaticMesh {
+    pub(crate) fn new_for_test(static_id: &str, mesh_path: &str) -> Self {
+        Self {
+            static_id: static_id.to_owned(),
+            mesh_path: mesh_path.to_owned(),
+            mesh_key: normalize_mesh_key(mesh_path),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct MeshContact {
     vertices: Vec<[f32; 3]>,
