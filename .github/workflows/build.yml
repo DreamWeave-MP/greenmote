@@ -1,0 +1,25 @@
+name: Greenmote Build
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: main
+    tags: ['*']
+
+jobs:
+  build:
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    uses: DreamWeave-MP/StroggForge/.github/workflows/rustGlobalBuild.yml@v39
+    secrets: inherit
+    with:
+      binary_names: '["greenmote"]'
+      # Optional: set NEXUS_API_KEY and NEXUS_GROUP_IDS repository or organization secrets
+      # to upload release archives to Nexus Mods. Use StroggForge's
+      # .github/nexus_group_ids.template.json as the NEXUS_GROUP_IDS shape.
+      generate_benchmarks: true
+      enable_android: true
+      enable_portmaster: true
