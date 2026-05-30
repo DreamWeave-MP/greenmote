@@ -5,7 +5,9 @@ use tes3::esp::Plugin;
 use super::{
     args::UnclipPolicy,
     cells::CellCoord,
-    mesh::{MeshCache, MeshContact, StaticMesh, StaticMeshIndex, WorldAabb},
+    contact_baseline::{ContactBaseline, ContactBaselineIndex},
+    generated_placement::{GeneratedPlacement, GeneratedPlacementIndex},
+    mesh::{MeshAabb, MeshCache, MeshContact, StaticMesh, StaticMeshIndex, WorldAabb},
     model::{
         BoundsInspection, MeshContactInspection, OriginInspection, ReferenceInspection,
         StaticBoundsOcclusionInspection, StaticMeshInspection, TerrainInspectionReport,
@@ -16,8 +18,8 @@ use super::{
     orientation::orientation_angle_degrees,
     target::TargetRefIndex,
     terrain::TerrainIndex,
-    write_plan::WriteStatusIndex,
-    write_policy::{RefTransform, find_valid_relocation_transform},
+    write_plan::{WriteStaticBoundsAnalysis, WriteStatusIndex},
+    write_policy::{RefTransform, RelocationSearchContext, find_valid_relocation_transform},
     write_status::{
         MeshResolutionStatus, WriteStatusEvidence, WriteStatusInput, write_plan_evidence,
         write_status_label,
@@ -60,6 +62,61 @@ pub(super) fn count_target_refs(
     report
 }
 
+fn count_reference(
+    report: &mut TerrainInspectionReport,
+    context: &mut ReferenceInspectionContext<'_, '_>,
+    cell: CellCoord,
+    key: (u32, u32),
+    reference: &tes3::esp::Reference,
+) {
+    report.refs += 1;
+    if reference.deleted == Some(true) {
+        report.refs_deleted += 1;
+        return;
+    }
+
+    let static_bounds_context = StaticBoundsContext {
+        terrain: context.terrain,
+        static_occluders: context.static_occluders,
+        policy: context.policy,
+        write: context.write,
+        contact_baselines: context.contact_baselines,
+        generated_placements: context.generated_placements,
+    };
+    let mesh_contact = resolve_ref_mesh_contact(
+        report,
+        reference,
+        context.static_index,
+        context.mesh_contacts,
+    );
+    if let MeshContactResolution::Resolved { contact, .. } = &mesh_contact {
+        let _ = classify_contact(
+            report,
+            context.terrain,
+            reference,
+            contact,
+            context.policy.contact_epsilon,
+            context.contact_baselines.get(&reference.id),
+        );
+    }
+    let _ = classify_static_bounds_occlusion(
+        report,
+        StaticBoundsOcclusionInput {
+            cell,
+            key,
+            reference,
+            mesh_resolution: &mesh_contact,
+            context: static_bounds_context,
+        },
+    );
+    let _ = classify_origin(
+        report,
+        context.terrain,
+        reference,
+        context.policy.origin_epsilon,
+    );
+}
+
 pub(super) struct ReferenceInspectionContext<'a, 'b> {
     pub(super) terrain: &'a TerrainIndex,
     pub(super) static_index: &'a StaticMeshIndex,
@@ -67,6 +124,8 @@ pub(super) struct ReferenceInspectionContext<'a, 'b> {
     pub(super) static_occluders: &'a StaticOccluderIndex,
     pub(super) policy: &'a UnclipPolicy,
     pub(super) write: Option<&'a WriteStatusIndex>,
+    pub(super) contact_baselines: &'a ContactBaselineIndex,
+    pub(super) generated_placements: &'a GeneratedPlacementIndex,
 }
 
 struct OriginDetails {
@@ -107,6 +166,8 @@ fn inspect_reference(
         static_occluders: context.static_occluders,
         policy: context.policy,
         write: context.write,
+        contact_baselines: context.contact_baselines,
+        generated_placements: context.generated_placements,
     };
     let mesh_contact = resolve_ref_mesh_contact(
         report,
@@ -121,6 +182,7 @@ fn inspect_reference(
             reference,
             contact,
             context.policy.contact_epsilon,
+            context.contact_baselines.get(&reference.id),
         )),
         MeshContactResolution::UnresolvedStatic | MeshContactResolution::MissingContact { .. } => {
             None
@@ -158,58 +220,6 @@ fn inspect_reference(
         orientation_epsilon_degrees: context.policy.orientation_epsilon_degrees,
     });
     reference_sink(&inspection)
-}
-
-fn count_reference(
-    report: &mut TerrainInspectionReport,
-    context: &mut ReferenceInspectionContext<'_, '_>,
-    cell: CellCoord,
-    key: (u32, u32),
-    reference: &tes3::esp::Reference,
-) {
-    report.refs += 1;
-    if reference.deleted == Some(true) {
-        report.refs_deleted += 1;
-        return;
-    }
-
-    let static_bounds_context = StaticBoundsContext {
-        terrain: context.terrain,
-        static_occluders: context.static_occluders,
-        policy: context.policy,
-        write: context.write,
-    };
-    let mesh_contact = resolve_ref_mesh_contact(
-        report,
-        reference,
-        context.static_index,
-        context.mesh_contacts,
-    );
-    if let MeshContactResolution::Resolved { contact, .. } = &mesh_contact {
-        let _ = classify_contact(
-            report,
-            context.terrain,
-            reference,
-            contact,
-            context.policy.contact_epsilon,
-        );
-    }
-    let _ = classify_static_bounds_occlusion(
-        report,
-        StaticBoundsOcclusionInput {
-            cell,
-            key,
-            reference,
-            mesh_resolution: &mesh_contact,
-            context: static_bounds_context,
-        },
-    );
-    let _ = classify_origin(
-        report,
-        context.terrain,
-        reference,
-        context.policy.origin_epsilon,
-    );
 }
 
 fn classify_origin(
@@ -400,6 +410,8 @@ struct StaticBoundsContext<'a> {
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
     write: Option<&'a WriteStatusIndex>,
+    contact_baselines: &'a ContactBaselineIndex,
+    generated_placements: &'a GeneratedPlacementIndex,
 }
 
 fn classify_static_bounds_occlusion(
@@ -407,7 +419,9 @@ fn classify_static_bounds_occlusion(
     input: StaticBoundsOcclusionInput<'_, '_>,
 ) -> Option<StaticBoundsOcclusionDetails> {
     let MeshContactResolution::Resolved {
-        contact, bounds, ..
+        static_mesh,
+        contact,
+        bounds,
     } = input.mesh_resolution
     else {
         return None;
@@ -417,22 +431,7 @@ fn classify_static_bounds_occlusion(
         .write
         .and_then(|write| write.static_bounds_analysis(input.cell, input.key))
     {
-        record_static_bounds_report_counts(report, analysis.status);
-        return Some(StaticBoundsOcclusionDetails {
-            status: analysis.status,
-            ratio: analysis.ratio,
-            occluder: analysis.occluder_id.as_ref().map(|id| StaticOccluder {
-                id: id.clone(),
-                cell: analysis.occluder_cell.unwrap_or([0, 0]),
-                reference_key: analysis.occluder_reference_key.unwrap_or([0, 0]),
-                bounds: analysis.occluder_bounds.unwrap_or(WorldAabb {
-                    min: [0.0; 3],
-                    max: [0.0; 3],
-                }),
-            }),
-            target_bounds: analysis.target_bounds,
-            intersection_volume: analysis.intersection_volume,
-        });
+        return Some(static_bounds_details_from_write_analysis(report, analysis));
     }
     let mut corrected_translation = input.reference.translation;
     let contact_position = contact.world_position(
@@ -440,12 +439,22 @@ fn classify_static_bounds_occlusion(
         input.reference.rotation,
         input.reference.scale,
     );
-    if let Some(terrain_z) = input
-        .context
-        .terrain
-        .height_at(contact_position[0], contact_position[1])
-    {
-        corrected_translation[2] -= contact_position[2] - terrain_z;
+    let contact_baseline = input.context.contact_baselines.get(&input.reference.id);
+    let generated_placement = input.context.generated_placements.get(static_mesh);
+    if let Some(terrain_z) = contact_terrain_z(
+        input.context.terrain,
+        input.reference.translation,
+        contact_position,
+        contact_baseline,
+        generated_placement,
+    ) {
+        corrected_translation[2] -= terrain_delta(
+            input.reference.translation,
+            contact_position,
+            terrain_z,
+            contact_baseline,
+            generated_placement,
+        );
     }
     let corrected_bounds = bounds.world_aabb(
         corrected_translation,
@@ -455,6 +464,19 @@ fn classify_static_bounds_occlusion(
     let action = decide_static_bounds_action(corrected_bounds, input.context.static_occluders);
     let (status, ratio, occluder) = match action {
         StaticBoundsAction::None => ("static_bounds_clear", 0.0, None),
+        StaticBoundsAction::Delete { ratio, occluder }
+            if input.context.policy.write_actions.static_move()
+                && can_relocate_static_bounds(
+                    input,
+                    contact,
+                    *bounds,
+                    corrected_translation,
+                    generated_placement,
+                ) =>
+        {
+            record_static_bounds_report_counts(report, "static_bounds_relocatable");
+            ("static_bounds_relocatable", ratio, Some(occluder.clone()))
+        }
         StaticBoundsAction::Delete { ratio, occluder } => {
             record_static_bounds_report_counts(report, "static_bounds_fully_occluded");
             (
@@ -465,20 +487,13 @@ fn classify_static_bounds_occlusion(
         }
         StaticBoundsAction::Move {
             ratio, occluder, ..
-        } if find_valid_relocation_transform(
-            input.cell,
-            RefTransform {
-                translation: corrected_translation,
-                rotation: input.reference.rotation,
-                scale: input.reference.scale,
-            },
+        } if can_relocate_static_bounds(
+            input,
             contact,
             *bounds,
-            input.context.terrain,
-            input.context.static_occluders,
-            input.context.policy.relocation,
-        )
-        .is_some() =>
+            corrected_translation,
+            generated_placement,
+        ) =>
         {
             record_static_bounds_report_counts(report, "static_bounds_relocatable");
             ("static_bounds_relocatable", ratio, Some(occluder.clone()))
@@ -502,6 +517,82 @@ fn classify_static_bounds_occlusion(
         target_bounds: Some(corrected_bounds),
         intersection_volume,
     })
+}
+
+fn can_relocate_static_bounds(
+    input: StaticBoundsOcclusionInput<'_, '_>,
+    contact: &MeshContact,
+    bounds: MeshAabb,
+    corrected_translation: [f32; 3],
+    generated_placement: Option<GeneratedPlacement>,
+) -> bool {
+    find_valid_relocation_transform(
+        input.cell,
+        RefTransform {
+            translation: corrected_translation,
+            rotation: input.reference.rotation,
+            scale: input.reference.scale,
+        },
+        RelocationSearchContext {
+            contact,
+            bounds,
+            terrain: input.context.terrain,
+            static_occluders: input.context.static_occluders,
+            relocation: input.context.policy.relocation,
+            contact_baseline: input.context.contact_baselines.get(&input.reference.id),
+            generated_placement,
+        },
+    )
+    .is_some()
+}
+
+fn contact_terrain_z(
+    terrain: &TerrainIndex,
+    translation: [f32; 3],
+    contact_position: [f32; 3],
+    contact_baseline: ContactBaseline,
+    generated_placement: Option<GeneratedPlacement>,
+) -> Option<f32> {
+    if generated_placement.is_some() || contact_baseline.is_calibrated() {
+        terrain.height_at(translation[0], translation[1])
+    } else {
+        terrain.height_at(contact_position[0], contact_position[1])
+    }
+}
+
+fn terrain_delta(
+    translation: [f32; 3],
+    contact_position: [f32; 3],
+    terrain_z: f32,
+    contact_baseline: ContactBaseline,
+    generated_placement: Option<GeneratedPlacement>,
+) -> f32 {
+    generated_placement.map_or_else(
+        || contact_position[2] - terrain_z - contact_baseline.delta,
+        |placement| translation[2] - terrain_z - placement.z_offset,
+    )
+}
+
+fn static_bounds_details_from_write_analysis(
+    report: &mut TerrainInspectionReport,
+    analysis: &WriteStaticBoundsAnalysis,
+) -> StaticBoundsOcclusionDetails {
+    record_static_bounds_report_counts(report, analysis.status);
+    StaticBoundsOcclusionDetails {
+        status: analysis.status,
+        ratio: analysis.ratio,
+        occluder: analysis.occluder_id.as_ref().map(|id| StaticOccluder {
+            id: id.clone(),
+            cell: analysis.occluder_cell.unwrap_or([0, 0]),
+            reference_key: analysis.occluder_reference_key.unwrap_or([0, 0]),
+            bounds: analysis.occluder_bounds.unwrap_or(WorldAabb {
+                min: [0.0; 3],
+                max: [0.0; 3],
+            }),
+        }),
+        target_bounds: analysis.target_bounds,
+        intersection_volume: analysis.intersection_volume,
+    }
 }
 
 fn record_static_bounds_report_counts(report: &mut TerrainInspectionReport, status: &str) {
@@ -536,13 +627,18 @@ fn classify_contact(
     reference: &tes3::esp::Reference,
     contact: &MeshContact,
     epsilon: f32,
+    contact_baseline: ContactBaseline,
 ) -> ContactDetails {
     let position =
         contact.world_position(reference.translation, reference.rotation, reference.scale);
-    let terrain_sample = terrain.sample_at(position[0], position[1]);
+    let terrain_sample = if contact_baseline.is_calibrated() {
+        terrain.sample_at(reference.translation[0], reference.translation[1])
+    } else {
+        terrain.sample_at(position[0], position[1])
+    };
     let terrain_z = terrain_sample.map(|sample| sample.height);
     let terrain_normal = terrain_sample.map(|sample| sample.normal);
-    let delta = terrain_z.map(|terrain_z| position[2] - terrain_z);
+    let delta = terrain_z.map(|terrain_z| position[2] - terrain_z - contact_baseline.delta);
     let classification = delta.map(|delta| classify_counted_contact_delta(report, delta, epsilon));
     if terrain_z.is_none() {
         report.refs_contact_missing_terrain += 1;
@@ -729,7 +825,9 @@ mod tests {
         classify_static_bounds_occlusion, deleted_reference_inspection,
     };
     use crate::unclip::{
-        args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
+        args::{IdFilter, PlacementModelArg, RelocationPolicy, UnclipPolicy, WriteActions},
+        contact_baseline::ContactBaselineIndex,
+        generated_placement::GeneratedPlacementIndex,
         mesh::{MeshAabb, MeshContact, StaticMesh, WorldAabb},
         model::TerrainInspectionReport,
         occlusion::StaticOccluderIndex,
@@ -773,6 +871,8 @@ mod tests {
 
         let terrain = TerrainIndex::from_landscapes(std::iter::empty());
         let static_occluders = StaticOccluderIndex::default();
+        let contact_baselines = ContactBaselineIndex::default();
+        let generated_placements = GeneratedPlacementIndex::default();
         let policy = test_policy();
         let reference = reference_at_z(10.0);
         let details = classify_static_bounds_occlusion(
@@ -787,6 +887,8 @@ mod tests {
                     static_occluders: &static_occluders,
                     policy: &policy,
                     write: Some(&write),
+                    contact_baselines: &contact_baselines,
+                    generated_placements: &generated_placements,
                 },
             },
         )
@@ -818,6 +920,8 @@ mod tests {
 
         let terrain = TerrainIndex::from_landscapes(std::iter::empty());
         let static_occluders = StaticOccluderIndex::default();
+        let contact_baselines = ContactBaselineIndex::default();
+        let generated_placements = GeneratedPlacementIndex::default();
         let policy = test_policy();
         let reference = reference_at_z(10.0);
         let details = classify_static_bounds_occlusion(
@@ -832,6 +936,8 @@ mod tests {
                     static_occluders: &static_occluders,
                     policy: &policy,
                     write: Some(&write),
+                    contact_baselines: &contact_baselines,
+                    generated_placements: &generated_placements,
                 },
             },
         )
@@ -879,6 +985,7 @@ mod tests {
     fn test_policy() -> UnclipPolicy {
         UnclipPolicy {
             write_actions: WriteActions::all(),
+            placement_model: PlacementModelArg::Auto,
             contact_epsilon: 0.5,
             origin_epsilon: 0.5,
             orientation_epsilon_degrees: 1.0,

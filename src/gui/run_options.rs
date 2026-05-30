@@ -17,7 +17,7 @@ pub(super) struct ConvertRunOptions {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct UnclipRunOptions {
     pub(super) plugin: String,
-    pub(super) instances: bool,
+    pub(super) verbose: bool,
     pub(super) write: bool,
 }
 
@@ -78,7 +78,7 @@ impl UnclipRunOptions {
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_default(),
-            instances: config.unclip.instances.unwrap_or(false),
+            verbose: config.unclip.verbose.unwrap_or(false),
             write: false,
         }
     }
@@ -91,7 +91,10 @@ impl UnclipRunOptions {
 
         Ok(UnclipArgs {
             plugin: Some(PathBuf::from(plugin)),
-            instances: Some(self.instances),
+            meshgenerator_ini: None,
+            placement_model: None,
+            instances: None,
+            verbose: Some(self.verbose),
             structured: Some(false),
             write: Some(self.write),
             write_actions: Vec::new(),
@@ -237,16 +240,16 @@ mod tests {
     }
 
     #[test]
-    fn unclip_run_options_prefill_visible_plugin_and_instances_only() {
+    fn unclip_run_options_prefill_visible_plugin_and_verbose_only() {
         let mut config = GroundcoverConfig::default();
         config.unclip.plugin = Some("groundcover.omwaddon".into());
-        config.unclip.instances = Some(true);
+        config.unclip.verbose = Some(true);
         config.unclip.write = Some(true);
 
         let options = UnclipRunOptions::from_config(&config);
 
         assert_eq!(options.plugin, "groundcover.omwaddon");
-        assert!(options.instances);
+        assert!(options.verbose);
         assert!(!options.write);
     }
 
@@ -254,14 +257,15 @@ mod tests {
     fn unclip_run_options_build_explicit_safe_args() {
         let options = UnclipRunOptions {
             plugin: " groundcover.omwaddon ".to_owned(),
-            instances: true,
+            verbose: true,
             write: false,
         };
 
         let args = options.to_args().unwrap();
 
         assert_eq!(args.plugin, Some("groundcover.omwaddon".into()));
-        assert_eq!(args.instances, Some(true));
+        assert_eq!(args.instances, None);
+        assert_eq!(args.verbose, Some(true));
         assert_eq!(args.structured, Some(false));
         assert_eq!(args.write, Some(false));
         assert!(args.write_actions.is_empty());

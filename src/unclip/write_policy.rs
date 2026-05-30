@@ -5,6 +5,8 @@ use tes3::esp::{Plugin, TES3Object};
 use super::{
     args::{RelocationPolicy, UnclipPolicy},
     cells::CellCoord,
+    contact_baseline::{ContactBaseline, ContactBaselineIndex},
+    generated_placement::{GeneratedPlacement, GeneratedPlacementIndex},
     mesh::{MeshAabb, MeshCache, MeshContact, MeshGeometry, StaticMeshIndex, WorldAabb},
     occlusion::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
@@ -31,15 +33,30 @@ const RELOCATION_DIRECTIONS: &[[f32; 2]] = &[
     [-0.707_106_77, -0.707_106_77],
 ];
 
-pub(crate) fn plan_unclip_adjustments(
-    plugin: &Plugin,
-    target_refs: &TargetRefIndex,
-    terrain: &TerrainIndex,
-    static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshCache<'_>,
-    static_occluders: &StaticOccluderIndex,
-    policy: &UnclipPolicy,
-) -> WritePlan {
+pub(crate) struct UnclipWritePlanningInput<'a, 'b> {
+    pub(crate) plugin: &'a Plugin,
+    pub(crate) target_refs: &'a TargetRefIndex,
+    pub(crate) terrain: &'a TerrainIndex,
+    pub(crate) static_index: &'a StaticMeshIndex,
+    pub(crate) mesh_contacts: &'a mut MeshCache<'b>,
+    pub(crate) static_occluders: &'a StaticOccluderIndex,
+    pub(crate) policy: &'a UnclipPolicy,
+    pub(crate) contact_baselines: &'a ContactBaselineIndex,
+    pub(crate) generated_placements: &'a GeneratedPlacementIndex,
+}
+
+pub(crate) fn plan_unclip_adjustments(input: UnclipWritePlanningInput<'_, '_>) -> WritePlan {
+    let UnclipWritePlanningInput {
+        plugin,
+        target_refs,
+        terrain,
+        static_index,
+        mesh_contacts,
+        static_occluders,
+        policy,
+        contact_baselines,
+        generated_placements,
+    } = input;
     let mut plan = WritePlan::default();
     let mut context = WritePlanningContext {
         terrain,
@@ -47,6 +64,8 @@ pub(crate) fn plan_unclip_adjustments(
         mesh_contacts,
         static_occluders,
         policy,
+        contact_baselines,
+        generated_placements,
     };
     for (cell_grid, key, reference) in target_refs.iter_refs(plugin) {
         let change =
@@ -63,6 +82,8 @@ struct WritePlanningContext<'a, 'b> {
     mesh_contacts: &'a mut MeshCache<'b>,
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
+    contact_baselines: &'a ContactBaselineIndex,
+    generated_placements: &'a GeneratedPlacementIndex,
 }
 
 pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
@@ -238,18 +259,23 @@ fn adjust_reference_for_terrain_and_static_bounds(
     let static_occluders = context.static_occluders;
     let policy = context.policy;
     let target = WriteTarget { cell, key };
+    let Some(static_mesh) = context.static_index.get(&reference.id) else {
+        return WriteReferenceChange::None(None);
+    };
+    let contact_baseline = context.contact_baselines.get(&reference.id);
+    let generated_placement = context.generated_placements.get(static_mesh);
     let orientation_context = OrientationPlanningContext {
         terrain,
         static_occluders,
         policy,
+        generated_placement,
     };
     let static_bounds_context = StaticBoundsPlanningContext {
         terrain,
         static_occluders,
         policy,
-    };
-    let Some(static_mesh) = context.static_index.get(&reference.id) else {
-        return WriteReferenceChange::None(None);
+        contact_baseline,
+        generated_placement,
     };
     let Ok(geometry) = context.mesh_contacts.geometry(static_mesh) else {
         return WriteReferenceChange::None(None);
@@ -259,19 +285,33 @@ fn adjust_reference_for_terrain_and_static_bounds(
         geometry
             .contact
             .world_position(reference.translation, reference.rotation, reference.scale);
-    let terrain_z = terrain.height_at(contact_position[0], contact_position[1]);
+    let terrain_z = contact_terrain_z(
+        terrain,
+        reference.translation,
+        contact_position,
+        contact_baseline,
+        generated_placement,
+    );
     let adjustment_context = AdjustmentOrientationContext {
         target,
         reference,
         contact_position,
         terrain_z,
         policy,
+        contact_baseline,
+        generated_placement,
         geometry,
         orientation: orientation_context,
     };
     let mut corrected_translation = reference.translation;
     if let Some(terrain_z) = terrain_z {
-        corrected_translation[2] -= contact_position[2] - terrain_z;
+        corrected_translation[2] -= terrain_delta(
+            reference.translation,
+            contact_position,
+            terrain_z,
+            contact_baseline,
+            generated_placement,
+        );
     }
     let mut changes = WriteReferenceChanges::default();
     let final_translation = match plan_static_bounds_change(
@@ -318,6 +358,8 @@ struct StaticBoundsPlanningContext<'a> {
     terrain: &'a TerrainIndex,
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
+    contact_baseline: ContactBaseline,
+    generated_placement: Option<GeneratedPlacement>,
 }
 
 fn plan_static_bounds_change(
@@ -343,6 +385,27 @@ fn plan_static_bounds_change(
             ));
         }
         StaticBoundsAction::Delete { ratio, occluder } => {
+            let move_ = context.policy.write_actions.static_move().then(|| {
+                try_static_bounds_move(
+                    target,
+                    reference,
+                    corrected_translation,
+                    relocation_search_context(geometry, context),
+                    StaticBoundsMoveCause { ratio, occluder },
+                )
+            });
+            if let Some(Some(move_)) = move_ {
+                changes.static_bounds_analysis = Some(static_bounds_analysis(
+                    target,
+                    "static_bounds_relocatable",
+                    ratio,
+                    Some(occluder),
+                    corrected_bounds,
+                ));
+                let new_position = move_.new_position;
+                changes.move_ = Some(move_);
+                return StaticBoundsPlanResult::Continue(new_position);
+            }
             changes.static_bounds_analysis = Some(static_bounds_analysis(
                 target,
                 "static_bounds_fully_occluded",
@@ -368,12 +431,7 @@ fn plan_static_bounds_change(
                 target,
                 reference,
                 corrected_translation,
-                MoveSearchContext {
-                    geometry,
-                    terrain: context.terrain,
-                    static_occluders: context.static_occluders,
-                    relocation: context.policy.relocation,
-                },
+                relocation_search_context(geometry, context),
                 StaticBoundsMoveCause { ratio, occluder },
             );
             changes.static_bounds_analysis = Some(static_bounds_analysis(
@@ -399,6 +457,48 @@ fn plan_static_bounds_change(
     StaticBoundsPlanResult::Continue(reference.translation)
 }
 
+fn relocation_search_context<'a>(
+    geometry: &'a MeshGeometry,
+    context: StaticBoundsPlanningContext<'a>,
+) -> RelocationSearchContext<'a> {
+    RelocationSearchContext {
+        contact: &geometry.contact,
+        bounds: geometry.bounds,
+        terrain: context.terrain,
+        static_occluders: context.static_occluders,
+        relocation: context.policy.relocation,
+        contact_baseline: context.contact_baseline,
+        generated_placement: context.generated_placement,
+    }
+}
+
+fn contact_terrain_z(
+    terrain: &TerrainIndex,
+    translation: [f32; 3],
+    contact_position: [f32; 3],
+    contact_baseline: ContactBaseline,
+    generated_placement: Option<GeneratedPlacement>,
+) -> Option<f32> {
+    if generated_placement.is_some() || contact_baseline.is_calibrated() {
+        terrain.height_at(translation[0], translation[1])
+    } else {
+        terrain.height_at(contact_position[0], contact_position[1])
+    }
+}
+
+fn terrain_delta(
+    translation: [f32; 3],
+    contact_position: [f32; 3],
+    terrain_z: f32,
+    contact_baseline: ContactBaseline,
+    generated_placement: Option<GeneratedPlacement>,
+) -> f32 {
+    generated_placement.map_or_else(
+        || contact_position[2] - terrain_z - contact_baseline.delta,
+        |placement| translation[2] - terrain_z - placement.z_offset,
+    )
+}
+
 #[derive(Clone, Copy)]
 struct AdjustmentOrientationContext<'a> {
     target: WriteTarget,
@@ -406,6 +506,8 @@ struct AdjustmentOrientationContext<'a> {
     contact_position: [f32; 3],
     terrain_z: Option<f32>,
     policy: &'a UnclipPolicy,
+    contact_baseline: ContactBaseline,
+    generated_placement: Option<GeneratedPlacement>,
     geometry: &'a MeshGeometry,
     orientation: OrientationPlanningContext<'a>,
 }
@@ -415,15 +517,7 @@ fn finish_with_terrain_and_orientation(
     mut final_translation: [f32; 3],
     context: AdjustmentOrientationContext<'_>,
 ) -> WriteReferenceChange {
-    apply_terrain_adjustment_to_changes(
-        &mut changes,
-        &mut final_translation,
-        context.target,
-        context.reference,
-        context.contact_position,
-        context.terrain_z,
-        context.policy,
-    );
+    apply_terrain_adjustment_to_changes(&mut changes, &mut final_translation, context);
     plan_orientation_to_changes(
         &mut changes,
         context.target,
@@ -492,7 +586,7 @@ fn try_static_bounds_move(
     target: WriteTarget,
     reference: &tes3::esp::Reference,
     corrected_translation: [f32; 3],
-    search: MoveSearchContext<'_>,
+    search: RelocationSearchContext<'_>,
     cause: StaticBoundsMoveCause<'_>,
 ) -> Option<WriteStaticBoundsMove> {
     apply_static_bounds_move(
@@ -511,21 +605,18 @@ fn try_static_bounds_move(
 fn apply_terrain_adjustment_to_changes(
     changes: &mut WriteReferenceChanges,
     final_translation: &mut [f32; 3],
-    target: WriteTarget,
-    reference: &tes3::esp::Reference,
-    contact_position: [f32; 3],
-    terrain_z: Option<f32>,
-    policy: &UnclipPolicy,
+    context: AdjustmentOrientationContext<'_>,
 ) {
-    if let Some(terrain_z) = terrain_z
-        && let Some(adjustment) = plan_contact_adjustment(
-            target.cell,
-            target.key,
-            reference,
-            contact_position,
+    if let Some(terrain_z) = context.terrain_z
+        && let Some(adjustment) = plan_contact_adjustment(ContactAdjustmentInput {
+            target: context.target,
+            reference: context.reference,
+            contact_position: context.contact_position,
             terrain_z,
-            policy,
-        )
+            policy: context.policy,
+            contact_baseline: context.contact_baseline.delta,
+            generated_placement: context.generated_placement,
+        })
     {
         final_translation[2] = adjustment.new_z;
         changes.adjustment = Some(adjustment);
@@ -548,19 +639,11 @@ fn apply_static_bounds_move(
     target: WriteTarget,
     reference: &tes3::esp::Reference,
     transform: RefTransform,
-    search: MoveSearchContext<'_>,
+    search: RelocationSearchContext<'_>,
     cause: StaticBoundsMoveCause<'_>,
 ) -> Option<WriteStaticBoundsMove> {
     let old_position = transform.translation;
-    let new_position = find_valid_relocation_transform(
-        target.cell,
-        transform,
-        &search.geometry.contact,
-        search.geometry.bounds,
-        search.terrain,
-        search.static_occluders,
-        search.relocation,
-    )?;
+    let new_position = find_valid_relocation_transform(target.cell, transform, search)?;
 
     Some(WriteStaticBoundsMove {
         cell: [target.cell.0, target.cell.1],
@@ -576,21 +659,20 @@ fn apply_static_bounds_move(
 }
 
 #[derive(Clone, Copy)]
-struct MoveSearchContext<'a> {
-    geometry: &'a MeshGeometry,
-    terrain: &'a TerrainIndex,
-    static_occluders: &'a StaticOccluderIndex,
-    relocation: RelocationPolicy,
+pub(crate) struct RelocationSearchContext<'a> {
+    pub(crate) contact: &'a MeshContact,
+    pub(crate) bounds: MeshAabb,
+    pub(crate) terrain: &'a TerrainIndex,
+    pub(crate) static_occluders: &'a StaticOccluderIndex,
+    pub(crate) relocation: RelocationPolicy,
+    pub(crate) contact_baseline: ContactBaseline,
+    pub(crate) generated_placement: Option<GeneratedPlacement>,
 }
 
 pub(crate) fn find_valid_relocation_transform(
     cell: CellCoord,
     transform: RefTransform,
-    contact: &MeshContact,
-    bounds: MeshAabb,
-    terrain: &TerrainIndex,
-    static_occluders: &StaticOccluderIndex,
-    relocation: RelocationPolicy,
+    search: RelocationSearchContext<'_>,
 ) -> Option<[f32; 3]> {
     let RefTransform {
         translation,
@@ -598,11 +680,11 @@ pub(crate) fn find_valid_relocation_transform(
         scale,
     } = transform;
     let original = [translation[0], translation[1]];
-    let grass_bounds = bounds.world_aabb(translation, rotation, scale);
-    let contact_offset = contact.local_contact_offset(rotation, scale);
+    let grass_bounds = search.bounds.world_aabb(translation, rotation, scale);
+    let contact_offset = search.contact.local_contact_offset(rotation, scale);
 
-    for step in 1..=relocation.steps {
-        let radius = f32::from(step) * relocation.step;
+    for step in 1..=search.relocation.steps {
+        let radius = f32::from(step) * search.relocation.step;
         for direction in RELOCATION_DIRECTIONS {
             let candidate_xy = [
                 original[0] + direction[0] * radius,
@@ -617,7 +699,7 @@ pub(crate) fn find_valid_relocation_transform(
                 candidate_xy[0] - original[0],
                 candidate_xy[1] - original[1],
             );
-            if static_occluders.intersects_volume(moved_bounds) {
+            if search.static_occluders.intersects_volume(moved_bounds) {
                 continue;
             }
 
@@ -629,10 +711,24 @@ pub(crate) fn find_valid_relocation_transform(
                 contact_offset[1] + candidate_translation[1],
                 contact_offset[2] + candidate_translation[2],
             ];
-            let terrain_z = terrain.height_at(contact_position[0], contact_position[1])?;
-            candidate_translation[2] -= contact_position[2] - terrain_z;
-            let final_bounds = bounds.world_aabb(candidate_translation, rotation, scale);
-            if !static_occluders.intersects_volume(final_bounds) {
+            let terrain_z = contact_terrain_z(
+                search.terrain,
+                candidate_translation,
+                contact_position,
+                search.contact_baseline,
+                search.generated_placement,
+            )?;
+            candidate_translation[2] -= terrain_delta(
+                candidate_translation,
+                contact_position,
+                terrain_z,
+                search.contact_baseline,
+                search.generated_placement,
+            );
+            let final_bounds = search
+                .bounds
+                .world_aabb(candidate_translation, rotation, scale);
+            if !search.static_occluders.intersects_volume(final_bounds) {
                 return Some(candidate_translation);
             }
         }
@@ -651,32 +747,52 @@ fn cell_contains_xy(cell: CellCoord, position: [f32; 2]) -> bool {
         && position[1] < min_y + CELL_SIZE
 }
 
-fn plan_contact_adjustment(
-    cell: CellCoord,
-    key: (u32, u32),
-    reference: &tes3::esp::Reference,
+#[derive(Clone, Copy)]
+struct ContactAdjustmentInput<'a> {
+    target: WriteTarget,
+    reference: &'a tes3::esp::Reference,
     contact_position: [f32; 3],
     terrain_z: f32,
-    policy: &UnclipPolicy,
-) -> Option<WriteAdjustment> {
-    if !policy.write_actions.terrain_z() {
+    policy: &'a UnclipPolicy,
+    contact_baseline: f32,
+    generated_placement: Option<GeneratedPlacement>,
+}
+
+fn plan_contact_adjustment(input: ContactAdjustmentInput<'_>) -> Option<WriteAdjustment> {
+    if !input.policy.write_actions.terrain_z() {
         return None;
     }
-    let contact_delta = contact_position[2] - terrain_z;
-    if contact_delta.abs() <= policy.contact_epsilon {
+    let (sample_kind, sample_position, delta, epsilon) = input.generated_placement.map_or(
+        (
+            "contact",
+            input.contact_position,
+            input.contact_position[2] - input.terrain_z - input.contact_baseline,
+            input.policy.contact_epsilon,
+        ),
+        |placement| {
+            (
+                "origin",
+                input.reference.translation,
+                input.reference.translation[2] - input.terrain_z - placement.z_offset,
+                placement.tolerance,
+            )
+        },
+    );
+    if delta.abs() <= epsilon {
         return None;
     }
-    let old_z = reference.translation[2];
-    let new_z = old_z - contact_delta;
+    let old_z = input.reference.translation[2];
+    let new_z = old_z - delta;
     Some(WriteAdjustment {
-        cell: [cell.0, cell.1],
-        reference_key: [key.0, key.1],
-        id: reference.id.clone(),
+        cell: [input.target.cell.0, input.target.cell.1],
+        reference_key: [input.target.key.0, input.target.key.1],
+        id: input.reference.id.clone(),
         old_z,
         new_z,
-        applied_delta: -contact_delta,
-        contact_position,
-        terrain_z,
+        applied_delta: -delta,
+        sample_kind,
+        contact_position: sample_position,
+        terrain_z: input.terrain_z,
     })
 }
 
@@ -690,13 +806,15 @@ fn plan_reference_orientation(
     if !context.policy.write_actions.orient() {
         return None;
     }
-    let contact_position =
-        geometry
-            .contact
-            .world_position(translation, reference.rotation, reference.scale);
+    let (sample_kind, sample_position) = orientation_sample_position(
+        reference,
+        translation,
+        geometry,
+        context.generated_placement,
+    );
     let terrain_sample = context
         .terrain
-        .sample_at(contact_position[0], contact_position[1])?;
+        .sample_at(sample_position[0], sample_position[1])?;
     let orientation = orientation_to_terrain(
         reference.rotation,
         terrain_sample.normal,
@@ -720,8 +838,28 @@ fn plan_reference_orientation(
         new_rotation: orientation.new_rotation,
         terrain_normal: orientation.terrain_normal,
         angle_degrees: orientation.angle_degrees,
-        contact_position,
+        sample_kind,
+        sample_position,
     })
+}
+
+fn orientation_sample_position(
+    reference: &tes3::esp::Reference,
+    translation: [f32; 3],
+    geometry: &MeshGeometry,
+    generated_placement: Option<GeneratedPlacement>,
+) -> (&'static str, [f32; 3]) {
+    generated_placement.map_or_else(
+        || {
+            (
+                "contact",
+                geometry
+                    .contact
+                    .world_position(translation, reference.rotation, reference.scale),
+            )
+        },
+        |_| ("origin", translation),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -729,6 +867,7 @@ struct OrientationPlanningContext<'a> {
     terrain: &'a TerrainIndex,
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
+    generated_placement: Option<GeneratedPlacement>,
 }
 
 fn orientation_blocks_static_bounds(
@@ -747,14 +886,21 @@ fn orientation_blocks_static_bounds(
 
 #[cfg(test)]
 mod tests {
-    use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
+    use tes3::esp::{Cell, CellData, Landscape, LandscapeFlags, Plugin, Reference, TES3Object};
 
     use super::{
-        WriteReferenceChange, WriteReferenceChanges, apply_unclip_write_plan,
-        plan_contact_adjustment, record_reference_change,
+        StaticBoundsPlanResult, StaticBoundsPlanningContext, WriteReferenceChange,
+        WriteReferenceChanges, apply_unclip_write_plan, orientation_sample_position,
+        plan_contact_adjustment, plan_reference_orientation, plan_static_bounds_change,
+        record_reference_change,
     };
     use crate::unclip::{
-        args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
+        args::{IdFilter, PlacementModelArg, RelocationPolicy, UnclipPolicy, WriteActions},
+        contact_baseline::ContactBaseline,
+        generated_placement::GeneratedPlacement,
+        mesh::{MeshAabb, MeshContact, MeshGeometry, WorldAabb},
+        occlusion::{StaticOccluder, StaticOccluderIndex},
+        terrain::TerrainIndex,
         write_plan::{WriteOrientation, WritePlan, WriteStaticBoundsDeletion},
     };
 
@@ -762,14 +908,15 @@ mod tests {
     fn contact_adjustment_moves_buried_contact_up() {
         let reference = reference_at_z(10.0);
 
-        let adjustment = plan_contact_adjustment(
-            (1, 2),
-            (3, 4),
+        let policy = test_policy();
+        let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
             &reference,
             [0.0, 0.0, 7.0],
             9.0,
-            &test_policy(),
-        )
+            &policy,
+            0.0,
+            None,
+        ))
         .unwrap();
 
         assert_close(reference.translation[2], 10.0);
@@ -782,14 +929,15 @@ mod tests {
     fn contact_adjustment_moves_floating_contact_down() {
         let reference = reference_at_z(10.0);
 
-        let adjustment = plan_contact_adjustment(
-            (1, 2),
-            (3, 4),
+        let policy = test_policy();
+        let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
             &reference,
             [0.0, 0.0, 12.0],
             9.0,
-            &test_policy(),
-        )
+            &policy,
+            0.0,
+            None,
+        ))
         .unwrap();
 
         assert_close(reference.translation[2], 10.0);
@@ -801,17 +949,220 @@ mod tests {
     fn contact_adjustment_skips_within_epsilon() {
         let reference = reference_at_z(10.0);
 
-        let adjustment = plan_contact_adjustment(
-            (1, 2),
-            (3, 4),
+        let policy = test_policy();
+        let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
             &reference,
             [0.0, 0.0, 9.25],
             9.0,
-            &test_policy(),
-        );
+            &policy,
+            0.0,
+            None,
+        ));
 
         assert!(adjustment.is_none());
         assert_close(reference.translation[2], 10.0);
+    }
+
+    #[test]
+    fn contact_adjustment_preserves_calibrated_baseline() {
+        let reference = reference_at_z(10.0);
+
+        let policy = test_policy();
+        let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
+            &reference,
+            [0.0, 0.0, -31.0],
+            9.0,
+            &policy,
+            -40.0,
+            None,
+        ));
+
+        assert!(adjustment.is_none());
+    }
+
+    #[test]
+    fn contact_adjustment_corrects_relative_delta_from_baseline() {
+        let reference = reference_at_z(10.0);
+
+        let policy = test_policy();
+        let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
+            &reference,
+            [0.0, 0.0, -28.0],
+            9.0,
+            &policy,
+            -40.0,
+            None,
+        ))
+        .unwrap();
+
+        assert_close(adjustment.new_z, 7.0);
+        assert_close(adjustment.applied_delta, -3.0);
+    }
+
+    #[test]
+    fn generated_origin_adjustment_preserves_configured_offset() {
+        let reference = reference_at_z(14.0);
+
+        let policy = test_policy();
+        let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
+            &reference,
+            [0.0, 0.0, -40.0],
+            9.0,
+            &policy,
+            0.0,
+            Some(GeneratedPlacement {
+                z_offset: 5.0,
+                tolerance: 4.0,
+            }),
+        ));
+
+        assert!(adjustment.is_none());
+    }
+
+    #[test]
+    fn generated_origin_adjustment_corrects_origin_residual() {
+        let reference = reference_at_z(20.0);
+
+        let policy = test_policy();
+        let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
+            &reference,
+            [0.0, 0.0, -40.0],
+            9.0,
+            &policy,
+            0.0,
+            Some(GeneratedPlacement {
+                z_offset: 5.0,
+                tolerance: 4.0,
+            }),
+        ))
+        .unwrap();
+
+        assert_eq!(adjustment.sample_kind, "origin");
+        assert_close(adjustment.new_z, 14.0);
+        assert_close(adjustment.applied_delta, -6.0);
+    }
+
+    #[test]
+    fn generated_orientation_samples_origin_not_decorative_contact() {
+        let reference = reference_at_z(0.0);
+        let geometry = MeshGeometry {
+            contact: MeshContact::new(vec![[224.0, 32.0, 0.0]]),
+            ..test_geometry()
+        };
+
+        let (sample_kind, sample_position) = orientation_sample_position(
+            &reference,
+            reference.translation,
+            &geometry,
+            Some(GeneratedPlacement {
+                z_offset: 21.0,
+                tolerance: 4.0,
+            }),
+        );
+
+        assert_eq!(sample_kind, "origin");
+        assert_close(sample_position[0], reference.translation[0]);
+        assert_close(sample_position[1], reference.translation[1]);
+        assert_close(sample_position[2], reference.translation[2]);
+    }
+
+    #[test]
+    fn generated_orientation_uses_origin_normal() {
+        let reference = reference_at_z(0.0);
+        let geometry = MeshGeometry {
+            contact: MeshContact::new(vec![[224.0, 32.0, 0.0]]),
+            ..test_geometry()
+        };
+        let terrain = terrain_flat_at_origin_sloped_at_contact();
+        let static_occluders = StaticOccluderIndex::new(Vec::new());
+        let policy = test_policy();
+
+        let generated = plan_reference_orientation(
+            super::WriteTarget {
+                cell: (0, 0),
+                key: (3, 4),
+            },
+            &reference,
+            reference.translation,
+            &geometry,
+            super::OrientationPlanningContext {
+                terrain: &terrain,
+                static_occluders: &static_occluders,
+                policy: &policy,
+                generated_placement: Some(GeneratedPlacement {
+                    z_offset: 21.0,
+                    tolerance: 4.0,
+                }),
+            },
+        );
+        let contact = plan_reference_orientation(
+            super::WriteTarget {
+                cell: (0, 0),
+                key: (3, 4),
+            },
+            &reference,
+            reference.translation,
+            &geometry,
+            super::OrientationPlanningContext {
+                terrain: &terrain,
+                static_occluders: &static_occluders,
+                policy: &policy,
+                generated_placement: None,
+            },
+        );
+
+        assert!(generated.is_none());
+        assert!(contact.is_some());
+    }
+
+    #[test]
+    fn fully_occluded_static_bounds_try_move_before_delete() {
+        let reference = reference_at_z(0.0);
+        let geometry = test_geometry();
+        let terrain = flat_terrain();
+        let static_occluders = StaticOccluderIndex::new(vec![StaticOccluder {
+            id: "house".to_owned(),
+            cell: [0, 0],
+            reference_key: [1, 1],
+            bounds: WorldAabb {
+                min: [-1.0, -1.0, -1.0],
+                max: [2.0, 2.0, 2.0],
+            },
+        }]);
+        let policy = test_policy();
+        let mut changes = WriteReferenceChanges::default();
+
+        let result = plan_static_bounds_change(
+            &mut changes,
+            super::WriteTarget {
+                cell: (0, 0),
+                key: (3, 4),
+            },
+            &reference,
+            reference.translation,
+            &geometry,
+            StaticBoundsPlanningContext {
+                terrain: &terrain,
+                static_occluders: &static_occluders,
+                policy: &policy,
+                contact_baseline: ContactBaseline {
+                    delta: 0.0,
+                    samples: 0,
+                    min_delta: 0.0,
+                    p05_delta: 0.0,
+                    p95_delta: 0.0,
+                    max_delta: 0.0,
+                },
+                generated_placement: None,
+            },
+        );
+
+        let StaticBoundsPlanResult::Continue(new_position) = result else {
+            panic!("relocatable fully occluded ref should continue with moved position");
+        };
+        assert!(changes.move_.is_some());
+        assert!(changes.deletion.is_none());
+        assert_close(new_position[0], 32.0);
     }
 
     #[test]
@@ -868,7 +1219,8 @@ mod tests {
                     new_rotation: [0.1, 0.2, 0.0],
                     terrain_normal: [0.0, 0.2, 0.98],
                     angle_degrees: 10.0,
-                    contact_position: [0.0, 0.0, 10.0],
+                    sample_kind: "contact",
+                    sample_position: [0.0, 0.0, 10.0],
                 }),
                 ..WriteReferenceChanges::default()
             })),
@@ -894,9 +1246,66 @@ mod tests {
         }
     }
 
+    fn test_contact_adjustment_input<'a>(
+        reference: &'a Reference,
+        contact_position: [f32; 3],
+        terrain_z: f32,
+        policy: &'a UnclipPolicy,
+        contact_baseline: f32,
+        generated_placement: Option<GeneratedPlacement>,
+    ) -> super::ContactAdjustmentInput<'a> {
+        super::ContactAdjustmentInput {
+            target: super::WriteTarget {
+                cell: (1, 2),
+                key: (3, 4),
+            },
+            reference,
+            contact_position,
+            terrain_z,
+            policy,
+            contact_baseline,
+            generated_placement,
+        }
+    }
+
+    fn test_geometry() -> MeshGeometry {
+        MeshGeometry {
+            contact: MeshContact::new(vec![[0.0; 3]]),
+            bounds: MeshAabb {
+                min: [0.0; 3],
+                max: [1.0; 3],
+            },
+            occluder_bounds: MeshAabb {
+                min: [0.0; 3],
+                max: [1.0; 3],
+            },
+        }
+    }
+
+    fn flat_terrain() -> TerrainIndex {
+        let landscape = Landscape {
+            landscape_flags: LandscapeFlags::USES_VERTEX_HEIGHTS_AND_NORMALS,
+            ..Landscape::default()
+        };
+        TerrainIndex::from_landscapes([&landscape])
+    }
+
+    fn terrain_flat_at_origin_sloped_at_contact() -> TerrainIndex {
+        let mut landscape = Landscape {
+            landscape_flags: LandscapeFlags::USES_VERTEX_HEIGHTS_AND_NORMALS,
+            ..Landscape::default()
+        };
+        landscape.vertex_heights.data[0][2] = 16;
+        landscape.vertex_heights.data[0][3] = -16;
+        landscape.vertex_heights.data[1][2] = 16;
+        landscape.vertex_heights.data[1][3] = -16;
+        TerrainIndex::from_landscapes([&landscape])
+    }
+
     fn test_policy() -> UnclipPolicy {
         UnclipPolicy {
             write_actions: WriteActions::all(),
+            placement_model: PlacementModelArg::Auto,
             contact_epsilon: 0.5,
             origin_epsilon: 0.5,
             orientation_epsilon_degrees: 1.0,

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     io,
     sync::Mutex,
 };
@@ -8,8 +8,8 @@ use glam::{Affine3A, EulerRot, Mat3, Vec3};
 use tes3::{
     esp::{ObjectFlags, Static},
     nif::{
-        NiAVObject, NiGeometryData, NiLink, NiNode, NiStream, NiTriShape, NiTriShapeData,
-        NiTriStrips, NiTriStripsData,
+        NiAVObject, NiGeometryData, NiLink, NiNode, NiObjectNET, NiStream, NiStringExtraData,
+        NiTriShape, NiTriShapeData, NiTriStrips, NiTriStripsData, RootCollisionNode,
     },
 };
 use vfstool_lib::{VFS, VfsFile};
@@ -100,6 +100,7 @@ pub struct WorldAabb {
 pub struct MeshGeometry {
     pub contact: MeshContact,
     pub bounds: MeshAabb,
+    pub occluder_bounds: MeshAabb,
 }
 
 impl MeshContact {
@@ -283,7 +284,11 @@ pub struct MeshCache<'a> {
 }
 
 enum CachedMesh {
-    BoundsOnly { stream: NiStream, bounds: MeshAabb },
+    BoundsOnly {
+        stream: NiStream,
+        bounds: MeshAabb,
+        geometry_error: Option<CachedMeshError>,
+    },
     Loaded(MeshGeometry),
     Failed(CachedMeshError),
 }
@@ -326,17 +331,30 @@ impl<'a> MeshCache<'a> {
             self.meshes.insert(key.clone(), mesh);
         }
 
+        if let Some(CachedMesh::BoundsOnly {
+            geometry_error: Some(error),
+            ..
+        }) = self.meshes.get(key)
+        {
+            return Err(error.to_io());
+        }
+
         if let Some(CachedMesh::BoundsOnly { stream, .. }) = self.meshes.get(key) {
-            let mesh = mesh_geometry(stream).map_or_else(
-                || {
-                    CachedMesh::Failed(CachedMeshError::from_io(&io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("mesh {} has no triangle vertices", static_mesh.mesh_path),
-                    )))
-                },
-                CachedMesh::Loaded,
-            );
-            self.meshes.insert(key.clone(), mesh);
+            let mesh = mesh_geometry(stream)
+                .ok_or_else(|| no_triangle_vertices_error(&static_mesh.mesh_path));
+            match mesh {
+                Ok(mesh) => {
+                    self.meshes.insert(key.clone(), CachedMesh::Loaded(mesh));
+                }
+                Err(error) => {
+                    if let Some(CachedMesh::BoundsOnly { geometry_error, .. }) =
+                        self.meshes.get_mut(key)
+                    {
+                        *geometry_error = Some(CachedMeshError::from_io(&error));
+                    }
+                    return Err(error);
+                }
+            }
         }
 
         match &self.meshes[key] {
@@ -351,14 +369,18 @@ impl<'a> MeshCache<'a> {
         if !self.meshes.contains_key(key) {
             let mesh = load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
                 |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
-                |(stream, bounds)| CachedMesh::BoundsOnly { stream, bounds },
+                |(stream, bounds)| CachedMesh::BoundsOnly {
+                    stream,
+                    bounds,
+                    geometry_error: None,
+                },
             );
             self.meshes.insert(key.clone(), mesh);
         }
 
         match &self.meshes[key] {
             CachedMesh::BoundsOnly { bounds, .. } => Ok(*bounds),
-            CachedMesh::Loaded(geometry) => Ok(geometry.bounds),
+            CachedMesh::Loaded(geometry) => Ok(geometry.occluder_bounds),
             CachedMesh::Failed(error) => Err(error.to_io()),
         }
     }
@@ -448,21 +470,24 @@ fn strip_meshes_prefix(mesh_path: &str) -> &str {
 }
 
 fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
-    let accumulated = collect_mesh(stream, true)?;
+    let accumulated = collect_mesh(stream, true, MeshSource::Visible)?;
     let mut vertices = accumulated.vertices.unwrap_or_default();
     dedup_vertices_preserving_order(&mut vertices);
+    let bounds = MeshAabb {
+        min: accumulated.min.to_array(),
+        max: accumulated.max.to_array(),
+    };
 
     Some(MeshGeometry {
         contact: MeshContact::new(vertices.iter().map(glam::Vec3::to_array).collect()),
-        bounds: MeshAabb {
-            min: accumulated.min.to_array(),
-            max: accumulated.max.to_array(),
-        },
+        bounds,
+        occluder_bounds: mesh_bounds(stream).unwrap_or(bounds),
     })
 }
 
 fn mesh_bounds(stream: &NiStream) -> Option<MeshAabb> {
-    let accumulated = collect_mesh(stream, false)?;
+    let accumulated = collect_mesh(stream, false, MeshSource::Collision)
+        .or_else(|| collect_mesh(stream, false, MeshSource::Visible))?;
 
     Some(MeshAabb {
         min: accumulated.min.to_array(),
@@ -505,11 +530,48 @@ impl MeshAccumulator {
     }
 }
 
-fn collect_mesh(stream: &NiStream, store_vertices: bool) -> Option<MeshAccumulator> {
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum MeshSource {
+    Visible,
+    Collision,
+}
+
+impl MeshSource {
+    const fn includes(self, collision: bool) -> bool {
+        matches!(
+            (self, collision),
+            (Self::Visible, false) | (Self::Collision, true)
+        )
+    }
+}
+
+fn collect_mesh(
+    stream: &NiStream,
+    store_vertices: bool,
+    source: MeshSource,
+) -> Option<MeshAccumulator> {
     let mut accumulated = MeshAccumulator::new(store_vertices);
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
 
     for root in &stream.roots {
-        visit_object(stream, root.cast(), Affine3A::IDENTITY, &mut accumulated);
+        queue.push_back(VisitItem {
+            parent: None,
+            link: root.cast(),
+            transform: Affine3A::IDENTITY,
+            collision: false,
+        });
+    }
+
+    while let Some(item) = queue.pop_front() {
+        visit_object(
+            stream,
+            item,
+            source,
+            &mut visited,
+            &mut queue,
+            &mut accumulated,
+        );
     }
 
     if !accumulated.has_vertices {
@@ -519,28 +581,73 @@ fn collect_mesh(stream: &NiStream, store_vertices: bool) -> Option<MeshAccumulat
     Some(accumulated)
 }
 
+#[derive(Clone, Copy)]
+struct VisitItem {
+    parent: Option<tes3::nif::NiKey>,
+    link: NiLink<NiAVObject>,
+    transform: Affine3A,
+    collision: bool,
+}
+
+type VisitEdge = (Option<tes3::nif::NiKey>, tes3::nif::NiKey, bool);
+
 fn visit_object(
     stream: &NiStream,
-    link: NiLink<NiAVObject>,
-    parent_transform: Affine3A,
+    item: VisitItem,
+    source: MeshSource,
+    visited: &mut HashSet<VisitEdge>,
+    queue: &mut VecDeque<VisitItem>,
     mesh: &mut MeshAccumulator,
 ) {
+    let VisitItem {
+        parent,
+        link,
+        transform: parent_transform,
+        collision: parent_collision,
+    } = item;
     if link.is_null() {
         return;
     }
+    if !visited.insert((parent, link.key, parent_collision)) {
+        return;
+    }
 
-    if let Some(node) = stream.get_as::<_, NiNode>(link) {
-        if node.base.base.name == "RootCollisionNode" || node.base.app_culled() {
+    if let Some(root_collision_node) = stream.get_as::<_, RootCollisionNode>(link) {
+        if root_collision_node.base.base.app_culled() {
+            return;
+        }
+        let transform = parent_transform * root_collision_node.base.base.transform();
+        for child in &root_collision_node.base.children {
+            queue.push_back(VisitItem {
+                parent: Some(link.key),
+                link: *child,
+                transform,
+                collision: true,
+            });
+        }
+    } else if let Some(node) = stream.get_as::<_, NiNode>(link) {
+        if node.base.app_culled() {
+            return;
+        }
+        let collision = parent_collision || has_rcn_extra(&node.base.base, stream);
+        if source == MeshSource::Visible && collision {
             return;
         }
         let transform = parent_transform * node.base.transform();
         for child in &node.children {
-            visit_object(stream, *child, transform, mesh);
+            queue.push_back(VisitItem {
+                parent: Some(link.key),
+                link: *child,
+                transform,
+                collision,
+            });
         }
     } else if let Some(shape) = stream.get_as::<_, NiTriShape>(link) {
-        if shape.base.base.base.base.name == "RootCollisionNode"
-            || shape.base.base.base.app_culled()
-        {
+        if shape.base.base.base.app_culled() {
+            return;
+        }
+        let collision = parent_collision || has_rcn_extra(&shape.base.base.base.base, stream);
+        if !source.includes(collision) {
             return;
         }
         let transform = parent_transform * shape.base.base.base.transform();
@@ -553,9 +660,11 @@ fn visit_object(
             );
         }
     } else if let Some(strips) = stream.get_as::<_, NiTriStrips>(link) {
-        if strips.base.base.base.base.name == "RootCollisionNode"
-            || strips.base.base.base.app_culled()
-        {
+        if strips.base.base.base.app_culled() {
+            return;
+        }
+        let collision = parent_collision || has_rcn_extra(&strips.base.base.base.base, stream);
+        if !source.includes(collision) {
             return;
         }
         let transform = parent_transform * strips.base.base.base.transform();
@@ -568,6 +677,12 @@ fn visit_object(
             );
         }
     }
+}
+
+fn has_rcn_extra(object: &NiObjectNET, stream: &NiStream) -> bool {
+    object
+        .extra_datas_of_type::<NiStringExtraData>(stream)
+        .any(|data| data.starts_with_ignore_ascii_case("RCN"))
 }
 
 fn include_vertices(
@@ -591,7 +706,9 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use tes3::nif::{NiGeometry, NiObjectNET, NiTriBasedGeom, NiTriBasedGeomData, NiType};
+    use tes3::nif::{
+        NiExtraData, NiGeometry, NiObjectNET, NiTriBasedGeom, NiTriBasedGeomData, NiType,
+    };
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -788,6 +905,170 @@ mod tests {
         assert_eq!(cache.cached_mesh_count(), 1);
     }
 
+    #[test]
+    fn mesh_cache_keeps_collision_bounds_after_geometry_promotion_failure() {
+        let temp_dir = TempDir::new("collision-only");
+        write_collision_only_nif(&temp_dir.path().join("Meshes/Grass/Foo.nif"));
+        let vfs = VFS::from_directories(vec![temp_dir.path().to_path_buf()], None);
+        let static_mesh = test_static_mesh("Meshes/Grass/Foo.nif");
+        let mut cache = MeshCache::new(&vfs);
+
+        assert_eq!(cache.bounds(&static_mesh).unwrap(), collision_bounds());
+        let error = cache.geometry(&static_mesh).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(cache.bounds(&static_mesh).unwrap(), collision_bounds());
+        assert_eq!(cache.cached_mesh_state(&static_mesh), Some("bounds_only"));
+    }
+
+    #[test]
+    fn visible_shape_named_root_collision_node_is_not_dropped() {
+        let mut stream = NiStream::new();
+        let shape = insert_shape(
+            &mut stream,
+            "RootCollisionNode",
+            &expected_contact_vertices(),
+            0,
+        );
+        push_root(&mut stream, shape);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.contact.vertices, expected_contact_vertices());
+    }
+
+    #[test]
+    fn occluder_bounds_prefer_actual_root_collision_node_geometry() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root = insert_root_collision_node(&mut stream, vec![collision_shape]);
+        let root = insert_node(&mut stream, "root", vec![visible, collision_root], None, 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
+        assert_eq!(geometry.contact.vertices, expected_contact_vertices());
+    }
+
+    #[test]
+    fn rcn_extra_data_marks_subtree_as_collision_geometry() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root = insert_node(
+            &mut stream,
+            "whatever-blender-called-it",
+            vec![collision_shape],
+            Some("RCN"),
+            0,
+        );
+        let root = insert_node(&mut stream, "root", vec![visible, collision_root], None, 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
+    }
+
+    #[test]
+    fn shared_shape_can_be_visible_and_collision_geometry() {
+        let mut stream = NiStream::new();
+        let shared_shape = insert_shape(&mut stream, "shared", &collision_vertices(), 0);
+        let collision_root = insert_root_collision_node(&mut stream, vec![shared_shape]);
+        let root = insert_node(
+            &mut stream,
+            "root",
+            vec![shared_shape, collision_root],
+            None,
+            0,
+        );
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+
+        assert_eq!(geometry.bounds, collision_bounds());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
+    }
+
+    #[test]
+    fn culled_collision_subtree_does_not_replace_visible_occluder_bounds() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root = insert_node(
+            &mut stream,
+            "collision",
+            vec![collision_shape],
+            Some("RCN"),
+            1,
+        );
+        let root = insert_node(&mut stream, "root", vec![visible, collision_root], None, 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.occluder_bounds, expected_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+    }
+
+    #[test]
+    fn occluder_bounds_fall_back_to_visible_geometry_without_collision() {
+        let mut stream = NiStream::new();
+        let shape = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        push_root(&mut stream, shape);
+
+        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+    }
+
+    #[test]
+    fn mesh_collection_skips_app_culled_subtrees() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let culled = insert_shape(&mut stream, "culled", &collision_vertices(), 1);
+        let root = insert_node(&mut stream, "root", vec![visible, culled], None, 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+    }
+
+    #[test]
+    fn mesh_collection_handles_deep_node_hierarchy_iteratively() {
+        let mut stream = NiStream::new();
+        let mut child = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        for index in 0..2048 {
+            child = insert_node(&mut stream, &format!("node_{index}"), vec![child], None, 0);
+        }
+        push_root(&mut stream, child);
+
+        assert_eq!(mesh_geometry(&stream).unwrap().bounds, expected_bounds());
+    }
+
+    #[test]
+    fn mesh_collection_terminates_on_cyclic_child_links() {
+        let mut stream = NiStream::new();
+        let shape = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let root = insert_node(&mut stream, "root", Vec::new(), None, 0);
+        if let Some(NiType::NiNode(node)) = stream.objects.get_mut(root.key) {
+            node.children.push(shape);
+            node.children.push(root);
+        }
+        push_root(&mut stream, root);
+
+        assert_eq!(mesh_geometry(&stream).unwrap().bounds, expected_bounds());
+    }
+
     fn test_contact() -> MeshContact {
         MeshContact::new(vec![[0.0, 0.0, -10.0], [5.0, -2.0, -3.0], [-4.0, 3.0, 2.0]])
     }
@@ -801,6 +1082,21 @@ mod tests {
 
     fn expected_contact_vertices() -> Vec<[f32; 3]> {
         vec![[0.0, 0.0, -10.0], [5.0, -2.0, -3.0], [-4.0, 3.0, 2.0]]
+    }
+
+    fn collision_vertices() -> Vec<[f32; 3]> {
+        vec![
+            [-100.0, -50.0, -20.0],
+            [80.0, -50.0, -20.0],
+            [80.0, 40.0, 30.0],
+        ]
+    }
+
+    fn collision_bounds() -> MeshAabb {
+        MeshAabb {
+            min: [-100.0, -50.0, -20.0],
+            max: [80.0, 40.0, 30.0],
+        }
     }
 
     fn test_static_mesh(mesh_path: &str) -> StaticMesh {
@@ -843,27 +1139,45 @@ mod tests {
 
     fn write_nif(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut stream = NiStream::new();
+        let shape = insert_shape(&mut stream, "test", &expected_contact_vertices(), 0);
+        push_root(&mut stream, shape);
+        std::fs::write(path, stream.save_bytes().unwrap()).unwrap();
+    }
+
+    fn write_collision_only_nif(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut stream = NiStream::new();
+        let shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root = insert_root_collision_node(&mut stream, vec![shape]);
+        push_root(&mut stream, collision_root);
+        std::fs::write(path, stream.save_bytes().unwrap()).unwrap();
+    }
+
+    fn insert_shape(
+        stream: &mut NiStream,
+        name: &str,
+        vertices: &[[f32; 3]],
+        flags: u16,
+    ) -> NiLink<NiAVObject> {
         let geometry_data = NiTriShapeData {
             base: NiTriBasedGeomData {
                 base: NiGeometryData {
-                    vertices: expected_contact_vertices()
-                        .into_iter()
-                        .map(Vec3::from)
-                        .collect(),
+                    vertices: vertices.iter().copied().map(Vec3::from).collect(),
                     ..NiGeometryData::default()
                 },
             },
             triangles: vec![[0, 1, 2], [0, 1, 2]],
             shared_normals: Vec::new(),
         };
-        let mut stream = NiStream::new();
         let data_key = stream.objects.insert(NiType::from(geometry_data));
         let shape = NiTriShape {
             base: NiTriBasedGeom {
                 base: NiGeometry {
                     base: NiAVObject {
+                        flags,
                         base: NiObjectNET {
-                            name: "test".to_owned(),
+                            name: name.to_owned(),
                             ..NiObjectNET::default()
                         },
                         ..NiAVObject::default()
@@ -874,8 +1188,67 @@ mod tests {
             },
         };
         let shape_key = stream.objects.insert(NiType::from(shape));
-        stream.roots.push(NiLink::new(shape_key));
-        std::fs::write(path, stream.save_bytes().unwrap()).unwrap();
+        NiLink::new(shape_key)
+    }
+
+    fn insert_node(
+        stream: &mut NiStream,
+        name: &str,
+        children: Vec<NiLink<NiAVObject>>,
+        extra: Option<&str>,
+        flags: u16,
+    ) -> NiLink<NiAVObject> {
+        let extra_data =
+            extra.map_or_else(NiLink::null, |value| insert_string_extra(stream, value));
+        let node = NiNode {
+            base: NiAVObject {
+                flags,
+                base: NiObjectNET {
+                    name: name.to_owned(),
+                    extra_data,
+                    ..NiObjectNET::default()
+                },
+                ..NiAVObject::default()
+            },
+            children,
+            ..NiNode::default()
+        };
+        let node_key = stream.objects.insert(NiType::from(node));
+        NiLink::new(node_key)
+    }
+
+    fn insert_root_collision_node(
+        stream: &mut NiStream,
+        children: Vec<NiLink<NiAVObject>>,
+    ) -> NiLink<NiAVObject> {
+        let node = RootCollisionNode {
+            base: NiNode {
+                base: NiAVObject {
+                    base: NiObjectNET {
+                        name: "not-semantically-important".to_owned(),
+                        ..NiObjectNET::default()
+                    },
+                    ..NiAVObject::default()
+                },
+                children,
+                ..NiNode::default()
+            },
+        };
+        let node_key = stream.objects.insert(NiType::from(node));
+        NiLink::new(node_key)
+    }
+
+    fn insert_string_extra(stream: &mut NiStream, value: &str) -> NiLink<NiExtraData> {
+        let extra = NiStringExtraData {
+            base: NiExtraData::default(),
+            value: value.to_owned(),
+        };
+        let extra_key = stream.objects.insert(NiType::from(extra));
+        NiLink::new(extra_key)
+    }
+
+    fn push_root(stream: &mut NiStream, link: NiLink<NiAVObject>) {
+        stream.roots.push(link.cast());
     }
 
     fn reference_world_position(

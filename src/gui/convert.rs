@@ -287,7 +287,7 @@ impl GreenmoteApp {
                             self.localizer.text(UiText::WriteChangesToPlugin),
                         );
                         ui.checkbox(
-                            &mut self.convert.unclip.run_options.instances,
+                            &mut self.convert.unclip.run_options.verbose,
                             self.localizer.text(UiText::DetailedRefDiagnostics),
                         )
                         .on_hover_text(self.localizer.text(UiText::DetailedRefDiagnosticsTooltip));
@@ -767,7 +767,7 @@ impl GreenmoteApp {
         }
 
         thread::spawn(move || {
-            let mut stdout = GuiOutput::new(sink.clone());
+            let mut stdout = io::sink();
             let error = unclip::run_with_output(openmw_cfg.as_deref(), None, &args, &mut stdout)
                 .err()
                 .map(|error| error.to_string());
@@ -1348,7 +1348,7 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
             plugin: "target.omwaddon".to_owned(),
-            instances: false,
+            verbose: false,
             write: true,
         };
         app.convert.unclip.pending_write_confirmation = true;
@@ -1372,7 +1372,7 @@ mod tests {
         app.settings.clear_unclip_write_actions_for_test();
         app.convert.unclip.run_options = UnclipRunOptions {
             plugin: "target.omwaddon".to_owned(),
-            instances: false,
+            verbose: false,
             write: true,
         };
 

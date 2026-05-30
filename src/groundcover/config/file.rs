@@ -105,7 +105,10 @@ impl GroundcoverConfigFile {
 
 fn is_empty_unclip_config(config: &PersistedUnclipConfig) -> bool {
     config.plugin.is_none()
+        && config.meshgenerator_ini.is_none()
+        && config.placement_model.is_none()
         && config.instances.is_none()
+        && config.verbose.is_none()
         && config.structured.is_none()
         && config.write.is_none()
         && config.write_actions.is_none()

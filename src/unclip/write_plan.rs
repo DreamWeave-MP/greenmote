@@ -142,6 +142,7 @@ pub(crate) struct WriteAdjustment {
     pub(crate) old_z: f32,
     pub(crate) new_z: f32,
     pub(crate) applied_delta: f32,
+    pub(crate) sample_kind: &'static str,
     pub(crate) contact_position: [f32; 3],
     pub(crate) terrain_z: f32,
 }
@@ -179,7 +180,8 @@ pub(crate) struct WriteOrientation {
     pub(crate) new_rotation: [f32; 3],
     pub(crate) terrain_normal: [f32; 3],
     pub(crate) angle_degrees: f32,
-    pub(crate) contact_position: [f32; 3],
+    pub(crate) sample_kind: &'static str,
+    pub(crate) sample_position: [f32; 3],
 }
 
 #[derive(Clone)]
@@ -390,6 +392,7 @@ mod tests {
             old_z: 10.0,
             new_z: 12.0,
             applied_delta: 2.0,
+            sample_kind: "contact",
             contact_position: [0.0, 0.0, 7.0],
             terrain_z: 9.0,
         }
@@ -416,7 +419,8 @@ mod tests {
             new_rotation: [0.1, 0.2, 0.0],
             terrain_normal: [0.0, 0.2, 0.98],
             angle_degrees: 10.0,
-            contact_position: [0.0, 0.0, 10.0],
+            sample_kind: "contact",
+            sample_position: [0.0, 0.0, 10.0],
         }
     }
 }

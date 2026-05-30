@@ -6,6 +6,8 @@ mod app;
 mod args;
 mod cells;
 pub(crate) mod config;
+mod contact_baseline;
+mod generated_placement;
 mod inspection;
 mod mesh;
 mod model;
@@ -21,7 +23,7 @@ mod write_policy;
 mod write_status;
 mod writer;
 
-pub use args::{UnclipArgs, WriteActionArg};
+pub use args::{PlacementModelArg, UnclipArgs, WriteActionArg};
 
 /// Runs the groundcover unclipping subcommand.
 ///

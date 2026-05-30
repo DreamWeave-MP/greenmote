@@ -37,9 +37,9 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::RunOptions => "Options d’exécution",
         UiText::TargetPlugin => "Plugin cible",
         UiText::WriteChangesToPlugin => "Écrire les changements dans le plugin",
-        UiText::DetailedRefDiagnostics => "Afficher les diagnostics détaillés des refs",
+        UiText::DetailedRefDiagnostics => "Journal détaillé",
         UiText::DetailedRefDiagnosticsTooltip => {
-            "Afficher une entrée de diagnostic par référence placée inspectée au lieu du seul résumé. Inclut la clé cell/ref, le contact avec le terrain, l’occlusion statique et l’état d’écriture."
+            "Écrit les diagnostics Unclip complets par référence dans greenmote.log. Plus lent et peut créer de très gros fichiers journaux."
         }
         UiText::StartConversion => "Démarrer la conversion",
         UiText::WriteChanges => "Écrire les changements",

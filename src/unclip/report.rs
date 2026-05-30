@@ -1,8 +1,9 @@
-use std::{io, io::Write};
+use std::{collections::BTreeMap, io, io::Write};
 
 use serde::Serialize;
 
 use super::{
+    contact_baseline::{ContactBaselineDiagnostic, ContactBaselineIndex},
     model::{
         ReferenceInspection, TerrainInspectionReport, UnclipPolicySummary, UnclipReportContext,
         UnclipSummary,
@@ -12,6 +13,21 @@ use super::{
         WriteStaticBoundsMove, WriteSummary,
     },
 };
+
+#[derive(Clone, Default)]
+struct BaselineActionCounts {
+    adjusted: usize,
+    deleted: usize,
+    moved: usize,
+    oriented: usize,
+    adjustment_deltas: Vec<f32>,
+}
+
+impl BaselineActionCounts {
+    const fn total(&self) -> usize {
+        self.adjusted + self.deleted + self.moved + self.oriented
+    }
+}
 
 pub(crate) fn write_summary_text(
     stdout: &mut dyn Write,
@@ -61,12 +77,13 @@ pub(crate) fn write_structured_summary(
     context: &UnclipReportContext,
     inspection: &TerrainInspectionReport,
 ) -> io::Result<()> {
+    let write = context.write.as_ref().map(WriteReport::summary);
     let report = StructuredSummaryReport {
         kind: "greenmote_unclip_terrain_inspection",
         target_plugin: &context.target_plugin,
         write_requested: context.write_requested(),
         policy: context.policy(),
-        write: context.write.as_ref(),
+        write: write.as_ref(),
         missing_active_terrain_cells: context.missing_active_terrain_cells(),
         static_occluders: &context.static_occluder_report,
         summary: context.summary(inspection),
@@ -75,91 +92,113 @@ pub(crate) fn write_structured_summary(
     writeln!(stdout)
 }
 
-pub(crate) fn write_structured_header(
+pub(crate) fn write_contact_baseline_diagnostics(
     stdout: &mut dyn Write,
-    context: &UnclipReportContext,
-) -> io::Result<()> {
-    let header = StructuredHeader {
-        r#type: "header",
-        kind: "greenmote_unclip_terrain_inspection",
-        target_plugin: &context.target_plugin,
-        write_requested: context.write_requested(),
-        policy: context.policy(),
-        missing_active_terrain_cells: context.missing_active_terrain_cells(),
-        static_occluders: &context.static_occluder_report,
-    };
-    write_json(stdout, &header)?;
-    writeln!(stdout)
-}
-
-pub(crate) fn write_structured_write_records(
-    stdout: &mut dyn Write,
+    baselines: &ContactBaselineIndex,
     write: Option<&WriteReport>,
 ) -> io::Result<()> {
-    if let Some(write) = write {
-        for adjustment in &write.adjustments {
-            let record = StructuredWriteAdjustmentRecord {
-                r#type: "write_adjustment",
-                adjustment,
-            };
-            write_json(stdout, &record)?;
-            writeln!(stdout)?;
-        }
-        for deletion in &write.deletions {
-            let record = StructuredWriteDeletionRecord {
-                r#type: "write_static_bounds_deletion",
-                deletion,
-            };
-            write_json(stdout, &record)?;
-            writeln!(stdout)?;
-        }
-        for move_ in &write.moves {
-            let record = StructuredWriteMoveRecord {
-                r#type: "write_static_bounds_move",
-                move_,
-            };
-            write_json(stdout, &record)?;
-            writeln!(stdout)?;
-        }
-        for orientation in &write.orientations {
-            let record = StructuredWriteOrientationRecord {
-                r#type: "write_orientation",
-                orientation,
-            };
-            write_json(stdout, &record)?;
-            writeln!(stdout)?;
-        }
+    let mut diagnostics = baselines.diagnostics();
+    if diagnostics.is_empty() {
+        writeln!(stdout, "Contact baselines:")?;
+        return writeln!(stdout, "  calibrated statics: 0");
+    }
+
+    let actions = write.map_or_else(BTreeMap::new, baseline_action_counts);
+    diagnostics.sort_by(|left, right| {
+        let left_count = actions.get(&left.id).map_or(0, BaselineActionCounts::total);
+        let right_count = actions
+            .get(&right.id)
+            .map_or(0, BaselineActionCounts::total);
+        right_count
+            .cmp(&left_count)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    writeln!(stdout, "Contact baselines:")?;
+    writeln!(
+        stdout,
+        "  calibrated statics: {} (baseline_delta = contact_z - terrain_z_at_origin)",
+        diagnostics.len()
+    )?;
+    for diagnostic in diagnostics {
+        write_contact_baseline_line(stdout, &diagnostic, actions.get(&diagnostic.id))?;
     }
     Ok(())
 }
 
-pub(crate) fn write_structured_reference_record(
+fn write_contact_baseline_line(
     stdout: &mut dyn Write,
-    reference: &ReferenceInspection,
+    diagnostic: &ContactBaselineDiagnostic,
+    actions: Option<&BaselineActionCounts>,
 ) -> io::Result<()> {
-    let record = StructuredReferenceRecord {
-        r#type: "ref",
-        reference,
-    };
-    write_json(stdout, &record)?;
-    writeln!(stdout)
+    let baseline = diagnostic.baseline;
+    let actions = actions.cloned().unwrap_or_default();
+    let adjustment_delta_summary = adjustment_delta_summary_text(&actions.adjustment_deltas);
+    writeln!(
+        stdout,
+        "  {} mesh=\"{}\": samples={} baseline_median={:.3} min={:.3} p05={:.3} p95={:.3} max={:.3} adjusted={} adjustment_delta={} deleted={} moved={} oriented={}",
+        diagnostic.id,
+        diagnostic.mesh,
+        baseline.samples,
+        baseline.delta,
+        baseline.min_delta,
+        baseline.p05_delta,
+        baseline.p95_delta,
+        baseline.max_delta,
+        actions.adjusted,
+        adjustment_delta_summary,
+        actions.deleted,
+        actions.moved,
+        actions.oriented,
+    )
 }
 
-pub(crate) fn write_structured_summary_record(
-    stdout: &mut dyn Write,
-    context: &UnclipReportContext,
-    inspection: &TerrainInspectionReport,
-) -> io::Result<()> {
-    let write = context.write.as_ref().map(WriteReport::summary);
-    let summary = StructuredSummaryRecord {
-        r#type: "summary",
-        write_requested: context.write_requested(),
-        policy: context.policy(),
-        write: write.as_ref(),
-        summary: context.summary(inspection),
-    };
-    write_json(stdout, &summary)?;
-    writeln!(stdout)
+fn adjustment_delta_summary_text(deltas: &[f32]) -> String {
+    if deltas.is_empty() {
+        return "none".to_owned();
+    }
+    let mut deltas = deltas.to_vec();
+    deltas.sort_by(f32::total_cmp);
+    format!(
+        "min={:.3},median={:.3},max={:.3}",
+        deltas[0],
+        median_sorted(&deltas),
+        deltas[deltas.len() - 1]
+    )
+}
+
+fn median_sorted(values: &[f32]) -> f32 {
+    let middle = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[middle - 1] + values[middle]) * 0.5
+    } else {
+        values[middle]
+    }
+}
+
+fn baseline_action_counts(write: &WriteReport) -> BTreeMap<String, BaselineActionCounts> {
+    let mut counts = BTreeMap::<String, BaselineActionCounts>::new();
+    for adjustment in &write.adjustments {
+        let count = counts.entry(adjustment.id.to_lowercase()).or_default();
+        count.adjusted += 1;
+        count.adjustment_deltas.push(adjustment.applied_delta);
+    }
+    for deletion in &write.deletions {
+        counts
+            .entry(deletion.id.to_lowercase())
+            .or_default()
+            .deleted += 1;
+    }
+    for move_ in &write.moves {
+        counts.entry(move_.id.to_lowercase()).or_default().moved += 1;
+    }
+    for orientation in &write.orientations {
+        counts
+            .entry(orientation.id.to_lowercase())
+            .or_default()
+            .oriented += 1;
+    }
+    counts
 }
 
 fn write_write_summary_text(
@@ -340,6 +379,7 @@ fn write_policy_summary_text(
         policy.write_actions.join(", ")
     };
     writeln!(stdout, "  write actions: {actions}")?;
+    writeln!(stdout, "  placement model: {}", policy.placement_model)?;
     if policy.has_target_filter() {
         writeln!(
             stdout,
@@ -546,13 +586,14 @@ pub(crate) fn write_reference_text(
 fn write_adjustment_text(stdout: &mut dyn Write, adjustment: &WriteAdjustment) -> io::Result<()> {
     writeln!(
         stdout,
-        "WRITE CELL {:?} REF {:?} {} old_z={:.3} new_z={:.3} applied_delta={:.3} contact={:?} terrain_z={:.3}",
+        "WRITE CELL {:?} REF {:?} {} old_z={:.3} new_z={:.3} applied_delta={:.3} {}={:?} terrain_z={:.3}",
         adjustment.cell,
         adjustment.reference_key,
         adjustment.id,
         adjustment.old_z,
         adjustment.new_z,
         adjustment.applied_delta,
+        adjustment.sample_kind,
         adjustment.contact_position,
         adjustment.terrain_z
     )
@@ -600,7 +641,7 @@ fn write_orientation_text(
 ) -> io::Result<()> {
     writeln!(
         stdout,
-        "ORIENT CELL {:?} REF {:?} {} angle={:.3} old_rotation={:?} new_rotation={:?} terrain_normal={:?} contact={:?}",
+        "ORIENT CELL {:?} REF {:?} {} angle={:.3} old_rotation={:?} new_rotation={:?} terrain_normal={:?} {}={:?}",
         orientation.cell,
         orientation.reference_key,
         orientation.id,
@@ -608,7 +649,8 @@ fn write_orientation_text(
         orientation.old_rotation,
         orientation.new_rotation,
         orientation.terrain_normal,
-        orientation.contact_position
+        orientation.sample_kind,
+        orientation.sample_position
     )
 }
 
@@ -640,71 +682,15 @@ struct StructuredSummaryReport<'a> {
     write_requested: bool,
     policy: &'a UnclipPolicySummary,
     #[serde(skip_serializing_if = "Option::is_none")]
-    write: Option<&'a WriteReport>,
-    missing_active_terrain_cells: Vec<[i32; 2]>,
-    static_occluders: &'a super::static_occluders::StaticOccluderBuildReport,
-    summary: UnclipSummary,
-}
-
-#[derive(Serialize)]
-struct StructuredHeader<'a> {
-    r#type: &'static str,
-    kind: &'static str,
-    target_plugin: &'a str,
-    write_requested: bool,
-    policy: &'a UnclipPolicySummary,
-    missing_active_terrain_cells: Vec<[i32; 2]>,
-    static_occluders: &'a super::static_occluders::StaticOccluderBuildReport,
-}
-
-#[derive(Serialize)]
-struct StructuredSummaryRecord<'a> {
-    r#type: &'static str,
-    write_requested: bool,
-    policy: &'a UnclipPolicySummary,
-    #[serde(skip_serializing_if = "Option::is_none")]
     write: Option<&'a WriteSummary>,
+    missing_active_terrain_cells: Vec<[i32; 2]>,
+    static_occluders: &'a super::static_occluders::StaticOccluderBuildReport,
     summary: UnclipSummary,
-}
-
-#[derive(Serialize)]
-struct StructuredReferenceRecord<'a> {
-    r#type: &'static str,
-    #[serde(flatten)]
-    reference: &'a ReferenceInspection,
-}
-
-#[derive(Serialize)]
-struct StructuredWriteAdjustmentRecord<'a> {
-    r#type: &'static str,
-    #[serde(flatten)]
-    adjustment: &'a WriteAdjustment,
-}
-
-#[derive(Serialize)]
-struct StructuredWriteDeletionRecord<'a> {
-    r#type: &'static str,
-    #[serde(flatten)]
-    deletion: &'a WriteStaticBoundsDeletion,
-}
-
-#[derive(Serialize)]
-struct StructuredWriteMoveRecord<'a> {
-    r#type: &'static str,
-    #[serde(flatten)]
-    move_: &'a WriteStaticBoundsMove,
-}
-
-#[derive(Serialize)]
-struct StructuredWriteOrientationRecord<'a> {
-    r#type: &'static str,
-    #[serde(flatten)]
-    orientation: &'a WriteOrientation,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{write_structured_header, write_structured_write_records, write_summary_text};
+    use super::{write_structured_summary, write_summary_text};
     use crate::unclip::{
         model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
@@ -774,46 +760,26 @@ mod tests {
     }
 
     #[test]
-    fn structured_header_includes_policy() {
-        let context = UnclipReportContext::new_for_test("plugin.omwaddon");
-        let mut output = Vec::new();
-
-        write_structured_header(&mut output, &context).unwrap();
-
-        let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("\"policy\":"));
-        assert!(output.contains("\"write_requested\":false"));
-        assert!(output.contains(
-            "\"write_actions\":[\"terrain-z\",\"static-delete\",\"static-move\",\"orient\"]"
-        ));
-        assert!(output.contains("\"include_grass_ids\":[]"));
-        assert!(output.contains("\"exclude_grass_ids\":[]"));
-        assert!(output.contains("\"include_occluder_ids\":[]"));
-        assert!(output.contains("\"exclude_occluder_ids\":[]"));
-    }
-
-    #[test]
-    fn structured_write_records_use_sorted_write_report_order() {
-        let report = WriteReport::not_written(
+    fn structured_summary_uses_compact_write_summary() {
+        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
+        context.write = Some(WriteReport::not_written(
             std::path::Path::new("plugin.omwaddon"),
             WritePlan {
-                adjusted_refs: 2,
-                adjustments: vec![
-                    write_adjustment_at([1, 0], [4, 0]),
-                    write_adjustment_at([0, 0], [9, 0]),
-                ],
+                adjusted_refs: 1,
+                adjustments: vec![write_adjustment()],
                 ..WritePlan::default()
             },
             "no_refs_changed",
-        );
+        ));
         let mut output = Vec::new();
 
-        write_structured_write_records(&mut output, Some(&report)).unwrap();
+        write_structured_summary(&mut output, &context, &TerrainInspectionReport::default())
+            .unwrap();
 
         let output = String::from_utf8(output).unwrap();
-        let first = output.find("\"cell\":[0,0]").unwrap();
-        let second = output.find("\"cell\":[1,0]").unwrap();
-        assert!(first < second);
+        assert!(output.contains("\"adjusted_refs\":1"));
+        assert!(!output.contains("\"adjustments\""));
+        assert!(!output.contains("\"old_z\""));
     }
 
     fn write_adjustment() -> WriteAdjustment {
@@ -828,6 +794,7 @@ mod tests {
             old_z: 10.0,
             new_z: 12.0,
             applied_delta: 2.0,
+            sample_kind: "contact",
             contact_position: [0.0, 0.0, 7.0],
             terrain_z: 9.0,
         }

@@ -24,11 +24,23 @@ pub struct UnclipArgs {
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
     pub plugin: Option<PathBuf>,
 
-    /// Include per-reference instance diagnostics.
+    /// Deprecated alias for --verbose.
     #[arg(long = "instances", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
     pub instances: Option<bool>,
 
-    /// Emit machine-readable compact JSON. With --instances, emits newline-delimited JSON records.
+    /// Write full per-reference diagnostics to greenmote.log.
+    #[arg(long = "verbose", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+    pub verbose: Option<bool>,
+
+    /// mw-groundcover-generator INI used as an optional placement inference hint.
+    #[arg(long = "meshgenerator-ini", value_name = "INI")]
+    pub meshgenerator_ini: Option<PathBuf>,
+
+    /// Placement model used for terrain Z and orientation sampling.
+    #[arg(long = "placement-model", value_enum)]
+    pub placement_model: Option<PlacementModelArg>,
+
+    /// Emit the compact summary as machine-readable JSON.
     #[arg(long = "structured", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
     pub structured: Option<bool>,
 
@@ -77,6 +89,18 @@ pub struct UnclipArgs {
     pub exclude_occluder_ids: Vec<String>,
 }
 
+/// Placement model used by Unclip terrain fixes.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlacementModelArg {
+    /// Infer contact-vs-origin anchoring per mesh from the target plugin and terrain.
+    Auto,
+    /// Treat visible mesh contact as the placement anchor.
+    Contact,
+    /// Treat reference origin as the placement anchor and infer its terrain-relative Z offset.
+    Origin,
+}
+
 /// Write actions accepted by `unclip --write-actions` and `[unclip].write_actions`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[non_exhaustive]
@@ -99,6 +123,7 @@ pub enum WriteActionArg {
 #[derive(Clone, Debug)]
 pub(crate) struct UnclipPolicy {
     pub(crate) write_actions: WriteActions,
+    pub(crate) placement_model: PlacementModelArg,
     pub(crate) contact_epsilon: f32,
     pub(crate) origin_epsilon: f32,
     pub(crate) orientation_epsilon_degrees: f32,
@@ -140,7 +165,9 @@ impl UnclipArgs {
         let resolved = crate::unclip::config::UnclipConfig {
             openmw_cfg: None,
             plugin: plugin.clone(),
-            instances: self.instances.unwrap_or(false),
+            meshgenerator_ini: self.meshgenerator_ini.clone(),
+            placement_model: self.placement_model.unwrap_or(PlacementModelArg::Auto),
+            verbose: self.verbose.or(self.instances).unwrap_or(false),
             structured: self.structured.unwrap_or(false),
             write: self.write.unwrap_or(false),
             write_actions: if self.write_actions.is_empty() {
@@ -178,6 +205,7 @@ impl crate::unclip::config::UnclipConfig {
         let write_actions = WriteActions::from_args(&self.write_actions)?;
         Ok(UnclipPolicy {
             write_actions,
+            placement_model: self.placement_model,
             contact_epsilon: self.contact_epsilon,
             origin_epsilon: self.origin_epsilon,
             orientation_epsilon_degrees: self.orientation_epsilon,
@@ -190,6 +218,16 @@ impl crate::unclip::config::UnclipConfig {
             occluder_filter: IdFilter::new(&self.include_occluder_ids, &self.exclude_occluder_ids)
                 .map_err(|error| format!("invalid occluder id filter: {error}"))?,
         })
+    }
+}
+
+impl PlacementModelArg {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Contact => "contact",
+            Self::Origin => "origin",
+        }
     }
 }
 
@@ -367,7 +405,39 @@ fn relocation_steps(value: &str) -> Result<u16, String> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
+    use crate::{Cli, Command};
+
     use super::IdFilter;
+
+    fn parse_unclip_args(args: &[&str]) -> super::UnclipArgs {
+        let cli = Cli::parse_from(args);
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("expected unclip command");
+        };
+        args
+    }
+
+    #[test]
+    fn verbose_flag_accepts_optional_bool() {
+        let args = parse_unclip_args(&["greenmote", "unclip", "--verbose"]);
+        assert_eq!(args.verbose, Some(true));
+
+        let args = parse_unclip_args(&["greenmote", "unclip", "--verbose=false"]);
+        assert_eq!(args.verbose, Some(false));
+    }
+
+    #[test]
+    fn instances_flag_remains_deprecated_verbose_alias() {
+        let args = parse_unclip_args(&["greenmote", "unclip", "--instances"]);
+        assert_eq!(args.instances, Some(true));
+        assert_eq!(args.verbose, None);
+
+        let args = parse_unclip_args(&["greenmote", "unclip", "--instances=false"]);
+        assert_eq!(args.instances, Some(false));
+        assert_eq!(args.verbose, None);
+    }
 
     #[test]
     fn target_filter_includes_all_without_include_patterns() {

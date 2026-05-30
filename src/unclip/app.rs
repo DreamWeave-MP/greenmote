@@ -1,4 +1,8 @@
-use std::{fs::File, io, io::Write};
+use std::{
+    collections::BTreeSet,
+    fs::File,
+    io::{self, BufWriter, Write},
+};
 
 use tes3::esp::{Landscape, Plugin};
 
@@ -7,6 +11,8 @@ use crate::groundcover::{LOG_NAME, openmw};
 use super::{
     args::UnclipPolicy,
     config::UnclipConfig,
+    contact_baseline::{ContactBaselineIndex, build_contact_baselines},
+    generated_placement::GeneratedPlacementIndex,
     inspection::{ReferenceInspectionContext, count_target_refs, inspect_target_refs},
     mesh::{MeshCache, StaticMeshIndex},
     model::{TerrainInspectionReport, UnclipReportContext, UnclipReportContextInput},
@@ -16,11 +22,11 @@ use super::{
         active_cells, build_static_index, load_context_plugins, load_target_plugin,
         path_matches_any, resolve_content_plugin_paths, resolve_target_plugin,
     },
-    static_occluders::build_static_occluders,
+    static_occluders::{StaticOccluderBuildReport, build_static_occluders},
     target::TargetRefIndex,
     terrain::TerrainIndex,
     write_plan::{WritePlan, WriteReport, WriteStatusIndex},
-    write_policy::{apply_unclip_write_plan, plan_unclip_adjustments},
+    write_policy::{UnclipWritePlanningInput, apply_unclip_write_plan, plan_unclip_adjustments},
     writer::save_plugin_with_backup,
 };
 
@@ -32,24 +38,31 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
     let vfs = openmw::build_vfs(&openmw_config);
     let target_plugin = resolve_target_plugin(&config.plugin, &openmw_config, &vfs)?;
     let mut target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
-    let content_files = openmw::content_files(&openmw_config)?;
-    let context_plugin_paths = resolve_content_plugin_paths(&content_files, &vfs)?;
+    let context_plugin_paths = context_plugin_paths(&openmw_config, &vfs)?;
     let context_plugins = load_context_plugins(&context_plugin_paths)?;
     let target_is_active = path_matches_any(&target_plugin.source_path, &context_plugin_paths);
     let active_static_index = build_static_index(&context_plugins, None);
-    let target_static_index = build_static_index(
-        &context_plugins,
-        (!target_is_active).then_some(&target_plugin_data),
-    );
+    let target_static_index =
+        target_static_index(&context_plugins, target_is_active, &target_plugin_data);
     let target_refs = TargetRefIndex::build(&target_plugin_data, &policy);
     let active_cells = active_cells(&target_refs.target_cells)?;
-    let terrain = TerrainIndex::from_landscapes_in_cells(
-        context_plugins
-            .iter()
-            .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
-        &active_cells,
-    );
+    let terrain = terrain_from_context_plugins(&context_plugins, &active_cells);
     let mut mesh_cache = MeshCache::new(&vfs);
+    let generated_placements = load_generated_placements(
+        config,
+        &target_plugin_data,
+        &target_refs,
+        &terrain,
+        &target_static_index,
+        &mut mesh_cache,
+    )?;
+    let contact_baselines = build_contact_baselines(
+        &target_plugin_data,
+        &target_refs,
+        &terrain,
+        &target_static_index,
+        &mut mesh_cache,
+    );
     let (static_occluders, static_occluder_report) = build_static_occluders(
         &context_plugins,
         &active_cells,
@@ -58,42 +71,35 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         &target_refs.target_static_ids,
         &policy.occluder_filter,
     );
-    let missing_active_terrain_cells = active_cells
-        .iter()
-        .copied()
-        .filter(|cell| !terrain.has_cell(*cell))
-        .collect::<Vec<_>>();
-    let mut report_context = UnclipReportContext::new(
-        UnclipReportContextInput {
-            target_plugin_path: &target_plugin.source_path,
-            target_exterior_cells: target_refs.target_cells.len(),
-            target_refs_total: target_refs.exterior_ref_count,
-            active_cells: active_cells.len(),
-            loaded_terrain_cells_total: terrain.len(),
-            missing_active_terrain_cells,
-            static_occluder_report,
-            write_requested: config.write,
+    let missing_active_terrain_cells = missing_active_terrain_cells(&active_cells, &terrain);
+    let mut report_context = build_report_context(ReportContextBuildInput {
+        target_plugin_path: &target_plugin.source_path,
+        target_refs: &target_refs,
+        active_cells: active_cells.len(),
+        terrain: &terrain,
+        missing_active_terrain_cells,
+        static_occluder_report,
+        write_requested: config.write,
+        policy: &policy,
+    });
+    let write_actions_enabled = policy.write_actions.any_enabled();
+    let write_plan = Some(plan_requested_unclip_adjustments(
+        UnclipWritePlanningInput {
+            plugin: &target_plugin_data,
+            target_refs: &target_refs,
+            terrain: &terrain,
+            static_index: &target_static_index,
+            mesh_contacts: &mut mesh_cache,
+            static_occluders: &static_occluders,
+            policy: &policy,
+            contact_baselines: &contact_baselines,
+            generated_placements: &generated_placements,
         },
-        &policy,
-    );
-    let write_plan = if policy.write_actions.any_enabled() {
-        Some(plan_unclip_adjustments(
-            &target_plugin_data,
-            &target_refs,
-            &terrain,
-            &target_static_index,
-            &mut mesh_cache,
-            &static_occluders,
-            &policy,
-        ))
-    } else {
-        Some(WritePlan::default())
-    };
+        write_actions_enabled,
+    ));
     let write_status = write_plan.as_ref().map(WriteStatusIndex::from_plan);
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
-    let mut log = File::create(log_path)?;
-    let mut output_writer = TeeWriter::new(stdout, &mut log);
-
+    let mut log = BufWriter::new(File::create(log_path)?);
     let mut output = OutputContext {
         plugin: &target_plugin_data,
         target_refs: &target_refs,
@@ -103,48 +109,125 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         static_occluders: &static_occluders,
         report: &report_context,
         policy: &policy,
+        contact_baselines: &contact_baselines,
+        generated_placements: &generated_placements,
     };
-    let inspection = write_output(
-        &mut output_writer,
-        config,
-        &mut output,
-        write_status.as_ref(),
-    )?;
+    let inspection =
+        inspect_refs_and_write_optional_log(&mut log, config, &mut output, write_status.as_ref())?;
     report_context.write = save_write_plan(
         &mut target_plugin_data,
         &target_plugin.source_path,
         &target_plugin.destination_path,
         write_plan,
         config.write,
-        (!policy.write_actions.any_enabled()).then_some("all_write_actions_disabled"),
+        (!write_actions_enabled).then_some("all_write_actions_disabled"),
     )?;
-    write_output_footer(&mut output_writer, config, &report_context, &inspection)?;
-
+    write_reports(
+        stdout,
+        config,
+        &mut log,
+        &report_context,
+        &inspection,
+        &contact_baselines,
+    )?;
     Ok(())
 }
 
-struct TeeWriter<'a, 'b> {
-    primary: &'a mut dyn Write,
-    secondary: &'b mut dyn Write,
+fn context_plugin_paths(
+    openmw_config: &openmw_config::OpenMWConfiguration,
+    vfs: &vfstool_lib::VFS,
+) -> io::Result<Vec<std::path::PathBuf>> {
+    resolve_content_plugin_paths(&openmw::content_files(openmw_config)?, vfs)
 }
 
-impl<'a, 'b> TeeWriter<'a, 'b> {
-    fn new(primary: &'a mut dyn Write, secondary: &'b mut dyn Write) -> Self {
-        Self { primary, secondary }
+struct ReportContextBuildInput<'a> {
+    target_plugin_path: &'a std::path::Path,
+    target_refs: &'a TargetRefIndex,
+    active_cells: usize,
+    terrain: &'a TerrainIndex,
+    missing_active_terrain_cells: Vec<(i32, i32)>,
+    static_occluder_report: StaticOccluderBuildReport,
+    write_requested: bool,
+    policy: &'a UnclipPolicy,
+}
+
+fn build_report_context(input: ReportContextBuildInput<'_>) -> UnclipReportContext {
+    UnclipReportContext::new(
+        UnclipReportContextInput {
+            target_plugin_path: input.target_plugin_path,
+            target_exterior_cells: input.target_refs.target_cells.len(),
+            target_refs_total: input.target_refs.exterior_ref_count,
+            active_cells: input.active_cells,
+            loaded_terrain_cells_total: input.terrain.len(),
+            missing_active_terrain_cells: input.missing_active_terrain_cells,
+            static_occluder_report: input.static_occluder_report,
+            write_requested: input.write_requested,
+        },
+        input.policy,
+    )
+}
+
+fn target_static_index(
+    context_plugins: &[Plugin],
+    target_is_active: bool,
+    target_plugin_data: &Plugin,
+) -> StaticMeshIndex {
+    build_static_index(
+        context_plugins,
+        (!target_is_active).then_some(target_plugin_data),
+    )
+}
+
+fn write_reports(
+    stdout: &mut dyn Write,
+    config: &UnclipConfig,
+    log: &mut dyn Write,
+    report_context: &UnclipReportContext,
+    inspection: &TerrainInspectionReport,
+    contact_baselines: &ContactBaselineIndex,
+) -> io::Result<()> {
+    write_output_footer(stdout, config, report_context, inspection)?;
+    write_log_footer(
+        log,
+        report_context,
+        inspection,
+        contact_baselines,
+        config.verbose,
+    )
+}
+
+fn plan_requested_unclip_adjustments(
+    input: UnclipWritePlanningInput<'_, '_>,
+    write_actions_enabled: bool,
+) -> WritePlan {
+    if write_actions_enabled {
+        plan_unclip_adjustments(input)
+    } else {
+        WritePlan::default()
     }
 }
 
-impl Write for TeeWriter<'_, '_> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.primary.write_all(buf)?;
-        self.secondary.write_all(buf)?;
-        Ok(buf.len())
-    }
+fn missing_active_terrain_cells(
+    active_cells: &BTreeSet<(i32, i32)>,
+    terrain: &TerrainIndex,
+) -> Vec<(i32, i32)> {
+    active_cells
+        .iter()
+        .copied()
+        .filter(|cell| !terrain.has_cell(*cell))
+        .collect()
+}
 
-    fn flush(&mut self) -> io::Result<()> {
-        self.primary.flush()?;
-        self.secondary.flush()
-    }
+fn terrain_from_context_plugins(
+    context_plugins: &[Plugin],
+    active_cells: &BTreeSet<(i32, i32)>,
+) -> TerrainIndex {
+    TerrainIndex::from_landscapes_in_cells(
+        context_plugins
+            .iter()
+            .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
+        active_cells,
+    )
 }
 
 fn save_write_plan(
@@ -185,20 +268,60 @@ struct OutputContext<'a, 'b> {
     static_occluders: &'a StaticOccluderIndex,
     report: &'a UnclipReportContext,
     policy: &'a UnclipPolicy,
+    contact_baselines: &'a ContactBaselineIndex,
+    generated_placements: &'a GeneratedPlacementIndex,
 }
 
-fn write_output(
-    stdout: &mut dyn Write,
+fn inspect_refs_and_write_optional_log(
+    log: &mut dyn Write,
     config: &UnclipConfig,
     output: &mut OutputContext<'_, '_>,
     write_status: Option<&WriteStatusIndex>,
 ) -> io::Result<TerrainInspectionReport> {
-    match (config.structured, config.instances) {
-        (false, false) => Ok(write_text_summary(output, write_status)),
-        (false, true) => write_instance_text(stdout, output, write_status),
-        (true, false) => Ok(write_structured_summary(output, write_status)),
-        (true, true) => write_structured_instances(stdout, output, write_status),
+    let mut context = ReferenceInspectionContext {
+        terrain: output.terrain,
+        static_index: output.static_index,
+        mesh_contacts: output.mesh_contacts,
+        static_occluders: output.static_occluders,
+        policy: output.policy,
+        write: write_status,
+        contact_baselines: output.contact_baselines,
+        generated_placements: output.generated_placements,
+    };
+    if config.verbose {
+        report::write_instance_header(log, output.report)?;
+        inspect_target_refs(
+            output.plugin,
+            output.target_refs,
+            &mut context,
+            |reference| report::write_reference_text(log, reference),
+        )
+    } else {
+        Ok(count_target_refs(
+            output.plugin,
+            output.target_refs,
+            &mut context,
+        ))
     }
+}
+
+fn load_generated_placements(
+    config: &UnclipConfig,
+    plugin: &Plugin,
+    target_refs: &TargetRefIndex,
+    terrain: &TerrainIndex,
+    static_index: &StaticMeshIndex,
+    mesh_contacts: &mut MeshCache<'_>,
+) -> io::Result<GeneratedPlacementIndex> {
+    GeneratedPlacementIndex::build(
+        config.placement_model,
+        config.meshgenerator_ini.as_deref(),
+        plugin,
+        target_refs,
+        terrain,
+        static_index,
+        mesh_contacts,
+    )
 }
 
 fn write_output_footer(
@@ -207,139 +330,48 @@ fn write_output_footer(
     context: &UnclipReportContext,
     inspection: &TerrainInspectionReport,
 ) -> io::Result<()> {
-    match (config.structured, config.instances) {
-        (false, false) => {
-            report::write_summary_text(stdout, context, inspection, context.write_requested())
-        }
-        (false, true) => {
-            writeln!(stdout)?;
-            report::write_summary_text(stdout, context, inspection, context.write_requested())
-        }
-        (true, false) => report::write_structured_summary(stdout, context, inspection),
-        (true, true) => {
-            report::write_structured_write_records(stdout, context.write.as_ref())?;
-            report::write_structured_summary_record(stdout, context, inspection)
-        }
+    if config.structured {
+        report::write_structured_summary(stdout, context, inspection)
+    } else {
+        report::write_summary_text(stdout, context, inspection, false)
     }
 }
 
-fn write_text_summary(
-    output: &mut OutputContext<'_, '_>,
-    write_status: Option<&WriteStatusIndex>,
-) -> TerrainInspectionReport {
-    count_target_refs(
-        output.plugin,
-        output.target_refs,
-        &mut ReferenceInspectionContext {
-            terrain: output.terrain,
-            static_index: output.static_index,
-            mesh_contacts: output.mesh_contacts,
-            static_occluders: output.static_occluders,
-            policy: output.policy,
-            write: write_status,
-        },
-    )
-}
-
-fn write_instance_text(
-    stdout: &mut dyn Write,
-    output: &mut OutputContext<'_, '_>,
-    write_status: Option<&WriteStatusIndex>,
-) -> io::Result<TerrainInspectionReport> {
-    report::write_instance_header(stdout, output.report)?;
-    let mut context = ReferenceInspectionContext {
-        terrain: output.terrain,
-        static_index: output.static_index,
-        mesh_contacts: output.mesh_contacts,
-        static_occluders: output.static_occluders,
-        policy: output.policy,
-        write: write_status,
-    };
-    let inspection = inspect_target_refs(
-        output.plugin,
-        output.target_refs,
-        &mut context,
-        |reference| report::write_reference_text(stdout, reference),
-    )?;
-    Ok(inspection)
-}
-
-fn write_structured_summary(
-    output: &mut OutputContext<'_, '_>,
-    write_status: Option<&WriteStatusIndex>,
-) -> TerrainInspectionReport {
-    count_target_refs(
-        output.plugin,
-        output.target_refs,
-        &mut ReferenceInspectionContext {
-            terrain: output.terrain,
-            static_index: output.static_index,
-            mesh_contacts: output.mesh_contacts,
-            static_occluders: output.static_occluders,
-            policy: output.policy,
-            write: write_status,
-        },
-    )
-}
-
-fn write_structured_instances(
-    stdout: &mut dyn Write,
-    output: &mut OutputContext<'_, '_>,
-    write_status: Option<&WriteStatusIndex>,
-) -> io::Result<TerrainInspectionReport> {
-    report::write_structured_header(stdout, output.report)?;
-
-    let mut context = ReferenceInspectionContext {
-        terrain: output.terrain,
-        static_index: output.static_index,
-        mesh_contacts: output.mesh_contacts,
-        static_occluders: output.static_occluders,
-        policy: output.policy,
-        write: write_status,
-    };
-    let inspection = inspect_target_refs(
-        output.plugin,
-        output.target_refs,
-        &mut context,
-        |reference| report::write_structured_reference_record(stdout, reference),
-    )?;
-    Ok(inspection)
+fn write_log_footer(
+    log: &mut dyn Write,
+    context: &UnclipReportContext,
+    inspection: &TerrainInspectionReport,
+    contact_baselines: &ContactBaselineIndex,
+    verbose: bool,
+) -> io::Result<()> {
+    if verbose {
+        writeln!(log)?;
+    }
+    report::write_contact_baseline_diagnostics(log, contact_baselines, context.write.as_ref())?;
+    writeln!(log)?;
+    report::write_summary_text(log, context, inspection, verbose)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use crate::unclip::{
-        args::WriteActionArg,
+        args::{PlacementModelArg, WriteActionArg},
         config::UnclipConfig,
+        contact_baseline::ContactBaselineIndex,
         model::{TerrainInspectionReport, UnclipReportContext},
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
 
-    use super::{TeeWriter, write_output_footer};
+    use super::{write_log_footer, write_output_footer};
 
     #[test]
-    fn tee_writer_writes_to_stdout_and_log() {
-        let mut stdout = Vec::new();
-        let mut log = Vec::new();
-
-        {
-            let mut writer = TeeWriter::new(&mut stdout, &mut log);
-            writer.write_all(b"unclip report\n").unwrap();
-            writer.flush().unwrap();
-        }
-
-        assert_eq!(stdout, b"unclip report\n");
-        assert_eq!(log, b"unclip report\n");
-    }
-
-    #[test]
-    fn structured_instance_footer_writes_changes_before_summary() {
+    fn structured_footer_omits_write_change_records() {
         let config = UnclipConfig {
             openmw_cfg: None,
             plugin: "plugin.omwaddon".into(),
-            instances: true,
+            meshgenerator_ini: None,
+            placement_model: PlacementModelArg::Auto,
+            verbose: true,
             structured: true,
             write: true,
             write_actions: vec![
@@ -379,9 +411,116 @@ mod tests {
         .unwrap();
 
         let output = String::from_utf8(output).unwrap();
-        let write_record = output.find("\"type\":\"write_adjustment\"").unwrap();
-        let summary_record = output.find("\"type\":\"summary\"").unwrap();
-        assert!(write_record < summary_record);
+        assert!(output.contains("\"kind\":\"greenmote_unclip_terrain_inspection\""));
+        assert!(!output.contains("\"type\":\"write_adjustment\""));
+        assert!(!output.contains("\"old_z\""));
+    }
+
+    #[test]
+    fn text_footer_omits_write_change_lines_by_default() {
+        let config = UnclipConfig {
+            openmw_cfg: None,
+            plugin: "plugin.omwaddon".into(),
+            meshgenerator_ini: None,
+            placement_model: PlacementModelArg::Auto,
+            verbose: false,
+            structured: false,
+            write: true,
+            write_actions: vec![
+                WriteActionArg::TerrainZ,
+                WriteActionArg::StaticDelete,
+                WriteActionArg::StaticMove,
+                WriteActionArg::Orient,
+            ],
+            contact_epsilon: 0.5,
+            origin_epsilon: 0.5,
+            relocation_step: 32.0,
+            relocation_steps: 8,
+            orientation_epsilon: 1.0,
+            include_grass_ids: Vec::new(),
+            exclude_grass_ids: Vec::new(),
+            include_occluder_ids: Vec::new(),
+            exclude_occluder_ids: Vec::new(),
+        };
+        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
+        context.write = Some(WriteReport::not_written(
+            std::path::Path::new("plugin.omwaddon"),
+            WritePlan {
+                adjusted_refs: 1,
+                adjustments: vec![write_adjustment()],
+                ..WritePlan::default()
+            },
+            "no_refs_changed",
+        ));
+        let mut output = Vec::new();
+
+        write_output_footer(
+            &mut output,
+            &config,
+            &context,
+            &TerrainInspectionReport::default(),
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Adjusted refs: 1"));
+        assert!(!output.contains("WRITE CELL"));
+    }
+
+    #[test]
+    fn verbose_log_footer_keeps_write_change_lines() {
+        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
+        context.write = Some(WriteReport::not_written(
+            std::path::Path::new("plugin.omwaddon"),
+            WritePlan {
+                adjusted_refs: 1,
+                adjustments: vec![write_adjustment()],
+                ..WritePlan::default()
+            },
+            "no_refs_changed",
+        ));
+        let mut output = Vec::new();
+
+        write_log_footer(
+            &mut output,
+            &context,
+            &TerrainInspectionReport::default(),
+            &ContactBaselineIndex::default(),
+            true,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Adjusted refs: 1"));
+        assert!(output.contains("WRITE CELL"));
+    }
+
+    #[test]
+    fn default_log_footer_omits_write_change_lines() {
+        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
+        context.write = Some(WriteReport::not_written(
+            std::path::Path::new("plugin.omwaddon"),
+            WritePlan {
+                adjusted_refs: 1,
+                adjustments: vec![write_adjustment()],
+                ..WritePlan::default()
+            },
+            "no_refs_changed",
+        ));
+        let mut output = Vec::new();
+
+        write_log_footer(
+            &mut output,
+            &context,
+            &TerrainInspectionReport::default(),
+            &ContactBaselineIndex::default(),
+            false,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Adjusted refs: 1"));
+        assert!(!output.contains("WRITE CELL"));
     }
 
     fn write_adjustment() -> WriteAdjustment {
@@ -392,6 +531,7 @@ mod tests {
             old_z: 10.0,
             new_z: 12.0,
             applied_delta: 2.0,
+            sample_kind: "contact",
             contact_position: [0.0, 0.0, 7.0],
             terrain_z: 9.0,
         }
