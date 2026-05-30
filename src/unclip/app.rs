@@ -17,7 +17,7 @@ use super::{
         path_matches_any, resolve_content_plugin_paths, resolve_target_plugin,
     },
     static_occluders::build_static_occluders,
-    target::{target_exterior_cells, target_exterior_ref_count, target_reference_static_ids},
+    target::TargetRefIndex,
     terrain::TerrainIndex,
     write_plan::{WritePlan, WriteReport, WriteStatusIndex},
     write_policy::{apply_unclip_write_plan, plan_unclip_adjustments},
@@ -41,22 +41,21 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         &context_plugins,
         (!target_is_active).then_some(&target_plugin_data),
     );
-    let target_cells = target_exterior_cells(&target_plugin_data, &policy);
-    let active_cells = active_cells(&target_cells)?;
+    let target_refs = TargetRefIndex::build(&target_plugin_data, &policy);
+    let active_cells = active_cells(&target_refs.target_cells)?;
     let terrain = TerrainIndex::from_landscapes_in_cells(
         context_plugins
             .iter()
             .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
         &active_cells,
     );
-    let target_static_ids = target_reference_static_ids(&target_plugin_data, &policy);
     let mut context_meshes = MeshBoundsCache::new(&vfs);
     let (static_occluders, static_occluder_report) = build_static_occluders(
         &context_plugins,
         &active_cells,
         &active_static_index,
         &mut context_meshes,
-        &target_static_ids,
+        &target_refs.target_static_ids,
         &policy.occluder_filter,
     );
     let missing_active_terrain_cells = active_cells
@@ -67,8 +66,8 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
     let mut report_context = UnclipReportContext::new(
         UnclipReportContextInput {
             target_plugin_path: &target_plugin.source_path,
-            target_exterior_cells: target_cells.len(),
-            target_refs_total: target_exterior_ref_count(&target_plugin_data),
+            target_exterior_cells: target_refs.target_cells.len(),
+            target_refs_total: target_refs.exterior_ref_count,
             active_cells: active_cells.len(),
             loaded_terrain_cells_total: terrain.len(),
             missing_active_terrain_cells,
@@ -81,6 +80,7 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
     let write_plan = if policy.write_actions.any_enabled() {
         Some(plan_unclip_adjustments(
             &target_plugin_data,
+            &target_refs,
             &terrain,
             &target_static_index,
             &mut target_meshes,
@@ -101,6 +101,7 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
 
     let mut output = OutputContext {
         plugin: &target_plugin_data,
+        target_refs: &target_refs,
         terrain: &terrain,
         static_index: &target_static_index,
         mesh_contacts: &mut target_meshes,
@@ -182,6 +183,7 @@ fn save_write_plan(
 
 struct OutputContext<'a, 'b> {
     plugin: &'a Plugin,
+    target_refs: &'a TargetRefIndex,
     terrain: &'a TerrainIndex,
     static_index: &'a StaticMeshIndex,
     mesh_contacts: &'a mut MeshContactCache<'b>,
@@ -199,6 +201,7 @@ fn write_output(
     match (config.structured, config.instances) {
         (false, false) => Ok(write_text_summary(
             output.plugin,
+            output.target_refs,
             output.terrain,
             output.static_index,
             output.mesh_contacts,
@@ -208,6 +211,7 @@ fn write_output(
         (false, true) => write_instance_text(stdout, output, write_status),
         (true, false) => Ok(write_structured_summary(
             output.plugin,
+            output.target_refs,
             output.terrain,
             output.static_index,
             output.mesh_contacts,
@@ -242,6 +246,7 @@ fn write_output_footer(
 
 fn write_text_summary(
     plugin: &Plugin,
+    target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
@@ -250,6 +255,7 @@ fn write_text_summary(
 ) -> TerrainInspectionReport {
     count_target_refs(
         plugin,
+        target_refs,
         terrain,
         static_index,
         mesh_contacts,
@@ -271,14 +277,19 @@ fn write_instance_text(
         static_occluders: output.static_occluders,
         policy: output.policy,
     };
-    let inspection = inspect_target_refs(output.plugin, &mut context, write_status, |reference| {
-        report::write_reference_text(stdout, reference)
-    })?;
+    let inspection = inspect_target_refs(
+        output.plugin,
+        output.target_refs,
+        &mut context,
+        write_status,
+        |reference| report::write_reference_text(stdout, reference),
+    )?;
     Ok(inspection)
 }
 
 fn write_structured_summary(
     plugin: &Plugin,
+    target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
@@ -287,6 +298,7 @@ fn write_structured_summary(
 ) -> TerrainInspectionReport {
     count_target_refs(
         plugin,
+        target_refs,
         terrain,
         static_index,
         mesh_contacts,
@@ -309,9 +321,13 @@ fn write_structured_instances(
         static_occluders: output.static_occluders,
         policy: output.policy,
     };
-    let inspection = inspect_target_refs(output.plugin, &mut context, write_status, |reference| {
-        report::write_structured_reference_record(stdout, reference)
-    })?;
+    let inspection = inspect_target_refs(
+        output.plugin,
+        output.target_refs,
+        &mut context,
+        write_status,
+        |reference| report::write_structured_reference_record(stdout, reference),
+    )?;
     Ok(inspection)
 }
 

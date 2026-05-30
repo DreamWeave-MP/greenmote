@@ -11,6 +11,7 @@ use super::{
         translate_bounds_xy,
     },
     orientation::{OrientationResult, orientation_to_terrain},
+    target::TargetRefIndex,
     terrain::TerrainIndex,
     write_plan::{
         WriteAdjustment, WriteOrientation, WritePlan, WriteStaticBoundsDeletion,
@@ -32,6 +33,7 @@ const RELOCATION_DIRECTIONS: &[[f32; 2]] = &[
 
 pub(crate) fn plan_unclip_adjustments(
     plugin: &Plugin,
+    target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
@@ -46,41 +48,10 @@ pub(crate) fn plan_unclip_adjustments(
         static_occluders,
         policy,
     };
-    let mut exterior_cells = plugin
-        .objects
-        .iter()
-        .enumerate()
-        .filter_map(|(index, object)| {
-            let TES3Object::Cell(cell) = object else {
-                return None;
-            };
-            cell.is_exterior().then_some((cell.data.grid, index))
-        })
-        .collect::<Vec<_>>();
-    exterior_cells.sort_unstable();
-
-    for (cell_grid, object_index) in exterior_cells {
-        let TES3Object::Cell(cell) = &plugin.objects[object_index] else {
-            unreachable!("sorted exterior cell index should still point to a CELL")
-        };
-        let mut reference_keys = cell.references.keys().copied().collect::<Vec<_>>();
-        reference_keys.sort_unstable();
-
-        for key in reference_keys {
-            let Some(reference) = cell.references.get(&key) else {
-                continue;
-            };
-            if !policy.target_filter.includes(&reference.id) {
-                continue;
-            }
-            let change = adjust_reference_for_terrain_and_static_bounds(
-                cell_grid,
-                key,
-                reference,
-                &mut context,
-            );
-            record_reference_change(change, &mut plan);
-        }
+    for (cell_grid, key, reference) in target_refs.iter_refs(plugin) {
+        let change =
+            adjust_reference_for_terrain_and_static_bounds(cell_grid, key, reference, &mut context);
+        record_reference_change(change, &mut plan);
     }
 
     plan

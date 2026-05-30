@@ -14,7 +14,7 @@ use super::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
     },
     orientation::orientation_angle_degrees,
-    target::sorted_exterior_cells,
+    target::TargetRefIndex,
     terrain::TerrainIndex,
     write_plan::WriteStatusIndex,
     write_policy::{RefTransform, find_valid_relocation_transform},
@@ -26,32 +26,23 @@ use super::{
 
 pub(super) fn inspect_target_refs(
     plugin: &Plugin,
+    target_refs: &TargetRefIndex,
     context: &mut ReferenceInspectionContext<'_, '_>,
     write: Option<&WriteStatusIndex>,
     mut reference_sink: impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<TerrainInspectionReport> {
     let mut report = TerrainInspectionReport::default();
 
-    for cell in sorted_exterior_cells(plugin) {
-        let mut reference_keys = cell.references.keys().copied().collect::<Vec<_>>();
-        reference_keys.sort_unstable();
-        for key in reference_keys {
-            let Some(reference) = cell.references.get(&key) else {
-                continue;
-            };
-            if !context.policy.target_filter.includes(&reference.id) {
-                continue;
-            }
-            inspect_reference(
-                &mut report,
-                context,
-                cell.data.grid,
-                key,
-                reference,
-                write,
-                &mut reference_sink,
-            )?;
-        }
+    for (cell, key, reference) in target_refs.iter_refs(plugin) {
+        inspect_reference(
+            &mut report,
+            context,
+            cell,
+            key,
+            reference,
+            write,
+            &mut reference_sink,
+        )?;
     }
 
     Ok(report)
@@ -59,6 +50,7 @@ pub(super) fn inspect_target_refs(
 
 pub(super) fn count_target_refs(
     plugin: &Plugin,
+    target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshContactCache<'_>,
@@ -74,18 +66,8 @@ pub(super) fn count_target_refs(
         policy,
     };
 
-    for cell in sorted_exterior_cells(plugin) {
-        let mut reference_keys = cell.references.keys().copied().collect::<Vec<_>>();
-        reference_keys.sort_unstable();
-        for key in reference_keys {
-            let Some(reference) = cell.references.get(&key) else {
-                continue;
-            };
-            if !policy.target_filter.includes(&reference.id) {
-                continue;
-            }
-            count_reference(&mut report, &mut context, cell.data.grid, reference);
-        }
+    for (cell, _, reference) in target_refs.iter_refs(plugin) {
+        count_reference(&mut report, &mut context, cell, reference);
     }
 
     report
