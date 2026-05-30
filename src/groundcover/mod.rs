@@ -1,3 +1,5 @@
+//! Public entry points for the `greenmote convert` workflow.
+
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
@@ -7,27 +9,35 @@ mod app;
 mod args;
 mod auto_enable;
 mod config;
-pub mod default;
+pub(crate) mod default;
 mod load;
-pub mod mesh;
+pub(crate) mod mesh;
 pub(crate) mod openmw;
 mod output;
-pub mod plan;
+pub(crate) mod plan;
 mod progress;
-pub mod records;
+pub(crate) mod records;
 
 pub use args::GroundcoverArgs;
 pub use config::GroundcoverConfig;
 pub use progress::{CancellationToken, ConversionEvent, ConversionPhase};
 
+/// Default Greenmote TOML configuration filename.
 pub const DEFAULT_CONFIG_NAME: &str = "greenmote.toml";
+/// Filename for the generated plugin that deletes converted source references.
 pub const DELETED_PLUGIN_NAME: &str = "deleted_groundcover.omwaddon";
 pub(crate) const GENERATED_PLUGIN_AUTHOR: &str = "greenmote";
 pub(crate) const GENERATED_PLUGIN_DESCRIPTION: &str = "Generated groundcover plugin created by greenmote convert.\nThis is a generated plugin.\nWhy are you reading this?\nBuy me coffee for moar tools.\nhttps://ko-fi.com/magicaldave";
+/// Filename for the generated `OpenMW` groundcover plugin.
 pub const GROUNDCOVER_PLUGIN_NAME: &str = "groundcover.omwaddon";
+/// Default run log filename.
 pub const LOG_NAME: &str = "greenmote.log";
 
 /// Runs the groundcover conversion subcommand.
+///
+/// The command discovers `OpenMW` configuration, loads and merges `greenmote.toml`, resolves meshes
+/// before writing plugins, and respects dry-run/config-validation modes from the supplied arguments
+/// and persisted configuration.
 ///
 /// # Errors
 ///
@@ -44,6 +54,9 @@ pub fn run(
 
 /// Runs the groundcover conversion subcommand with explicit output streams.
 ///
+/// This is useful for tests and embedding where stdout/stderr must be captured. Runtime semantics
+/// are the same as [`run`].
+///
 /// # Errors
 ///
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
@@ -58,6 +71,9 @@ pub fn run_with_output(
 }
 
 /// Runs the groundcover conversion subcommand with explicit output streams and progress events.
+///
+/// Event callbacks may be invoked from Rayon worker threads during parallel phases. If cancellation
+/// support is required, use the crate-private GUI entry point that accepts a [`CancellationToken`].
 ///
 /// # Errors
 ///

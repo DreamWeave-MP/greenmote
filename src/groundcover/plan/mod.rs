@@ -1,3 +1,4 @@
+#[cfg(test)]
 mod cells;
 mod ids;
 mod model;
@@ -6,12 +7,14 @@ mod statics;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
 pub use cells::scan_cells_parallel;
 pub use model::{
     ConversionPlan, LoadedPlugin, MasterSpec, PluginCellPlan, StaticConversionPlan, StaticPlan,
 };
 pub use statics::build_static_conversion_plan;
 
+#[cfg(test)]
 use crate::groundcover::{GroundcoverConfig, progress::CancellationToken};
 
 /// Builds the full conversion plan from already-loaded plugins.
@@ -23,6 +26,7 @@ use crate::groundcover::{GroundcoverConfig, progress::CancellationToken};
 ///
 /// Panics only if the uncancelled default cancellation token reports cancellation.
 #[must_use]
+#[cfg(test)]
 pub fn build_conversion_plan(
     loaded_plugins: &[LoadedPlugin],
     config: &GroundcoverConfig,

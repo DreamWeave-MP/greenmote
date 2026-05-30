@@ -1,3 +1,5 @@
+//! Runtime configuration for `greenmote convert`.
+
 mod edit;
 mod file;
 
@@ -17,29 +19,55 @@ use crate::{
     unclip::config::PersistedUnclipConfig,
 };
 
+/// Effective Convert configuration after `OpenMW` discovery, TOML loading, defaults, and CLI merges.
+///
+/// Greenmote is primarily an application, so this type mirrors the persisted/CLI-facing shape rather
+/// than trying to be a polished stable builder API. Regex-backed fields are public for inspection and
+/// editing, but conversion code recompiles the private regex caches before using them. Public callers
+/// should prefer [`crate::groundcover::run`] or [`crate::groundcover::run_with_output`] instead of
+/// treating this as a long-term stable library configuration contract.
 #[derive(Clone, Debug)]
 // These are persisted/CLI-facing runtime toggles. Hiding them behind enums would make the Rust
 // type prettier and the TOML schema worse. That is not a trade.
 #[allow(clippy::struct_excessive_bools)]
 pub struct GroundcoverConfig {
+    /// `OpenMW` configuration path persisted for GUI/settings display when known.
     pub openmw_cfg: Option<PathBuf>,
 
+    /// Directory where generated plugins, copied meshes, and logs are written.
     pub output_directory: PathBuf,
 
     pub(crate) output_directory_source: openmw::ConvertOutputDirectorySource,
 
+    /// Case-insensitive regex fragments used to include static IDs for conversion.
+    ///
+    /// These values are compiled into private caches before conversion. Mutating them on an already
+    /// loaded value does not by itself run a conversion; use the public command entry points for real
+    /// work so validation and cache refresh happen in the intended order.
     pub grass_ids: Vec<String>,
 
+    /// Case-insensitive regex fragments used to exclude static IDs from conversion.
+    ///
+    /// These values are compiled into private caches before conversion. See [`Self::grass_ids`] for
+    /// the mutation caveat.
     pub exclude: Vec<String>,
 
+    /// Case-insensitive regexes for plugin file names to ignore during conversion.
+    ///
+    /// These values are compiled into private caches before conversion. See [`Self::grass_ids`] for
+    /// the mutation caveat.
     pub ignored_plugins: Vec<String>,
 
+    /// Whether Convert should plan without writing output.
     pub dry_run: bool,
 
+    /// Whether Convert should validate configuration only.
     pub validate_config: bool,
 
+    /// Whether Convert should print extra diagnostics.
     pub debug: bool,
 
+    /// Whether Convert should add generated plugins to `OpenMW` configuration after generation.
     pub auto_enable: bool,
 
     pub(crate) unclip: PersistedUnclipConfig,
@@ -216,7 +244,7 @@ impl GroundcoverConfig {
     /// # Errors
     ///
     /// Returns an invalid-data error if any configured regex is malformed.
-    pub fn compile_regex_sets(&mut self) -> io::Result<()> {
+    pub(crate) fn compile_regex_sets(&mut self) -> io::Result<()> {
         self.include_set = RegexSet::new(&self.grass_ids).map_err(to_io_error)?;
         self.exclude_set = RegexSet::new(&self.exclude).map_err(to_io_error)?;
         self.ignored_plugin_set = RegexSet::new(&self.ignored_plugins).map_err(to_io_error)?;
@@ -224,13 +252,15 @@ impl GroundcoverConfig {
         Ok(())
     }
 
+    /// Returns whether a static ID is included by `grass_ids` and not excluded by `exclude`.
     #[must_use]
-    pub fn matches_static_id(&self, id: &str) -> bool {
+    pub(crate) fn matches_static_id(&self, id: &str) -> bool {
         self.include_set.is_match(id) && !self.exclude_set.is_match(id)
     }
 
+    /// Returns whether a plugin filename matches the ignored-plugin regex set.
     #[must_use]
-    pub fn is_ignored_plugin_name(&self, plugin_name: &str) -> bool {
+    pub(crate) fn is_ignored_plugin_name(&self, plugin_name: &str) -> bool {
         self.ignored_plugin_set.is_match(plugin_name)
     }
 }

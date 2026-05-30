@@ -1,3 +1,5 @@
+//! Command-line arguments and policy values for `greenmote unclip`.
+
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
@@ -11,6 +13,7 @@ pub(crate) const DEFAULT_RELOCATION_STEP: f32 = 32.0;
 pub(crate) const DEFAULT_RELOCATION_STEPS: u16 = 8;
 pub(crate) const DEFAULT_ORIENTATION_EPSILON_DEGREES: f32 = 1.0;
 
+/// Parsed arguments for the `unclip` subcommand.
 #[derive(Parser, Clone, Debug)]
 #[command(
     name = "unclip",
@@ -74,14 +77,22 @@ pub struct UnclipArgs {
     pub exclude_occluder_ids: Vec<String>,
 }
 
+/// Write actions accepted by `unclip --write-actions` and `[unclip].write_actions`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[non_exhaustive]
 #[serde(rename_all = "kebab-case")]
 pub enum WriteActionArg {
+    /// Enable every write action.
     All,
+    /// Disable every write action.
     None,
+    /// Move clipped references vertically to terrain height.
     TerrainZ,
+    /// Delete references that remain inside static occluders.
     StaticDelete,
+    /// Move references horizontally away from static occluders when a nearby location is found.
     StaticMove,
+    /// Orient references toward terrain slope.
     Orient,
 }
 

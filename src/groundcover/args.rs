@@ -1,7 +1,10 @@
+//! Command-line arguments for `greenmote convert`.
+
 use clap::Parser;
 
 use std::path::PathBuf;
 
+/// Parsed arguments for the `convert` subcommand.
 #[derive(Parser, Clone, Debug, Default)]
 #[command(
     name = "convert",

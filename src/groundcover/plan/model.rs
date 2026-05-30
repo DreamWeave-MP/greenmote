@@ -5,7 +5,9 @@ use std::{
     path::PathBuf,
 };
 
-use tes3::esp::{Cell, Header, Plugin, Static};
+#[cfg(test)]
+use tes3::esp::Header;
+use tes3::esp::{Cell, Plugin, Static};
 
 use crate::groundcover::mesh;
 
@@ -23,6 +25,7 @@ impl LoadedPlugin {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub fn header_masters(&self) -> Vec<MasterSpec> {
         self.plugin
             .objects_of_type::<Header>()
@@ -68,7 +71,13 @@ impl MasterSpec {
 pub struct StaticPlan {
     pub source_load_index: usize,
     pub source_plugin_name: String,
+    // Kept for diagnostics and test fixtures even when a particular build path only needs the
+    // source master identity.
+    #[allow(dead_code)]
     pub source_plugin_path: PathBuf,
+    // Kept with the static plan so generated IDs and output summaries can retain source identity
+    // without re-reading plugin headers.
+    #[allow(dead_code)]
     pub source_master: MasterSpec,
     pub source_static: Static,
     pub generated_id: String,
@@ -107,6 +116,9 @@ impl StaticPlan {
 pub struct PluginCellPlan {
     pub load_index: usize,
     pub plugin_name: String,
+    // Kept for diagnostics and tests; output generation currently needs the plugin name and master
+    // identity more often than the path.
+    #[allow(dead_code)]
     pub plugin_path: PathBuf,
     pub source_master: MasterSpec,
     pub header_masters: Vec<MasterSpec>,
@@ -136,6 +148,7 @@ impl PluginCellPlan {
 pub struct ConversionPlan {
     pub static_plans: Vec<StaticPlan>,
     pub cell_plans: Vec<PluginCellPlan>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub matched_static_ids: HashSet<String>,
     pub used_static_ids: BTreeSet<String>,
 }

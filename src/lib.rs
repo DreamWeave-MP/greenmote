@@ -1,11 +1,16 @@
+#![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
+
 use std::io;
 
 use clap::Parser;
 
 mod cli;
+/// Groundcover conversion command support.
 pub mod groundcover;
 #[cfg(feature = "gui")]
 mod gui;
+/// Groundcover clipping inspection and repair command support.
 pub mod unclip;
 
 pub use cli::{Cli, Command};

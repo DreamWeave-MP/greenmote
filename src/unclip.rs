@@ -1,3 +1,5 @@
+//! Public entry points for the `greenmote unclip` workflow.
+
 use std::{io, io::Write, path::Path};
 
 mod app;
@@ -19,10 +21,12 @@ mod write_policy;
 mod write_status;
 mod writer;
 
-pub use args::UnclipArgs;
-pub(crate) use args::WriteActionArg;
+pub use args::{UnclipArgs, WriteActionArg};
 
 /// Runs the groundcover unclipping subcommand.
+///
+/// The command discovers `OpenMW` configuration, merges CLI and `[unclip]` TOML settings, inspects
+/// the target plugin, and only writes when write mode is enabled by arguments or configuration.
 ///
 /// # Errors
 ///
@@ -38,6 +42,9 @@ pub fn run(
 }
 
 /// Runs the groundcover unclipping subcommand with an explicit output stream.
+///
+/// Stderr and interactive write prompts still use the process streams. Use the GUI-specific
+/// crate-private path for non-interactive write confirmation.
 ///
 /// # Errors
 ///

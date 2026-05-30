@@ -1,3 +1,5 @@
+//! Command-line parser and generated CLI documentation helpers.
+
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -5,6 +7,7 @@ use clap_complete::Shell;
 
 use crate::{groundcover::GroundcoverArgs, unclip::UnclipArgs};
 
+/// Top-level Greenmote command-line options.
 #[derive(Parser, Debug)]
 #[command(name = "greenmote", author, version)]
 pub struct Cli {
@@ -25,9 +28,11 @@ pub struct Cli {
     pub generate_manpage: bool,
 
     #[command(subcommand)]
+    /// Parsed subcommand, or `None` when the invocation should default to Convert.
     pub command: Option<Command>,
 }
 
+/// Top-level Greenmote subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Convert vanilla-style static exterior refs into `OpenMW` groundcover.
@@ -37,6 +42,8 @@ pub enum Command {
 }
 
 impl Cli {
+    /// Returns the parsed subcommand, or `convert` with default arguments when no subcommand was
+    /// supplied.
     #[must_use]
     pub fn command_or_default(self) -> Command {
         self.command
