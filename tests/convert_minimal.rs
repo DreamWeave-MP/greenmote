@@ -4,7 +4,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use tes3::esp::{Cell, CellData, CellFlags, Header, Plugin, Reference, Static, TES3Object};
+use tes3::esp::{
+    Activator, Cell, CellData, CellFlags, Header, Plugin, Reference, Static, TES3Object,
+};
 
 use greenmote::groundcover::{
     DELETED_PLUGIN_NAME, GROUNDCOVER_PLUGIN_NAME, GroundcoverArgs, LOG_NAME,
@@ -110,7 +112,43 @@ fn convert_minimal_fixture_writes_plugins_and_copied_meshes() {
     let log = std::fs::read_to_string(config_dir.path().join(LOG_NAME)).unwrap();
     let static_line = log.lines().find(|line| line.starts_with("STAT ")).unwrap();
     assert!(static_line.contains("STAT \"flora_grass_01\" from \"Source.esp\""));
-    assert!(static_line.contains(&format!("generated {:?}", generated_static.id)));
+    assert!(static_line.contains(&format!("generated STAT {:?}", generated_static.id)));
+}
+
+#[test]
+fn convert_scriptless_activator_source_outputs_static() {
+    let config_dir = TempDir::new("activator-config");
+    let data_dir = TempDir::new("activator-data");
+    let output_dir = TempDir::new("activator-output");
+    write_openmw_cfg(config_dir.path(), data_dir.path(), output_dir.path());
+    write_activator_source_plugin(data_dir.path());
+    write_mesh(data_dir.path(), "Meshes/flora/activator-grass.nif", b"mesh");
+
+    greenmote::groundcover::run(
+        Some(&openmw_cfg(config_dir.path())),
+        None,
+        args_for(config_dir.path()),
+    )
+    .unwrap();
+
+    let groundcover = Plugin::from_path(output_dir.path().join(GROUNDCOVER_PLUGIN_NAME)).unwrap();
+    let deleted = Plugin::from_path(output_dir.path().join(DELETED_PLUGIN_NAME)).unwrap();
+    let generated_static = groundcover.objects_of_type::<Static>().next().unwrap();
+    let groundcover_cell = groundcover.objects_of_type::<Cell>().next().unwrap();
+    let deleted_cell = deleted.objects_of_type::<Cell>().next().unwrap();
+
+    assert!(groundcover.objects_of_type::<Activator>().next().is_none());
+    assert_eq!(generated_static.mesh, "grass\\flora\\activator-grass.nif");
+    assert_eq!(groundcover_cell.references.len(), 1);
+    assert_eq!(groundcover_cell.references[&(1, 7)].id, generated_static.id);
+    assert_eq!(deleted_cell.references.len(), 1);
+    assert_eq!(deleted_cell.references[&(1, 7)].id, "Flora_Grass_Acti");
+    assert!(
+        !output_dir
+            .path()
+            .join("Meshes/grass/flora/scripted-missing.nif")
+            .exists()
+    );
 }
 
 #[test]
@@ -599,11 +637,44 @@ fn write_source_plugin(data_dir: &Path) {
     plugin.save_path(data_dir.join("Source.esp")).unwrap();
 }
 
+fn write_activator_source_plugin(data_dir: &Path) {
+    let mut plugin = Plugin {
+        objects: vec![
+            TES3Object::Header(Header {
+                num_objects: 4,
+                ..Header::default()
+            }),
+            activator_record("flora_grass_acti", "flora/activator-grass.nif", "").into(),
+            activator_record(
+                "flora_grass_scripted",
+                "flora/scripted-missing.nif",
+                "SomeScript",
+            )
+            .into(),
+            exterior_cell([
+                ((0, 7), reference("Flora_Grass_Acti")),
+                ((0, 8), reference("Flora_Grass_Scripted")),
+            ])
+            .into(),
+        ],
+    };
+    plugin.save_path(data_dir.join("Source.esp")).unwrap();
+}
+
 fn static_record(id: &str, mesh: &str) -> Static {
     Static {
         id: id.to_owned(),
         mesh: mesh.to_owned(),
         ..Static::default()
+    }
+}
+
+fn activator_record(id: &str, mesh: &str, script: &str) -> Activator {
+    Activator {
+        id: id.to_owned(),
+        mesh: mesh.to_owned(),
+        script: script.to_owned(),
+        ..Activator::default()
     }
 }
 

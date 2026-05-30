@@ -8,7 +8,7 @@ use std::{
 };
 
 use rayon::prelude::*;
-use tes3::esp::{Cell, Header, Plugin, Static};
+use tes3::esp::{Activator, Cell, Header, Plugin, Static};
 use vfstool_lib::VFS;
 
 use crate::groundcover::{
@@ -98,7 +98,7 @@ pub fn load_plugins_for_static_planning(
 
 pub fn load_and_scan_plugins_for_cell_planning<S: BuildHasher + Sync>(
     sources: Vec<SourcePlugin>,
-    matched_static_ids: &HashSet<String, S>,
+    matched_source_ids: &HashSet<String, S>,
     progress: &(dyn Fn(usize, usize) + Sync),
     cancellation: &CancellationToken,
 ) -> io::Result<CellScanLoadResult> {
@@ -111,7 +111,7 @@ pub fn load_and_scan_plugins_for_cell_planning<S: BuildHasher + Sync>(
             let result = if cancellation.is_cancelled() {
                 Err(PluginLoadError::Cancelled(cancelled_error()))
             } else {
-                load_and_scan_one_plugin(&source, matched_static_ids)
+                load_and_scan_one_plugin(&source, matched_source_ids)
             };
 
             let load_index = source.load_index;
@@ -241,7 +241,7 @@ enum PluginLoadError {
 
 fn load_and_scan_one_plugin<S: BuildHasher>(
     source: &SourcePlugin,
-    matched_static_ids: &HashSet<String, S>,
+    matched_source_ids: &HashSet<String, S>,
 ) -> Result<Option<crate::groundcover::plan::PluginCellPlan>, PluginLoadError> {
     let plugin = match load_one_plugin(source, PluginLoadMode::Cells) {
         Ok(RawPluginLoadOutcome::Loaded(plugin)) => plugin,
@@ -268,8 +268,8 @@ fn load_and_scan_one_plugin<S: BuildHasher>(
                     })
                     .collect()
             });
-    let (groundcover_cells, touched_refs, used_static_ids) =
-        records::process_exterior_cells(&plugin, matched_static_ids);
+    let (groundcover_cells, touched_refs, used_source_ids) =
+        records::process_exterior_cells(&plugin, matched_source_ids);
 
     Ok(Some(crate::groundcover::plan::PluginCellPlan {
         load_index: source.load_index,
@@ -279,7 +279,7 @@ fn load_and_scan_one_plugin<S: BuildHasher>(
         header_masters,
         groundcover_cells,
         touched_refs,
-        used_static_ids,
+        used_source_ids,
     }))
 }
 
@@ -306,7 +306,7 @@ fn load_one_plugin(
         }
 
         match mode {
-            PluginLoadMode::Statics => &tag == Static::TAG,
+            PluginLoadMode::Statics => &tag == Static::TAG || &tag == Activator::TAG,
             PluginLoadMode::Cells => &tag == Cell::TAG,
         }
     })

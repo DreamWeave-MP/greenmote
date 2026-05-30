@@ -10,8 +10,8 @@ pub struct RunSummary {
     pub content_files: usize,
     pub loaded_plugins: usize,
     pub skipped_generated_plugins: Vec<String>,
-    pub matched_statics: usize,
-    pub used_statics: usize,
+    pub matched_records: usize,
+    pub used_records: usize,
     pub changed_cells: usize,
     pub touched_refs: usize,
     pub meshes_to_copy: usize,
@@ -49,8 +49,8 @@ pub fn write_summary(
         "# skipped generated plugins: {}",
         summary.skipped_generated_plugins.len()
     )?;
-    writeln!(writer, "# matched statics: {}", summary.matched_statics)?;
-    writeln!(writer, "# used statics: {}", summary.used_statics)?;
+    writeln!(writer, "# matched records: {}", summary.matched_records)?;
+    writeln!(writer, "# used records: {}", summary.used_records)?;
     writeln!(writer, "# changed cells: {}", summary.changed_cells)?;
     writeln!(writer, "# touched refs: {}", summary.touched_refs)?;
     writeln!(writer, "# meshes to copy: {}", summary.meshes_to_copy)?;
@@ -65,11 +65,12 @@ pub fn write_summary(
         let output_static = static_plan.output_static()?;
         writeln!(
             writer,
-            "STAT {:?} from {:?}: generated {:?}; mesh {:?} -> {:?}",
-            static_plan.source_static.id,
+            "{} {:?} from {:?}: generated STAT {:?}; mesh {:?} -> {:?}",
+            static_plan.source_record.kind_label(),
+            static_plan.source_record.id,
             static_plan.source_plugin_name,
             output_static.id,
-            static_plan.source_static.mesh,
+            static_plan.source_record.mesh,
             output_static.mesh
         )?;
     }
@@ -105,7 +106,7 @@ pub fn write_summary(
 fn compare_static_report_order(left: &StaticPlan, right: &StaticPlan) -> std::cmp::Ordering {
     left.source_load_index
         .cmp(&right.source_load_index)
-        .then_with(|| left.source_static.id.cmp(&right.source_static.id))
+        .then_with(|| left.source_record.id.cmp(&right.source_record.id))
 }
 
 fn compare_cell_report_order(left: &PluginCellPlan, right: &PluginCellPlan) -> std::cmp::Ordering {

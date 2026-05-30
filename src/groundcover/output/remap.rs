@@ -31,7 +31,7 @@ pub fn remap_cell(
                         io::Error::new(
                             io::ErrorKind::InvalidData,
                             format!(
-                                "generated static id map is missing source static {source_id:?}"
+                                "generated static id map is missing source record {source_id:?}"
                             ),
                         )
                     })?;

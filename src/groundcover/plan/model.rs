@@ -7,7 +7,7 @@ use std::{
 
 #[cfg(test)]
 use tes3::esp::Header;
-use tes3::esp::{Cell, Plugin, Static};
+use tes3::esp::{Activator, Cell, ObjectFlags, Plugin, Static};
 
 use crate::groundcover::mesh;
 
@@ -79,36 +79,82 @@ pub struct StaticPlan {
     // without re-reading plugin headers.
     #[allow(dead_code)]
     pub source_master: MasterSpec,
-    pub source_static: Static,
+    pub source_record: SourceRecord,
     pub generated_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceRecordKind {
+    Static,
+    ScriptlessActivator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceRecord {
+    pub id: String,
+    pub mesh: String,
+    pub flags: ObjectFlags,
+    pub kind: SourceRecordKind,
+}
+
+impl SourceRecord {
+    #[must_use]
+    pub fn from_static(record: &Static) -> Self {
+        Self {
+            id: record.id.clone(),
+            mesh: record.mesh.clone(),
+            flags: record.flags,
+            kind: SourceRecordKind::Static,
+        }
+    }
+
+    #[must_use]
+    pub fn from_scriptless_activator(record: &Activator) -> Self {
+        Self {
+            id: record.id.clone(),
+            mesh: record.mesh.clone(),
+            flags: record.flags,
+            kind: SourceRecordKind::ScriptlessActivator,
+        }
+    }
+
+    #[must_use]
+    pub fn kind_label(&self) -> &'static str {
+        match self.kind {
+            SourceRecordKind::Static => "STAT",
+            SourceRecordKind::ScriptlessActivator => "ACTI",
+        }
+    }
 }
 
 impl StaticPlan {
     #[must_use]
     pub fn id_key(&self) -> String {
-        self.source_static.id.to_ascii_lowercase()
+        self.source_record.id.to_ascii_lowercase()
     }
 
-    /// Builds the generated static record for a used source static.
+    /// Builds the generated static record for a used source record.
     ///
     /// # Errors
     ///
     /// Returns invalid input if the source mesh path cannot be safely rooted under `grass\`.
     pub fn output_static(&self) -> io::Result<Static> {
-        let mut output_static = self.source_static.clone();
-        output_static.id.clone_from(&self.generated_id);
-        output_static.mesh = mesh::grass_prefixed_mesh(&output_static.mesh)?;
+        let output_static = Static {
+            flags: self.source_record.flags,
+            id: self.generated_id.clone(),
+            mesh: mesh::grass_prefixed_mesh(&self.source_record.mesh)?,
+        };
 
         Ok(output_static)
     }
 
-    /// Builds the VFS lookup/output path pair for a used source static mesh.
+    /// Builds the VFS lookup/output path pair for a used source record mesh.
     ///
     /// # Errors
     ///
     /// Returns invalid input if the source mesh path contains unsafe components.
     pub fn mesh_copy_path(&self) -> io::Result<mesh::MeshCopyPath> {
-        mesh::normalize_mesh_for_copy(&self.source_static.mesh)
+        mesh::normalize_mesh_for_copy(&self.source_record.mesh)
     }
 }
 
@@ -124,7 +170,7 @@ pub struct PluginCellPlan {
     pub header_masters: Vec<MasterSpec>,
     pub groundcover_cells: Vec<Cell>,
     pub touched_refs: usize,
-    pub used_static_ids: BTreeSet<String>,
+    pub used_source_ids: BTreeSet<String>,
 }
 
 impl PluginCellPlan {
@@ -149,8 +195,8 @@ pub struct ConversionPlan {
     pub static_plans: Vec<StaticPlan>,
     pub cell_plans: Vec<PluginCellPlan>,
     #[cfg_attr(not(test), allow(dead_code))]
-    pub matched_static_ids: HashSet<String>,
-    pub used_static_ids: BTreeSet<String>,
+    pub matched_source_ids: HashSet<String>,
+    pub used_source_ids: BTreeSet<String>,
 }
 
 impl ConversionPlan {
@@ -162,7 +208,7 @@ impl ConversionPlan {
             .map(|static_plan| (static_plan.id_key(), static_plan))
             .collect::<BTreeMap<_, _>>();
 
-        self.used_static_ids
+        self.used_source_ids
             .iter()
             .filter_map(|id| static_plans_by_id.get(id).copied())
             .collect()
@@ -180,7 +226,7 @@ impl ConversionPlan {
     ///
     /// # Errors
     ///
-    /// Returns invalid input if a used static contains an unsafe mesh path.
+    /// Returns invalid input if a used source record contains an unsafe mesh path.
     pub fn used_mesh_paths(&self) -> io::Result<BTreeSet<mesh::MeshCopyPath>> {
         self.used_static_plans()
             .into_iter()
@@ -192,23 +238,23 @@ impl ConversionPlan {
 #[derive(Debug)]
 pub struct StaticConversionPlan {
     pub static_plans: Vec<StaticPlan>,
-    pub matched_static_ids: HashSet<String>,
+    pub matched_source_ids: HashSet<String>,
 }
 
 impl StaticConversionPlan {
     #[must_use]
     pub fn with_cell_plans(self, mut cell_plans: Vec<PluginCellPlan>) -> ConversionPlan {
         cell_plans.sort_by_key(|cell_plan| Reverse(cell_plan.load_index));
-        let used_static_ids = cell_plans
+        let used_source_ids = cell_plans
             .iter()
-            .flat_map(|cell_plan| cell_plan.used_static_ids.iter().cloned())
+            .flat_map(|cell_plan| cell_plan.used_source_ids.iter().cloned())
             .collect();
 
         ConversionPlan {
             static_plans: self.static_plans,
             cell_plans,
-            matched_static_ids: self.matched_static_ids,
-            used_static_ids,
+            matched_source_ids: self.matched_source_ids,
+            used_source_ids,
         }
     }
 }

@@ -8,11 +8,11 @@ use tes3::esp::{Cell, Plugin};
 #[must_use]
 pub fn process_exterior_cells<S: BuildHasher>(
     plugin: &Plugin,
-    matched_static_ids: &HashSet<String, S>,
+    matched_source_ids: &HashSet<String, S>,
 ) -> (Vec<Cell>, usize, BTreeSet<String>) {
     let mut groundcover_cells = Vec::new();
     let mut touched_refs = 0;
-    let mut used_static_ids = BTreeSet::new();
+    let mut used_source_ids = BTreeSet::new();
 
     for cell in plugin
         .objects_of_type::<Cell>()
@@ -21,15 +21,15 @@ pub fn process_exterior_cells<S: BuildHasher>(
         let mut groundcover_cell = None;
 
         for (key, reference) in &cell.references {
-            let static_id = reference.id.to_ascii_lowercase();
-            if !matched_static_ids.contains(&static_id) {
+            let source_id = reference.id.to_ascii_lowercase();
+            if !matched_source_ids.contains(&source_id) {
                 continue;
             }
 
             let groundcover_cell = groundcover_cell
                 .get_or_insert_with(|| minimal_cell_shell(cell, cell.references.len()));
 
-            used_static_ids.insert(static_id);
+            used_source_ids.insert(source_id);
             groundcover_cell.references.insert(*key, reference.clone());
             touched_refs += 1;
         }
@@ -39,7 +39,7 @@ pub fn process_exterior_cells<S: BuildHasher>(
         }
     }
 
-    (groundcover_cells, touched_refs, used_static_ids)
+    (groundcover_cells, touched_refs, used_source_ids)
 }
 
 fn minimal_cell_shell(source: &Cell, reference_capacity: usize) -> Cell {

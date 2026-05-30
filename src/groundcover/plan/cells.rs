@@ -11,14 +11,14 @@ use crate::groundcover::{progress::CancellationToken, records};
 
 use super::{LoadedPlugin, PluginCellPlan};
 
-/// Scans loaded exterior cells for references to planned statics.
+/// Scans loaded exterior cells for references to planned source records.
 ///
 /// # Errors
 ///
 /// Returns `Interrupted` if cancellation is requested before queued work starts.
 pub fn scan_cells_parallel<S: BuildHasher + Sync>(
     loaded_plugins: &[LoadedPlugin],
-    matched_static_ids: &HashSet<String, S>,
+    matched_source_ids: &HashSet<String, S>,
     progress: &(dyn Fn(usize, usize) + Sync),
     cancellation: &CancellationToken,
 ) -> io::Result<Vec<PluginCellPlan>> {
@@ -32,8 +32,8 @@ pub fn scan_cells_parallel<S: BuildHasher + Sync>(
                 return Err(cancelled_error());
             }
 
-            let (groundcover_cells, touched_refs, used_static_ids) =
-                records::process_exterior_cells(&loaded.plugin, matched_static_ids);
+            let (groundcover_cells, touched_refs, used_source_ids) =
+                records::process_exterior_cells(&loaded.plugin, matched_source_ids);
 
             let cell_plan = PluginCellPlan {
                 load_index: loaded.load_index,
@@ -43,7 +43,7 @@ pub fn scan_cells_parallel<S: BuildHasher + Sync>(
                 header_masters: loaded.header_masters(),
                 groundcover_cells,
                 touched_refs,
-                used_static_ids,
+                used_source_ids,
             };
 
             let current = completed.fetch_add(1, Ordering::Relaxed) + 1;

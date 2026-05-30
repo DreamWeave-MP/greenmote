@@ -39,14 +39,14 @@ pub struct GroundcoverConfig {
 
     pub(crate) output_directory_source: openmw::ConvertOutputDirectorySource,
 
-    /// Case-insensitive regex fragments used to include static IDs or mesh paths for conversion.
+    /// Case-insensitive regex fragments used to include static IDs for conversion.
     ///
     /// These values are compiled into private caches before conversion. Mutating them on an already
     /// loaded value does not by itself run a conversion; use the public command entry points for real
     /// work so validation and cache refresh happen in the intended order.
     pub grass_ids: Vec<String>,
 
-    /// Case-insensitive regex fragments used to exclude static IDs or mesh paths from conversion.
+    /// Case-insensitive regex fragments used to exclude static IDs from conversion.
     ///
     /// These values are compiled into private caches before conversion. See [`Self::grass_ids`] for
     /// the mutation caveat.
@@ -252,13 +252,10 @@ impl GroundcoverConfig {
         Ok(())
     }
 
-    /// Returns whether a static record is included by `grass_ids` and not excluded by `exclude`.
+    /// Returns whether a static ID is included by `grass_ids` and not excluded by `exclude`.
     #[must_use]
-    pub(crate) fn matches_static(&self, id: &str, mesh: &str) -> bool {
-        let normalized_mesh = mesh.replace('/', "\\");
-        let included = self.include_set.is_match(id) || self.include_set.is_match(&normalized_mesh);
-        let excluded = self.exclude_set.is_match(id) || self.exclude_set.is_match(&normalized_mesh);
-        included && !excluded
+    pub(crate) fn matches_static_id(&self, id: &str) -> bool {
+        self.include_set.is_match(id) && !self.exclude_set.is_match(id)
     }
 
     /// Returns whether a plugin filename matches the ignored-plugin regex set.

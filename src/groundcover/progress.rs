@@ -9,9 +9,9 @@ use std::sync::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ConversionPhase {
-    /// Loading plugins for static record planning.
+    /// Loading plugins for source record planning.
     LoadingStaticPlugins,
-    /// Selecting matching static records.
+    /// Selecting matching source records.
     PlanningStatics,
     /// Loading plugins for exterior cell scanning.
     LoadingCellPlugins,
@@ -34,8 +34,8 @@ impl ConversionPhase {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::LoadingStaticPlugins => "Loading plugins for static planning",
-            Self::PlanningStatics => "Planning matching statics",
+            Self::LoadingStaticPlugins => "Loading plugins for source record planning",
+            Self::PlanningStatics => "Planning matching source records",
             Self::LoadingCellPlugins => "Loading plugins for cell scanning",
             Self::ScanningCells => "Scanning exterior cells",
             Self::ResolvingMeshes => "Resolving meshes",

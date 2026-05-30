@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use tes3::esp::{Cell, Reference, Static};
+use tes3::esp::{Activator, Cell, Reference, Static};
 
 use crate::groundcover::{
     GroundcoverConfig,
@@ -25,10 +25,31 @@ fn static_plan(source_master: MasterSpec, source_id: &str, generated_id: &str) -
         source_plugin_name: source_master.name.clone(),
         source_plugin_path: PathBuf::from(&source_master.name),
         source_master,
-        source_static: Static {
+        source_record: crate::groundcover::plan::SourceRecord {
             id: source_id.to_owned(),
             mesh: "flora\\grass.nif".to_owned(),
-            ..Static::default()
+            flags: tes3::esp::ObjectFlags::default(),
+            kind: crate::groundcover::plan::SourceRecordKind::Static,
+        },
+        generated_id: generated_id.to_owned(),
+    }
+}
+
+fn activator_source_plan(
+    source_master: MasterSpec,
+    source_id: &str,
+    generated_id: &str,
+) -> StaticPlan {
+    StaticPlan {
+        source_load_index: 0,
+        source_plugin_name: source_master.name.clone(),
+        source_plugin_path: PathBuf::from(&source_master.name),
+        source_master,
+        source_record: crate::groundcover::plan::SourceRecord {
+            id: source_id.to_owned(),
+            mesh: "flora\\activator_grass.nif".to_owned(),
+            flags: tes3::esp::ObjectFlags::default(),
+            kind: crate::groundcover::plan::SourceRecordKind::ScriptlessActivator,
         },
         generated_id: generated_id.to_owned(),
     }
@@ -63,20 +84,20 @@ fn cell_plan(
         header_masters,
         groundcover_cells: vec![groundcover_cell],
         touched_refs: 1,
-        used_static_ids: BTreeSet::from([used_static_id.to_owned()]),
+        used_source_ids: BTreeSet::from([used_static_id.to_owned()]),
     }
 }
 
 fn plan(
     static_plans: Vec<StaticPlan>,
     cell_plans: Vec<PluginCellPlan>,
-    used_static_ids: BTreeSet<String>,
+    used_source_ids: BTreeSet<String>,
 ) -> ConversionPlan {
     ConversionPlan {
         static_plans,
         cell_plans,
-        matched_static_ids: HashSet::new(),
-        used_static_ids,
+        matched_source_ids: HashSet::new(),
+        used_source_ids,
     }
 }
 
@@ -139,6 +160,45 @@ fn copied_cell_refs_are_remapped_to_generated_master_indices() {
         "gm_test_flora_grass_01"
     );
     assert_eq!(deleted_cell.references[&(1, 7)].id, "flora_grass_01");
+}
+
+#[test]
+fn activator_sources_emit_generated_static_records() {
+    let source_master = master("Source.esp", 42);
+    let plan = plan(
+        vec![activator_source_plan(
+            source_master.clone(),
+            "flora_grass_acti",
+            "gm_test_flora_grass_acti",
+        )],
+        vec![cell_plan(
+            0,
+            source_master,
+            Vec::new(),
+            cell([((0, 7), reference("flora_grass_acti", 0))]),
+            "flora_grass_acti",
+        )],
+        BTreeSet::from(["flora_grass_acti".to_owned()]),
+    );
+
+    let built = build_plugins(&plan).unwrap();
+
+    assert!(
+        built
+            .groundcover_plugin
+            .objects_of_type::<Activator>()
+            .next()
+            .is_none()
+    );
+    assert_eq!(
+        built
+            .groundcover_plugin
+            .objects_of_type::<Static>()
+            .next()
+            .unwrap()
+            .id,
+        "gm_test_flora_grass_acti"
+    );
 }
 
 #[test]
@@ -285,7 +345,7 @@ fn unused_static_only_source_plugins_do_not_emit_records_or_become_masters() {
 }
 
 #[test]
-fn summary_lists_statics_and_cells_in_source_load_order() {
+fn summary_lists_records_and_cells_in_source_load_order() {
     let morrowind_master = master("Morrowind.esm", 79_837_557);
     let tribunal_master = master("Tribunal.esm", 4_568_965);
     let bloodmoon_master = master("Bloodmoon.esm", 9_631_798);
@@ -337,8 +397,8 @@ fn summary_lists_statics_and_cells_in_source_load_order() {
         content_files: 3,
         loaded_plugins: 3,
         skipped_generated_plugins: Vec::new(),
-        matched_statics: 3,
-        used_statics: 3,
+        matched_records: 3,
+        used_records: 3,
         changed_cells: 3,
         touched_refs: 3,
         meshes_to_copy: 3,

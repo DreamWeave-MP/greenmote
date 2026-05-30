@@ -105,14 +105,14 @@ fn run_loaded_config(
     progress::emit_phase(events, ConversionPhase::PlanningStatics);
     let static_plan = build_static_conversion_plan(&static_plugins, config);
     check_cancelled(cancellation)?;
-    let (loaded_plugins, cell_plans) = if static_plan.matched_static_ids.is_empty() {
+    let (loaded_plugins, cell_plans) = if static_plan.matched_source_ids.is_empty() {
         (static_plugins.len(), Vec::new())
     } else {
         progress::emit_phase(events, ConversionPhase::LoadingCellPlugins);
         progress::emit_phase(events, ConversionPhase::ScanningCells);
         let cell_scan = load::load_and_scan_plugins_for_cell_planning(
             sources,
-            &static_plan.matched_static_ids,
+            &static_plan.matched_source_ids,
             &|current, total| {
                 progress::emit_progress(events, ConversionPhase::ScanningCells, current, total);
             },
@@ -330,8 +330,8 @@ fn build_run_summary(
         content_files,
         loaded_plugins,
         skipped_generated_plugins,
-        matched_statics: plan.static_plans.len(),
-        used_statics: plan.used_static_ids.len(),
+        matched_records: plan.static_plans.len(),
+        used_records: plan.used_source_ids.len(),
         changed_cells: plan
             .cell_plans
             .iter()
@@ -380,7 +380,7 @@ fn ensure_static_sources_loaded_for_cell_scanning(
         Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "plugins contributed matched statics but could not be loaded for cell scanning: {}",
+                "plugins contributed matched records but could not be loaded for cell scanning: {}",
                 missing.join(", ")
             ),
         ))

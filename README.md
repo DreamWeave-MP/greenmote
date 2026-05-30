@@ -106,15 +106,17 @@ Generated defaults are meant to be editable. Greenmote validates regular express
 
 ## Convert Workflow
 
-`greenmote convert` creates `OpenMW` groundcover output from matching `STAT` records and exterior cell references.
+`greenmote convert` creates `OpenMW` groundcover output from matching `STAT` records, scriptless `ACTI` records, and exterior cell references.
 
 Important behavior:
 
-- Matching is `STAT`-based. Greenmote searches static IDs and static mesh paths using configured include and exclude regular expressions.
+- Matching is record-ID-based. Greenmote searches `STAT` IDs and scriptless `ACTI` IDs using configured include and exclude regular expressions.
+- Scripted activators are not converted. A script means gameplay behavior, not decorative groundcover.
+- Generated placed records are always `STAT`, even when the source record was a scriptless `ACTI`.
 - Only exterior `CELL` records are scanned. Interiors are intentionally excluded.
-- Matching static definitions are selected in reverse load order, so later content wins.
-- Generated output includes only references touched by matching statics.
-- Static-only source plugins do not become masters merely because their `STAT` records were copied.
+- Matching definitions are selected in reverse load order, so later content wins.
+- Generated output includes only references touched by matching source records.
+- Definition-only source plugins do not become masters merely because their records were copied.
 - Missing meshes are fatal before plugin writes, so Greenmote should not leave broken output plugins after discovering a missing mesh.
 
 Generated files:
@@ -244,8 +246,8 @@ exclude_occluder_ids = []
 
 Key notes:
 
-- `[convert].grass_ids` is the include list for static IDs or static mesh paths.
-- `[convert].exclude` removes matching static IDs or static mesh paths from conversion.
+- `[convert].grass_ids` is the include list for `STAT` IDs and scriptless `ACTI` IDs.
+- `[convert].exclude` removes matching source record IDs from conversion.
 - `[convert].ignored_plugins` removes matching plugin file names from conversion.
 - `[convert].dry_run`, `[convert].debug`, and `[convert].auto_enable` persist their corresponding Convert toggles.
 - `[unclip].plugin` is the default Unclip target plugin.
