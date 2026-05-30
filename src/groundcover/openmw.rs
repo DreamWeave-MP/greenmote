@@ -49,8 +49,24 @@ pub(crate) fn load_config_with_prompt(
             write_autodetected_config_message(&config, stderr)?;
             Ok(config)
         }
-        Err(error) => prompt_for_default_config_path(None, &error, active_command, stdin, stderr),
+        Err(error) => load_default_config_after_autodetection_failure(&error, active_command),
     }
+}
+
+fn load_default_config_after_autodetection_failure(
+    original_error: &io::Error,
+    active_command: &str,
+) -> io::Result<OpenMWConfiguration> {
+    let default_config_file = default_user_config_file()?;
+    load_config_from_path(Some(&default_config_file)).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to read OpenMW configuration from autodetected locations or the default user config path\n\nAutodetection error: {original_error}\n\nDefault path:\n  {}\n\nDefault path error: {error}\n\nPass one explicitly:\n\n  greenmote --openmw-cfg /path/to/openmw.cfg {active_command}",
+                default_config_file.display()
+            ),
+        )
+    })
 }
 
 fn load_explicit_or_prompt(
@@ -423,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_autodetected_config_prompts_for_default_user_config() {
+    fn missing_autodetected_config_uses_default_user_config_silently() {
         let _guard = lock_env();
         let _snapshot = EnvSnapshot::new(&[
             "OPENMW_CONFIG",
@@ -448,18 +464,16 @@ mod tests {
             );
         }
 
-        let mut input = io::Cursor::new(b"y\n");
+        let mut input = io::Cursor::new(Vec::new());
         let mut stderr = Vec::new();
         let config = load_config_with_prompt(None, "convert", &mut input, &mut stderr).unwrap();
 
         assert_eq!(config.root_config_file(), default_config);
-        let message = String::from_utf8(stderr).unwrap();
-        assert!(message.contains("could not find an OpenMW configuration"));
-        assert!(message.contains("Use this path? [y/N]:"));
+        assert!(stderr.is_empty());
     }
 
     #[test]
-    fn declining_default_user_config_reports_repair_instructions() {
+    fn invalid_default_user_config_reports_repair_instructions() {
         let _guard = lock_env();
         let _snapshot = EnvSnapshot::new(&[
             "OPENMW_CONFIG",
@@ -481,18 +495,15 @@ mod tests {
             );
         }
 
-        let mut input = io::Cursor::new(b"\n");
+        let mut input = io::Cursor::new(Vec::new());
         let mut stderr = Vec::new();
         let error = load_config_with_prompt(None, "unclip", &mut input, &mut stderr).unwrap_err();
 
-        assert_eq!(error.kind(), io::ErrorKind::NotFound);
-        assert!(
-            error
-                .to_string()
-                .contains("no OpenMW configuration selected")
-        );
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("default user config path"));
         assert!(error.to_string().contains("--openmw-cfg"));
         assert!(error.to_string().contains(" unclip"));
+        assert!(stderr.is_empty());
     }
 
     #[test]
