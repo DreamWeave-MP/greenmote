@@ -8,7 +8,7 @@ use super::{
     args::UnclipPolicy,
     config::UnclipConfig,
     inspection::{ReferenceInspectionContext, count_target_refs, inspect_target_refs},
-    mesh::{MeshBoundsCache, MeshContactCache, StaticMeshIndex},
+    mesh::{MeshCache, StaticMeshIndex},
     model::{TerrainInspectionReport, UnclipReportContext, UnclipReportContextInput},
     occlusion::StaticOccluderIndex,
     report,
@@ -49,12 +49,12 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
             .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
         &active_cells,
     );
-    let mut context_meshes = MeshBoundsCache::new(&vfs);
+    let mut mesh_cache = MeshCache::new(&vfs);
     let (static_occluders, static_occluder_report) = build_static_occluders(
         &context_plugins,
         &active_cells,
         &active_static_index,
-        &mut context_meshes,
+        &mut mesh_cache,
         &target_refs.target_static_ids,
         &policy.occluder_filter,
     );
@@ -76,14 +76,13 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         },
         &policy,
     );
-    let mut target_meshes = MeshContactCache::new(&vfs);
     let write_plan = if policy.write_actions.any_enabled() {
         Some(plan_unclip_adjustments(
             &target_plugin_data,
             &target_refs,
             &terrain,
             &target_static_index,
-            &mut target_meshes,
+            &mut mesh_cache,
             &static_occluders,
             &policy,
         ))
@@ -104,7 +103,7 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         target_refs: &target_refs,
         terrain: &terrain,
         static_index: &target_static_index,
-        mesh_contacts: &mut target_meshes,
+        mesh_contacts: &mut mesh_cache,
         static_occluders: &static_occluders,
         report: &report_context,
         policy: &policy,
@@ -186,7 +185,7 @@ struct OutputContext<'a, 'b> {
     target_refs: &'a TargetRefIndex,
     terrain: &'a TerrainIndex,
     static_index: &'a StaticMeshIndex,
-    mesh_contacts: &'a mut MeshContactCache<'b>,
+    mesh_contacts: &'a mut MeshCache<'b>,
     static_occluders: &'a StaticOccluderIndex,
     report: &'a UnclipReportContext,
     policy: &'a UnclipPolicy,
@@ -249,7 +248,7 @@ fn write_text_summary(
     target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshContactCache<'_>,
+    mesh_contacts: &mut MeshCache<'_>,
     static_occluders: &StaticOccluderIndex,
     policy: &UnclipPolicy,
 ) -> TerrainInspectionReport {
@@ -292,7 +291,7 @@ fn write_structured_summary(
     target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshContactCache<'_>,
+    mesh_contacts: &mut MeshCache<'_>,
     static_occluders: &StaticOccluderIndex,
     policy: &UnclipPolicy,
 ) -> TerrainInspectionReport {

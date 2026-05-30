@@ -5,7 +5,7 @@ use tes3::esp::Plugin;
 use super::{
     args::UnclipPolicy,
     cells::CellCoord,
-    mesh::{MeshContact, MeshContactCache, StaticMesh, StaticMeshIndex, WorldAabb},
+    mesh::{MeshCache, MeshContact, StaticMesh, StaticMeshIndex, WorldAabb},
     model::{
         BoundsInspection, MeshContactInspection, OriginInspection, ReferenceInspection,
         StaticBoundsOcclusionInspection, StaticMeshInspection, TerrainInspectionReport,
@@ -53,7 +53,7 @@ pub(super) fn count_target_refs(
     target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshContactCache<'_>,
+    mesh_contacts: &mut MeshCache<'_>,
     static_occluders: &StaticOccluderIndex,
     policy: &UnclipPolicy,
 ) -> TerrainInspectionReport {
@@ -76,7 +76,7 @@ pub(super) fn count_target_refs(
 pub(super) struct ReferenceInspectionContext<'a, 'b> {
     pub(super) terrain: &'a TerrainIndex,
     pub(super) static_index: &'a StaticMeshIndex,
-    pub(super) mesh_contacts: &'a mut MeshContactCache<'b>,
+    pub(super) mesh_contacts: &'a mut MeshCache<'b>,
     pub(super) static_occluders: &'a StaticOccluderIndex,
     pub(super) policy: &'a UnclipPolicy,
 }
@@ -577,7 +577,7 @@ fn resolve_ref_mesh_contact<'a>(
     report: &mut TerrainInspectionReport,
     reference: &tes3::esp::Reference,
     static_index: &'a StaticMeshIndex,
-    mesh_contacts: &'a mut MeshContactCache<'_>,
+    mesh_contacts: &'a mut MeshCache<'_>,
 ) -> MeshContactResolution<'a> {
     let Some(static_mesh) = static_index.get(&reference.id) else {
         report.refs_without_resolved_static += 1;

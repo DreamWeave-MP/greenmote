@@ -5,7 +5,7 @@ use tes3::esp::{Plugin, TES3Object};
 use super::{
     args::{RelocationPolicy, UnclipPolicy},
     cells::CellCoord,
-    mesh::{MeshAabb, MeshContact, MeshContactCache, MeshGeometry, StaticMeshIndex},
+    mesh::{MeshAabb, MeshCache, MeshContact, MeshGeometry, StaticMeshIndex},
     occlusion::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
         translate_bounds_xy,
@@ -36,7 +36,7 @@ pub(crate) fn plan_unclip_adjustments(
     target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshContactCache<'_>,
+    mesh_contacts: &mut MeshCache<'_>,
     static_occluders: &StaticOccluderIndex,
     policy: &UnclipPolicy,
 ) -> WritePlan {
@@ -60,7 +60,7 @@ pub(crate) fn plan_unclip_adjustments(
 struct WritePlanningContext<'a, 'b> {
     terrain: &'a TerrainIndex,
     static_index: &'a StaticMeshIndex,
-    mesh_contacts: &'a mut MeshContactCache<'b>,
+    mesh_contacts: &'a mut MeshCache<'b>,
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
 }

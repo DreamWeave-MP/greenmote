@@ -266,17 +266,37 @@ impl WorldAabb {
     }
 }
 
-pub struct MeshContactCache<'a> {
+pub struct MeshCache<'a> {
     vfs: &'a VFS,
-    meshes: HashMap<String, io::Result<MeshGeometry>>,
+    meshes: HashMap<String, CachedMesh>,
 }
 
-pub struct MeshBoundsCache<'a> {
-    vfs: &'a VFS,
-    meshes: HashMap<String, io::Result<MeshAabb>>,
+enum CachedMesh {
+    BoundsOnly { stream: NiStream, bounds: MeshAabb },
+    Loaded(MeshGeometry),
+    Failed(CachedMeshError),
 }
 
-impl<'a> MeshContactCache<'a> {
+#[derive(Clone, Debug)]
+struct CachedMeshError {
+    kind: io::ErrorKind,
+    message: String,
+}
+
+impl CachedMeshError {
+    fn from_io(error: &io::Error) -> Self {
+        Self {
+            kind: error.kind(),
+            message: error.to_string(),
+        }
+    }
+
+    fn to_io(&self) -> io::Error {
+        io::Error::new(self.kind, self.message.clone())
+    }
+}
+
+impl<'a> MeshCache<'a> {
     #[must_use]
     pub fn new(vfs: &'a VFS) -> Self {
         Self {
@@ -288,78 +308,98 @@ impl<'a> MeshContactCache<'a> {
     pub fn geometry(&mut self, static_mesh: &StaticMesh) -> io::Result<&MeshGeometry> {
         let key = &static_mesh.mesh_key;
         if !self.meshes.contains_key(key) {
-            let geometry = self.load_geometry(&static_mesh.mesh_path);
-            self.meshes.insert(key.clone(), geometry);
+            let mesh = load_geometry(self.vfs, &static_mesh.mesh_path).map_or_else(
+                |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
+                CachedMesh::Loaded,
+            );
+            self.meshes.insert(key.clone(), mesh);
         }
 
-        self.meshes[key].as_ref().map_or_else(
-            |error| Err(io::Error::new(error.kind(), error.to_string())),
-            Ok,
-        )
-    }
+        if let Some(CachedMesh::BoundsOnly { stream, .. }) = self.meshes.get(key) {
+            let mesh = mesh_geometry(stream).map_or_else(
+                || {
+                    CachedMesh::Failed(CachedMeshError::from_io(&io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("mesh {} has no triangle vertices", static_mesh.mesh_path),
+                    )))
+                },
+                CachedMesh::Loaded,
+            );
+            self.meshes.insert(key.clone(), mesh);
+        }
 
-    fn load_geometry(&self, mesh_path: &str) -> io::Result<MeshGeometry> {
-        let file = resolve_mesh(self.vfs, mesh_path)?;
-        let mut reader = file.open()?;
-        let mut bytes = Vec::new();
-        io::Read::read_to_end(&mut reader, &mut bytes)?;
-        let stream = NiStream::from_bytes(&bytes).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("failed to load mesh {mesh_path}: {error}"),
-            )
-        })?;
-
-        mesh_geometry(&stream).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("mesh {mesh_path} has no triangle vertices"),
-            )
-        })
-    }
-}
-
-impl<'a> MeshBoundsCache<'a> {
-    #[must_use]
-    pub fn new(vfs: &'a VFS) -> Self {
-        Self {
-            vfs,
-            meshes: HashMap::new(),
+        match &self.meshes[key] {
+            CachedMesh::BoundsOnly { .. } => unreachable!("bounds-only mesh should be promoted"),
+            CachedMesh::Loaded(geometry) => Ok(geometry),
+            CachedMesh::Failed(error) => Err(error.to_io()),
         }
     }
 
     pub fn bounds(&mut self, static_mesh: &StaticMesh) -> io::Result<MeshAabb> {
         let key = &static_mesh.mesh_key;
         if !self.meshes.contains_key(key) {
-            let bounds = self.load_bounds(&static_mesh.mesh_path);
-            self.meshes.insert(key.clone(), bounds);
+            let mesh = load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
+                |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
+                |(stream, bounds)| CachedMesh::BoundsOnly { stream, bounds },
+            );
+            self.meshes.insert(key.clone(), mesh);
         }
 
-        self.meshes[key].as_ref().map_or_else(
-            |error| Err(io::Error::new(error.kind(), error.to_string())),
-            |bounds| Ok(*bounds),
+        match &self.meshes[key] {
+            CachedMesh::BoundsOnly { bounds, .. } => Ok(*bounds),
+            CachedMesh::Loaded(geometry) => Ok(geometry.bounds),
+            CachedMesh::Failed(error) => Err(error.to_io()),
+        }
+    }
+
+    #[cfg(test)]
+    fn cached_mesh_count(&self) -> usize {
+        self.meshes.len()
+    }
+
+    #[cfg(test)]
+    fn cached_mesh_state(&self, static_mesh: &StaticMesh) -> Option<&'static str> {
+        self.meshes
+            .get(&static_mesh.mesh_key)
+            .map(|mesh| match mesh {
+                CachedMesh::BoundsOnly { .. } => "bounds_only",
+                CachedMesh::Loaded(_) => "loaded",
+                CachedMesh::Failed(_) => "failed",
+            })
+    }
+}
+
+fn load_geometry(vfs: &VFS, mesh_path: &str) -> io::Result<MeshGeometry> {
+    let stream = load_stream(vfs, mesh_path)?;
+
+    mesh_geometry(&stream).ok_or_else(|| no_triangle_vertices_error(mesh_path))
+}
+
+fn load_bounds(vfs: &VFS, mesh_path: &str) -> io::Result<(NiStream, MeshAabb)> {
+    let stream = load_stream(vfs, mesh_path)?;
+    let bounds = mesh_bounds(&stream).ok_or_else(|| no_triangle_vertices_error(mesh_path))?;
+
+    Ok((stream, bounds))
+}
+
+fn load_stream(vfs: &VFS, mesh_path: &str) -> io::Result<NiStream> {
+    let file = resolve_mesh(vfs, mesh_path)?;
+    let mut reader = file.open()?;
+    let mut bytes = Vec::new();
+    io::Read::read_to_end(&mut reader, &mut bytes)?;
+    NiStream::from_bytes(&bytes).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to load mesh {mesh_path}: {error}"),
         )
-    }
+    })
+}
 
-    fn load_bounds(&self, mesh_path: &str) -> io::Result<MeshAabb> {
-        let file = resolve_mesh(self.vfs, mesh_path)?;
-        let mut reader = file.open()?;
-        let mut bytes = Vec::new();
-        io::Read::read_to_end(&mut reader, &mut bytes)?;
-        let stream = NiStream::from_bytes(&bytes).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("failed to load mesh {mesh_path}: {error}"),
-            )
-        })?;
-
-        mesh_bounds(&stream).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("mesh {mesh_path} has no triangle vertices"),
-            )
-        })
-    }
+fn no_triangle_vertices_error(mesh_path: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("mesh {mesh_path} has no triangle vertices"),
+    )
 }
 
 fn normalize_mesh_key(mesh_path: &str) -> String {
@@ -410,14 +450,6 @@ fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
     })
 }
 
-fn dedup_vertices_preserving_order(vertices: &mut Vec<Vec3>) {
-    let mut seen = HashSet::new();
-    vertices.retain(|vertex| {
-        let key = [vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()];
-        seen.insert(key)
-    });
-}
-
 fn mesh_bounds(stream: &NiStream) -> Option<MeshAabb> {
     let accumulated = collect_mesh(stream, false)?;
 
@@ -425,6 +457,14 @@ fn mesh_bounds(stream: &NiStream) -> Option<MeshAabb> {
         min: accumulated.min.to_array(),
         max: accumulated.max.to_array(),
     })
+}
+
+fn dedup_vertices_preserving_order(vertices: &mut Vec<Vec3>) {
+    let mut seen = HashSet::new();
+    vertices.retain(|vertex| {
+        let key = [vertex.x.to_bits(), vertex.y.to_bits(), vertex.z.to_bits()];
+        seen.insert(key)
+    });
 }
 
 struct MeshAccumulator {
@@ -535,6 +575,14 @@ fn include_vertices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use tes3::nif::{NiGeometry, NiObjectNET, NiTriBasedGeom, NiTriBasedGeomData, NiType};
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn deleted_static_removes_previous_mesh_mapping() {
@@ -672,8 +720,151 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mesh_cache_bounds_then_geometry_promotes_cached_stream() {
+        let temp_dir = TempDir::new("bounds-then-geometry");
+        write_nif(&temp_dir.path().join("Meshes/Grass/Foo.nif"));
+        let vfs = VFS::from_directories(vec![temp_dir.path().to_path_buf()], None);
+        let static_mesh = test_static_mesh("Meshes/Grass/Foo.nif");
+        let mut cache = MeshCache::new(&vfs);
+
+        assert_eq!(cache.bounds(&static_mesh).unwrap(), expected_bounds());
+        assert_eq!(cache.cached_mesh_state(&static_mesh), Some("bounds_only"));
+
+        std::fs::remove_file(temp_dir.path().join("Meshes/Grass/Foo.nif")).unwrap();
+
+        {
+            let cached_geometry = cache.geometry(&static_mesh).unwrap();
+            assert_eq!(cached_geometry.bounds, expected_bounds());
+            assert_eq!(
+                cached_geometry.contact.vertices,
+                expected_contact_vertices()
+            );
+        }
+
+        assert_eq!(cache.cached_mesh_count(), 1);
+        assert_eq!(cache.cached_mesh_state(&static_mesh), Some("loaded"));
+    }
+
+    #[test]
+    fn mesh_cache_bounds_does_not_load_contact_geometry() {
+        let temp_dir = TempDir::new("bounds-only");
+        write_nif(&temp_dir.path().join("Meshes/Grass/Foo.nif"));
+        let vfs = VFS::from_directories(vec![temp_dir.path().to_path_buf()], None);
+        let static_mesh = test_static_mesh("Meshes/Grass/Foo.nif");
+        let mut cache = MeshCache::new(&vfs);
+
+        assert_eq!(cache.bounds(&static_mesh).unwrap(), expected_bounds());
+
+        assert_eq!(cache.cached_mesh_state(&static_mesh), Some("bounds_only"));
+    }
+
+    #[test]
+    fn mesh_cache_recreates_cached_errors_consistently() {
+        let vfs = empty_vfs();
+        let static_mesh = test_static_mesh("Meshes/Grass/Missing.nif");
+        let mut cache = MeshCache::new(&vfs);
+
+        let first = cache.bounds(&static_mesh).unwrap_err();
+        let second = cache.bounds(&static_mesh).unwrap_err();
+        let third = cache.geometry(&static_mesh).unwrap_err();
+
+        assert_eq!(first.kind(), io::ErrorKind::NotFound);
+        assert_eq!(second.kind(), first.kind());
+        assert_eq!(third.kind(), first.kind());
+        assert_eq!(second.to_string(), first.to_string());
+        assert_eq!(third.to_string(), first.to_string());
+        assert_eq!(cache.cached_mesh_count(), 1);
+    }
+
     fn test_contact() -> MeshContact {
         MeshContact::new(vec![[0.0, 0.0, -10.0], [5.0, -2.0, -3.0], [-4.0, 3.0, 2.0]])
+    }
+
+    fn expected_bounds() -> MeshAabb {
+        MeshAabb {
+            min: [-4.0, -2.0, -10.0],
+            max: [5.0, 3.0, 2.0],
+        }
+    }
+
+    fn expected_contact_vertices() -> Vec<[f32; 3]> {
+        vec![[0.0, 0.0, -10.0], [5.0, -2.0, -3.0], [-4.0, 3.0, 2.0]]
+    }
+
+    fn test_static_mesh(mesh_path: &str) -> StaticMesh {
+        StaticMesh {
+            static_id: "test_static".to_owned(),
+            mesh_path: mesh_path.to_owned(),
+            mesh_key: normalize_mesh_key(mesh_path),
+        }
+    }
+
+    fn empty_vfs() -> VFS {
+        VFS::from_directories(Vec::<std::path::PathBuf>::new(), None)
+    }
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "greenmote-mesh-cache-{name}-{}-{}",
+                std::process::id(),
+                NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn write_nif(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let geometry_data = NiTriShapeData {
+            base: NiTriBasedGeomData {
+                base: NiGeometryData {
+                    vertices: expected_contact_vertices()
+                        .into_iter()
+                        .map(Vec3::from)
+                        .collect(),
+                    ..NiGeometryData::default()
+                },
+            },
+            triangles: vec![[0, 1, 2], [0, 1, 2]],
+            shared_normals: Vec::new(),
+        };
+        let mut stream = NiStream::new();
+        let data_key = stream.objects.insert(NiType::from(geometry_data));
+        let shape = NiTriShape {
+            base: NiTriBasedGeom {
+                base: NiGeometry {
+                    base: NiAVObject {
+                        base: NiObjectNET {
+                            name: "test".to_owned(),
+                            ..NiObjectNET::default()
+                        },
+                        ..NiAVObject::default()
+                    },
+                    geometry_data: NiLink::new(data_key),
+                    ..NiGeometry::default()
+                },
+            },
+        };
+        let shape_key = stream.objects.insert(NiType::from(shape));
+        stream.roots.push(NiLink::new(shape_key));
+        std::fs::write(path, stream.save_bytes().unwrap()).unwrap();
     }
 
     fn reference_world_position(

@@ -5,7 +5,7 @@ use tes3::esp::{Cell, Plugin};
 use super::{
     args::IdFilter,
     cells::CellCoord,
-    mesh::{MeshBoundsCache, StaticMeshIndex, WorldAabb},
+    mesh::{MeshCache, StaticMeshIndex, WorldAabb},
     occlusion::{StaticOccluder, StaticOccluderIndex},
 };
 
@@ -27,7 +27,7 @@ pub(crate) fn build_static_occluders(
     active_plugins: &[Plugin],
     active_cells: &BTreeSet<CellCoord>,
     static_index: &StaticMeshIndex,
-    mesh_bounds: &mut MeshBoundsCache<'_>,
+    mesh_bounds: &mut MeshCache<'_>,
     target_static_ids: &BTreeSet<String>,
     occluder_filter: &IdFilter,
 ) -> (StaticOccluderIndex, StaticOccluderBuildReport) {
