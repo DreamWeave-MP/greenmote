@@ -6,10 +6,12 @@ use std::{
 use eframe::egui;
 
 mod convert;
+mod localization;
 mod run_options;
 mod settings;
 
 use convert::ConvertUiState;
+use localization::{Localizer, UiLanguage, UiText};
 use run_options::{ConvertRunOptions, UnclipRunOptions};
 use settings::SettingsUiState;
 
@@ -22,6 +24,7 @@ struct GreenmoteApp {
     config_recovery_error: Option<String>,
     openmw_config_error: Option<String>,
     session_openmw_cfg: Option<PathBuf>,
+    localizer: Localizer,
 }
 
 enum PendingNavigation {
@@ -40,6 +43,7 @@ impl Default for GreenmoteApp {
             config_recovery_error: None,
             openmw_config_error: None,
             session_openmw_cfg: None,
+            localizer: Localizer::default(),
         }
     }
 }
@@ -159,18 +163,18 @@ impl GreenmoteApp {
         let mut discard = false;
         let mut cancel = false;
 
-        egui::Window::new("Unsaved settings")
+        egui::Window::new(self.localizer.text(UiText::UnsavedSettingsTitle))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("Settings have unsaved changes.");
-                ui.label("Save them before continuing?");
+                ui.label(self.localizer.text(UiText::UnsavedSettingsMessage));
+                ui.label(self.localizer.text(UiText::SaveBeforeContinuing));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    save = ui.button("Save").clicked();
-                    discard = ui.button("Discard").clicked();
-                    cancel = ui.button("Cancel").clicked();
+                    save = ui.button(self.localizer.text(UiText::Save)).clicked();
+                    discard = ui.button(self.localizer.text(UiText::Discard)).clicked();
+                    cancel = ui.button(self.localizer.text(UiText::Cancel)).clicked();
                 });
             });
 
@@ -195,20 +199,22 @@ impl GreenmoteApp {
         let mut regenerate = false;
         let mut close = false;
 
-        egui::Window::new("Malformed config")
+        egui::Window::new(self.localizer.text(UiText::MalformedConfigTitle))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("greenmote.toml could not be loaded.");
-                ui.label("Replace it with defaults before continuing.");
-                ui.label("The current file will be moved aside as a .bak file first.");
+                ui.label(self.localizer.text(UiText::MalformedConfigMessage));
+                ui.label(self.localizer.text(UiText::ReplaceWithDefaults));
+                ui.label(self.localizer.text(UiText::BackupBeforeReplacing));
                 ui.add_space(8.0);
                 ui.colored_label(ui.visuals().error_fg_color, error);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    regenerate = ui.button("Back up, regenerate, and continue").clicked();
-                    close = ui.button("Close").clicked();
+                    regenerate = ui
+                        .button(self.localizer.text(UiText::BackupRegenerateContinue))
+                        .clicked();
+                    close = ui.button(self.localizer.text(UiText::Close)).clicked();
                 });
             });
 
@@ -234,17 +240,20 @@ impl GreenmoteApp {
         let mut close = false;
         let can_select_config = !self.convert.is_running();
 
-        egui::Window::new("OpenMW config not found")
+        egui::Window::new(self.localizer.text(UiText::OpenMwConfigNotFoundTitle))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("Greenmote could not find or load an OpenMW configuration file.");
-                ui.label("Choose a valid OpenMW config path before continuing.");
+                ui.label(self.localizer.text(UiText::OpenMwConfigNotFoundMessage));
+                ui.label(
+                    self.localizer
+                        .text(UiText::ChooseOpenMwConfigBeforeContinuing),
+                );
                 ui.add_space(8.0);
                 match &default_config {
                     Ok(path) => {
-                        ui.label("Default OpenMW user config path:");
+                        ui.label(self.localizer.text(UiText::DefaultOpenMwUserConfigPath));
                         ui.monospace(path.display().to_string());
                     }
                     Err(path_error) => {
@@ -259,13 +268,16 @@ impl GreenmoteApp {
                     use_default = ui
                         .add_enabled(
                             default_config.is_ok() && can_select_config,
-                            egui::Button::new("Use default path"),
+                            egui::Button::new(self.localizer.text(UiText::UseDefaultPath)),
                         )
                         .clicked();
                     select_config = ui
-                        .add_enabled(can_select_config, egui::Button::new("Select OpenMW Config"))
+                        .add_enabled(
+                            can_select_config,
+                            egui::Button::new(self.localizer.text(UiText::SelectOpenMwConfig)),
+                        )
                         .clicked();
-                    close = ui.button("Close").clicked();
+                    close = ui.button(self.localizer.text(UiText::Close)).clicked();
                 });
             });
 
@@ -292,7 +304,7 @@ impl GreenmoteApp {
             return;
         }
 
-        let Some(path) = select_openmw_config_file() else {
+        let Some(path) = select_openmw_config_file(self.localizer) else {
             return;
         };
 
@@ -332,10 +344,21 @@ impl GreenmoteApp {
     }
 }
 
-fn select_openmw_config_file() -> Option<PathBuf> {
+fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
+    match language {
+        UiLanguage::English => localizer.text(UiText::EnglishLanguage),
+        UiLanguage::French => localizer.text(UiText::FrenchLanguage),
+        UiLanguage::German => localizer.text(UiText::GermanLanguage),
+        UiLanguage::Russian => localizer.text(UiText::RussianLanguage),
+        UiLanguage::Spanish => localizer.text(UiText::SpanishLanguage),
+        UiLanguage::Swedish => localizer.text(UiText::SwedishLanguage),
+    }
+}
+
+fn select_openmw_config_file(localizer: Localizer) -> Option<PathBuf> {
     let dialog = rfd::FileDialog::new()
-        .set_title("Select OpenMW Config")
-        .add_filter("OpenMW config", &["cfg"])
+        .set_title(localizer.text(UiText::SelectOpenMwConfig))
+        .add_filter(localizer.text(UiText::OpenMwConfig), &["cfg"])
         .set_file_name("openmw.cfg");
 
     let dialog = match std::env::current_exe()

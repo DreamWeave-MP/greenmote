@@ -7,7 +7,7 @@ use crate::{
     unclip,
 };
 
-use super::{ConvertRunOptions, GreenmoteApp, UnclipRunOptions};
+use super::{ConvertRunOptions, GreenmoteApp, UiText, UnclipRunOptions};
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
 const MIN_WIDGET_SIZE: f32 = 1.0;
@@ -219,7 +219,7 @@ impl GreenmoteApp {
 
     fn show_convert_heading(&self, ui: &mut egui::Ui) {
         ui.set_min_width(300.0);
-        ui.heading("Convert");
+        ui.heading(self.localizer.text(UiText::Convert));
     }
 
     fn show_unclip_heading(&self, ui: &mut egui::Ui) {
@@ -232,7 +232,7 @@ impl GreenmoteApp {
             egui::vec2(UNCLIP_RUN_OPTIONS_WIDTH, row_height),
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                ui.heading("Unclip");
+                ui.heading(self.localizer.text(UiText::Unclip));
             },
         );
     }
@@ -248,7 +248,7 @@ impl GreenmoteApp {
                 egui::vec2(group_content_width, ui.spacing().interact_size.y),
                 egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
-                    ui.label(egui::RichText::new("Run options").strong());
+                    ui.label(egui::RichText::new(self.localizer.text(UiText::RunOptions)).strong());
                 },
             );
             ui.add_enabled_ui(!self.convert.running, |ui| {
@@ -256,13 +256,13 @@ impl GreenmoteApp {
                     egui::vec2(group_content_width, ui.spacing().interact_size.y),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
-                        ui.label("Target plugin");
+                        ui.label(self.localizer.text(UiText::TargetPlugin));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
                                 .desired_width(190.0),
                         );
-                        if ui.button("Browse...").clicked()
-                            && let Some(path) = select_plugin_file()
+                        if ui.button(self.localizer.text(UiText::Browse)).clicked()
+                            && let Some(path) = select_plugin_file(self.localizer)
                         {
                             self.convert.unclip.run_options.plugin = path.display().to_string();
                         }
@@ -274,17 +274,13 @@ impl GreenmoteApp {
                     |ui| {
                         ui.checkbox(
                             &mut self.convert.unclip.run_options.write,
-                            "Write changes to plugin",
+                            self.localizer.text(UiText::WriteChangesToPlugin),
                         );
                         ui.checkbox(
                             &mut self.convert.unclip.run_options.instances,
-                            "Show detailed ref diagnostics",
+                            self.localizer.text(UiText::DetailedRefDiagnostics),
                         )
-                        .on_hover_text(
-                            "Output one diagnostic entry per inspected placed reference instead \
-                             of only the summary. Includes cell/ref key, terrain contact, \
-                             static occlusion, and write-status details.",
-                        );
+                        .on_hover_text(self.localizer.text(UiText::DetailedRefDiagnosticsTooltip));
                     },
                 );
             });
@@ -356,7 +352,10 @@ impl GreenmoteApp {
         ctx: &egui::Context,
     ) -> egui::Response {
         let can_start = self.can_start_worker();
-        let response = ui.add_enabled(can_start, egui::Button::new("Start conversion"));
+        let response = ui.add_enabled(
+            can_start,
+            egui::Button::new(self.localizer.text(UiText::StartConversion)),
+        );
         if response.clicked() {
             self.start_conversion(ctx);
         }
@@ -370,9 +369,9 @@ impl GreenmoteApp {
     ) -> egui::Response {
         let can_start = self.can_start_worker();
         let label = if self.convert.unclip.run_options.write {
-            "Write changes"
+            self.localizer.text(UiText::WriteChanges)
         } else {
-            "Inspect plugin"
+            self.localizer.text(UiText::InspectPlugin)
         };
 
         let response = ui.add_enabled(can_start, egui::Button::new(label));
@@ -396,16 +395,22 @@ impl GreenmoteApp {
 
     fn show_convert_run_options(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
-            ui.label(egui::RichText::new("Run options").strong());
+            ui.label(egui::RichText::new(self.localizer.text(UiText::RunOptions)).strong());
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(!self.convert.running, |ui| {
                     let mut dry_run = self.convert.run_options.dry_run;
-                    if ui.checkbox(&mut dry_run, "Dry run").changed() {
+                    if ui
+                        .checkbox(&mut dry_run, self.localizer.text(UiText::DryRun))
+                        .changed()
+                    {
                         self.convert.run_options.set_dry_run(dry_run);
                     }
 
                     let mut debug = self.convert.run_options.debug;
-                    if ui.checkbox(&mut debug, "Debug diagnostics").changed() {
+                    if ui
+                        .checkbox(&mut debug, self.localizer.text(UiText::DebugDiagnostics))
+                        .changed()
+                    {
                         self.convert.run_options.set_debug(debug);
                     }
 
@@ -413,7 +418,7 @@ impl GreenmoteApp {
                         self.convert.run_options.can_edit_auto_enable(),
                         egui::Checkbox::new(
                             &mut self.convert.run_options.auto_enable,
-                            "Auto-enable generated plugins",
+                            self.localizer.text(UiText::AutoEnableGeneratedPlugins),
                         ),
                     );
                 });
@@ -426,7 +431,10 @@ impl GreenmoteApp {
                     && !self.settings.is_dirty()
                     && self.config_recovery_error.is_none();
                 if ui
-                    .add_enabled(can_save, egui::Button::new("Save as defaults"))
+                    .add_enabled(
+                        can_save,
+                        egui::Button::new(self.localizer.text(UiText::SaveAsDefaults)),
+                    )
                     .clicked()
                 {
                     let _saved = self.save_convert_run_options_as_defaults();
@@ -435,7 +443,7 @@ impl GreenmoteApp {
                 if ui
                     .add_enabled(
                         differs && !self.convert.running,
-                        egui::Button::new("Reset from saved"),
+                        egui::Button::new(self.localizer.text(UiText::ResetFromSaved)),
                     )
                     .clicked()
                 {
@@ -444,14 +452,17 @@ impl GreenmoteApp {
                 }
 
                 if differs {
-                    ui.label("Run options differ from saved defaults.");
+                    ui.label(self.localizer.text(UiText::RunOptionsDiffer));
                 } else {
-                    ui.label("Run options match saved defaults.");
+                    ui.label(self.localizer.text(UiText::RunOptionsMatch));
                 }
             });
 
             if self.settings.is_dirty() && differs {
-                ui.label("Save or discard Settings changes before saving these as defaults.");
+                ui.label(
+                    self.localizer
+                        .text(UiText::SaveOrDiscardSettingsBeforeDefaults),
+                );
             }
         });
     }
@@ -540,18 +551,23 @@ impl GreenmoteApp {
         let mut confirm = false;
         let mut cancel = false;
 
-        egui::Window::new("Confirm Unclip write")
+        egui::Window::new(self.localizer.text(UiText::ConfirmUnclipWriteTitle))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label("Unclip will modify the target plugin and create a backup.");
-                ui.label(format!("Target: {target}"));
-                ui.label(format!("Enabled write actions: {actions}"));
+                ui.label(self.localizer.text(UiText::ConfirmUnclipWriteMessage));
+                ui.label(format!("{} {target}", self.localizer.text(UiText::Target)));
+                ui.label(format!(
+                    "{} {actions}",
+                    self.localizer.text(UiText::EnabledWriteActions)
+                ));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    confirm = ui.button("Write changes").clicked();
-                    cancel = ui.button("Cancel").clicked();
+                    confirm = ui
+                        .button(self.localizer.text(UiText::WriteChanges))
+                        .clicked();
+                    cancel = ui.button(self.localizer.text(UiText::Cancel)).clicked();
                 });
             });
 
@@ -582,7 +598,7 @@ impl GreenmoteApp {
                     self.convert.running
                         && !self.convert.cancelling
                         && matches!(self.convert.active_worker, Some(WorkerKind::Convert)),
-                    egui::Button::new("Cancel"),
+                    egui::Button::new(self.localizer.text(UiText::Cancel)),
                 )
                 .clicked()
             {
@@ -592,7 +608,7 @@ impl GreenmoteApp {
             if ui
                 .add_enabled(
                     actions_enabled && !self.convert.output.is_empty(),
-                    egui::Button::new("Clear output"),
+                    egui::Button::new(self.localizer.text(UiText::ClearOutput)),
                 )
                 .clicked()
             {
@@ -603,7 +619,7 @@ impl GreenmoteApp {
             if ui
                 .add_enabled(
                     actions_enabled && !self.convert.output.is_empty(),
-                    egui::Button::new("Copy output"),
+                    egui::Button::new(self.localizer.text(UiText::CopyOutput)),
                 )
                 .clicked()
             {
@@ -614,7 +630,7 @@ impl GreenmoteApp {
             if ui
                 .add_enabled(
                     actions_enabled && self.config_recovery_error.is_none(),
-                    egui::Button::new("Open output dir"),
+                    egui::Button::new(self.localizer.text(UiText::OpenOutputDir)),
                 )
                 .clicked()
             {
@@ -625,7 +641,7 @@ impl GreenmoteApp {
             if ui
                 .add_enabled(
                     actions_enabled && self.settings.log_path().is_some(),
-                    egui::Button::new("Open log"),
+                    egui::Button::new(self.localizer.text(UiText::OpenLog)),
                 )
                 .clicked()
                 && let Some(log_path) = self.settings.log_path()
@@ -634,7 +650,10 @@ impl GreenmoteApp {
             }
 
             if ui
-                .add_enabled(!self.convert.running, egui::Button::new("Settings"))
+                .add_enabled(
+                    !self.convert.running,
+                    egui::Button::new(self.localizer.text(UiText::Settings)),
+                )
                 .clicked()
             {
                 self.show_settings();
@@ -1170,10 +1189,13 @@ fn open_path_native(path: &Path) -> io::Result<()> {
         .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no path opener available")))
 }
 
-fn select_plugin_file() -> Option<std::path::PathBuf> {
+fn select_plugin_file(localizer: super::Localizer) -> Option<std::path::PathBuf> {
     rfd::FileDialog::new()
-        .set_title("Select Unclip Target Plugin")
-        .add_filter("OpenMW plugins", &["omwaddon", "esp", "esm"])
+        .set_title(localizer.text(UiText::SelectUnclipTargetPlugin))
+        .add_filter(
+            localizer.text(UiText::OpenMwPlugins),
+            &["omwaddon", "esp", "esm"],
+        )
         .pick_file()
 }
 

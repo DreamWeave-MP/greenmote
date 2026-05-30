@@ -6,7 +6,9 @@ use regex::RegexBuilder;
 use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectorySource};
 use crate::unclip::WriteActionArg;
 
-use super::{ConvertRunOptions, GreenmoteApp, UnclipRunOptions};
+use super::{
+    ConvertRunOptions, GreenmoteApp, UiLanguage, UiText, UnclipRunOptions, language_label,
+};
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
 const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
@@ -274,7 +276,7 @@ impl SettingsUiState {
 
 impl GreenmoteApp {
     pub(super) fn show_settings_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Settings");
+        ui.heading(self.localizer.text(UiText::Settings));
         ui.separator();
 
         egui::TopBottomPanel::bottom("settings_footer")
@@ -283,13 +285,16 @@ impl GreenmoteApp {
             .show_inside(ui, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add_enabled(self.settings.is_dirty(), egui::Button::new("Save"))
+                        .add_enabled(
+                            self.settings.is_dirty(),
+                            egui::Button::new(self.localizer.text(UiText::Save)),
+                        )
                         .clicked()
                     {
                         self.save_settings();
                     }
 
-                    if ui.button("Back").clicked() {
+                    if ui.button(self.localizer.text(UiText::Back)).clicked() {
                         self.request_convert();
                     }
 
@@ -320,10 +325,29 @@ impl GreenmoteApp {
     }
 
     fn show_general_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("General");
+        ui.heading(self.localizer.text(UiText::General));
         ui.add_space(6.0);
 
-        ui.label("OpenMW config");
+        ui.horizontal(|ui| {
+            ui.label(self.localizer.text(UiText::Language));
+            let mut language = self.localizer.language();
+            egui::ComboBox::from_id_salt("greenmote_ui_language")
+                .selected_text(language_label(self.localizer, language))
+                .show_ui(ui, |ui| {
+                    for candidate in UiLanguage::ALL {
+                        ui.selectable_value(
+                            &mut language,
+                            candidate,
+                            language_label(self.localizer, candidate),
+                        );
+                    }
+                });
+            self.localizer.set_language(language);
+        });
+
+        ui.add_space(8.0);
+
+        ui.label(self.localizer.text(UiText::OpenMwConfig));
         ui.add_space(4.0);
 
         egui::Frame::group(ui.style())
@@ -333,7 +357,7 @@ impl GreenmoteApp {
                     ui.monospace(path.display().to_string());
                 }
                 None => {
-                    ui.label("Using OpenMW autodetection.");
+                    ui.label(self.localizer.text(UiText::UsingOpenMwAutodetection));
                 }
             });
 
@@ -341,13 +365,19 @@ impl GreenmoteApp {
 
         let can_select_config = !self.convert.is_running();
         if ui
-            .add_enabled(can_select_config, egui::Button::new("Select OpenMW Config"))
+            .add_enabled(
+                can_select_config,
+                egui::Button::new(self.localizer.text(UiText::SelectOpenMwConfig)),
+            )
             .clicked()
         {
             self.request_openmw_config_selection();
         }
         if !can_select_config {
-            ui.label("OpenMW config cannot be changed while a run is active.");
+            ui.label(
+                self.localizer
+                    .text(UiText::OpenMwConfigCannotChangeWhileRunning),
+            );
         }
 
         ui.add_space(8.0);
@@ -356,7 +386,7 @@ impl GreenmoteApp {
     }
 
     fn show_convert_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Convert");
+        ui.heading(self.localizer.text(UiText::Convert));
         ui.add_space(6.0);
 
         let mut list_control = EditableListControl {
@@ -375,8 +405,9 @@ impl GreenmoteApp {
 
         setting_editable_list(
             ui,
-            "Grass ID patterns",
-            "No grass ID patterns configured.",
+            self.localizer,
+            self.localizer.text(UiText::GrassIdPatterns),
+            self.localizer.text(UiText::NoGrassIdPatterns),
             SettingsListKind::GrassIds,
             &mut self.settings.draft.grass_ids,
             &mut list_control,
@@ -384,8 +415,9 @@ impl GreenmoteApp {
         list_control.viewport_start = &mut self.settings.exclude_viewport_start;
         setting_editable_list(
             ui,
-            "Exclude patterns",
-            "No exclude patterns configured.",
+            self.localizer,
+            self.localizer.text(UiText::ExcludePatterns),
+            self.localizer.text(UiText::NoExcludePatterns),
             SettingsListKind::Exclude,
             &mut self.settings.draft.exclude,
             &mut list_control,
@@ -393,19 +425,20 @@ impl GreenmoteApp {
         list_control.viewport_start = &mut self.settings.ignored_plugins_viewport_start;
         setting_editable_list(
             ui,
-            "Ignored plugins",
-            "No ignored plugins configured.",
+            self.localizer,
+            self.localizer.text(UiText::IgnoredPlugins),
+            self.localizer.text(UiText::NoIgnoredPlugins),
             SettingsListKind::IgnoredPlugins,
             &mut self.settings.draft.ignored_plugins,
             &mut list_control,
         );
 
         ui.add_space(8.0);
-        ui.label("Run options are configured on the Convert screen.");
+        ui.label(self.localizer.text(UiText::RunOptionsConfiguredOnConvert));
     }
 
     fn show_unclip_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Unclip");
+        ui.heading(self.localizer.text(UiText::Unclip));
         ui.add_space(6.0);
 
         self.show_unclip_write_actions(ui);
@@ -416,7 +449,7 @@ impl GreenmoteApp {
     fn show_unclip_write_actions(&mut self, ui: &mut egui::Ui) {
         let policy = &mut self.settings.draft.unclip_policy;
 
-        ui.label("Write actions");
+        ui.label(self.localizer.text(UiText::WriteActions));
         ui.add_space(4.0);
         let before_actions = policy.write_actions;
         egui::Frame::group(ui.style())
@@ -424,19 +457,19 @@ impl GreenmoteApp {
             .show(ui, |ui| {
                 ui.checkbox(
                     &mut policy.write_actions[UNCLIP_TERRAIN_Z_INDEX],
-                    "Terrain Z (terrain-z)",
+                    self.localizer.text(UiText::TerrainZAction),
                 );
                 ui.checkbox(
                     &mut policy.write_actions[UNCLIP_STATIC_DELETE_INDEX],
-                    "Delete fully static-occluded refs (static-delete)",
+                    self.localizer.text(UiText::StaticDeleteAction),
                 );
                 ui.checkbox(
                     &mut policy.write_actions[UNCLIP_STATIC_MOVE_INDEX],
-                    "Move static-occluded refs (static-move)",
+                    self.localizer.text(UiText::StaticMoveAction),
                 );
                 ui.checkbox(
                     &mut policy.write_actions[UNCLIP_ORIENT_INDEX],
-                    "Orient refs to terrain (orient)",
+                    self.localizer.text(UiText::OrientAction),
                 );
             });
         if before_actions != policy.write_actions {
@@ -445,14 +478,14 @@ impl GreenmoteApp {
         if !policy.has_write_actions() {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
-                "Warning: write mode will produce no policy actions.",
+                self.localizer.text(UiText::NoWriteActionsWarning),
             );
         }
     }
 
     fn show_unclip_policy_numbers(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
-        ui.label("Policy numbers");
+        ui.label(self.localizer.text(UiText::PolicyNumbers));
         ui.add_space(4.0);
         {
             let policy = &mut self.settings.draft.unclip_policy;
@@ -462,36 +495,36 @@ impl GreenmoteApp {
                 .show(ui, |ui| {
                     setting_text_field(
                         ui,
-                        "Mesh contact tolerance",
-                        "Maximum mesh contact/terrain Z delta treated as already on terrain. Config key: contact_epsilon.",
+                        self.localizer.text(UiText::MeshContactTolerance),
+                        self.localizer.text(UiText::MeshContactToleranceTooltip),
                         &mut policy.contact_epsilon,
                         &mut self.settings.dirty,
                     );
                     setting_text_field(
                         ui,
-                        "Origin height tolerance",
-                        "Maximum reference origin/terrain Z delta treated as already on terrain. Config key: origin_epsilon.",
+                        self.localizer.text(UiText::OriginHeightTolerance),
+                        self.localizer.text(UiText::OriginHeightToleranceTooltip),
                         &mut policy.origin_epsilon,
                         &mut self.settings.dirty,
                     );
                     setting_text_field(
                         ui,
-                        "Orientation tolerance",
-                        "Maximum tilt angle in degrees treated as already aligned to terrain. Config key: orientation_epsilon.",
+                        self.localizer.text(UiText::OrientationTolerance),
+                        self.localizer.text(UiText::OrientationToleranceTooltip),
                         &mut policy.orientation_epsilon,
                         &mut self.settings.dirty,
                     );
                     setting_text_field(
                         ui,
-                        "Relocation step distance",
-                        "Horizontal distance between static-bounds relocation probes. Config key: relocation_step.",
+                        self.localizer.text(UiText::RelocationStepDistance),
+                        self.localizer.text(UiText::RelocationStepDistanceTooltip),
                         &mut policy.relocation_step,
                         &mut self.settings.dirty,
                     );
                     setting_text_field(
                         ui,
-                        "Relocation probe rings",
-                        "Number of relocation probe rings to try for static-bounds moves. Config key: relocation_steps.",
+                        self.localizer.text(UiText::RelocationProbeRings),
+                        self.localizer.text(UiText::RelocationProbeRingsTooltip),
                         &mut policy.relocation_steps,
                         &mut self.settings.dirty,
                     );
@@ -501,7 +534,7 @@ impl GreenmoteApp {
 
     fn show_unclip_filter_lists(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
-        ui.label("Regex filters use case-insensitive full-ID regexes. Exclude wins over include. Empty include means all.");
+        ui.label(self.localizer.text(UiText::RegexFiltersHelp));
         ui.add_space(4.0);
 
         let mut list_control = EditableListControl {
@@ -520,8 +553,9 @@ impl GreenmoteApp {
 
         setting_editable_list(
             ui,
-            "Include grass IDs",
-            "No include grass ID filters configured.",
+            self.localizer,
+            self.localizer.text(UiText::IncludeGrassIds),
+            self.localizer.text(UiText::NoIncludeGrassIds),
             SettingsListKind::IncludeGrassIds,
             &mut self.settings.draft.unclip_policy.include_grass_ids,
             &mut list_control,
@@ -529,8 +563,9 @@ impl GreenmoteApp {
         list_control.viewport_start = &mut self.settings.exclude_grass_ids_viewport_start;
         setting_editable_list(
             ui,
-            "Exclude grass IDs",
-            "No exclude grass ID filters configured.",
+            self.localizer,
+            self.localizer.text(UiText::ExcludeGrassIds),
+            self.localizer.text(UiText::NoExcludeGrassIds),
             SettingsListKind::ExcludeGrassIds,
             &mut self.settings.draft.unclip_policy.exclude_grass_ids,
             &mut list_control,
@@ -538,8 +573,9 @@ impl GreenmoteApp {
         list_control.viewport_start = &mut self.settings.include_occluder_ids_viewport_start;
         setting_editable_list(
             ui,
-            "Include occluder IDs",
-            "No include occluder ID filters configured.",
+            self.localizer,
+            self.localizer.text(UiText::IncludeOccluderIds),
+            self.localizer.text(UiText::NoIncludeOccluderIds),
             SettingsListKind::IncludeOccluderIds,
             &mut self.settings.draft.unclip_policy.include_occluder_ids,
             &mut list_control,
@@ -547,8 +583,9 @@ impl GreenmoteApp {
         list_control.viewport_start = &mut self.settings.exclude_occluder_ids_viewport_start;
         setting_editable_list(
             ui,
-            "Exclude occluder IDs",
-            "No exclude occluder ID filters configured.",
+            self.localizer,
+            self.localizer.text(UiText::ExcludeOccluderIds),
+            self.localizer.text(UiText::NoExcludeOccluderIds),
             SettingsListKind::ExcludeOccluderIds,
             &mut self.settings.draft.unclip_policy.exclude_occluder_ids,
             &mut list_control,
@@ -563,12 +600,12 @@ impl GreenmoteApp {
         let mut add = false;
         let mut cancel = false;
 
-        egui::Window::new(kind.add_window_title())
+        egui::Window::new(kind.add_window_title(self.localizer))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label(kind.add_prompt());
+                ui.label(kind.add_prompt(self.localizer));
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut self.settings.add_text).desired_width(320.0),
                 );
@@ -583,8 +620,10 @@ impl GreenmoteApp {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    add = ui.add_enabled(can_add, egui::Button::new("Add")).clicked();
-                    cancel = ui.button("Cancel").clicked();
+                    add = ui
+                        .add_enabled(can_add, egui::Button::new(self.localizer.text(UiText::Add)))
+                        .clicked();
+                    cancel = ui.button(self.localizer.text(UiText::Cancel)).clicked();
                 });
 
                 add |= can_add && response.has_focus() && pressed_enter;
@@ -629,23 +668,21 @@ impl GreenmoteApp {
     }
 
     fn show_output_directory_settings(&mut self, ui: &mut egui::Ui) {
-        ui.label("Convert output directory");
+        ui.label(self.localizer.text(UiText::ConvertOutputDirectory));
         ui.add_space(4.0);
 
         match self.settings.draft.output_directory_source {
             ConvertOutputDirectorySource::OpenMwDataLocal => {
                 output_path_frame(ui, &self.settings.draft.output_directory);
-                ui.label("From the selected OpenMW configuration's data-local setting.");
+                ui.label(self.localizer.text(UiText::OutputFromDataLocal));
             }
             ConvertOutputDirectorySource::CliOverride => {
                 output_path_frame(ui, &self.settings.draft.output_directory);
-                ui.label("Overridden for this conversion run.");
+                ui.label(self.localizer.text(UiText::OutputCliOverride));
             }
             ConvertOutputDirectorySource::WorkingDirectoryFallback => {
                 output_path_frame(ui, &self.settings.draft.output_directory);
-                ui.label(
-                    "OpenMW has no data-local setting, so Greenmote will write to the current working directory shown above. OpenMW can only load the generated files if this folder is configured as data-local or data=.",
-                );
+                ui.label(self.localizer.text(UiText::OutputWorkingDirectoryFallback));
             }
         }
     }
@@ -1040,6 +1077,7 @@ fn validate_regex_list(name: &str, patterns: &[String]) -> Result<(), String> {
 
 fn setting_editable_list(
     ui: &mut egui::Ui,
+    localizer: super::Localizer,
     label: &str,
     empty_message: &str,
     kind: SettingsListKind,
@@ -1069,7 +1107,7 @@ fn setting_editable_list(
             if is_long {
                 let start = *control.viewport_start + 1;
                 let end = (*control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS).min(items.len());
-                ui.weak(format!("Showing {start}-{end} of {}", items.len()));
+                ui.weak(localizer.showing_items(start, end, items.len()));
             }
 
             ui.allocate_ui_with_layout(
@@ -1122,8 +1160,11 @@ fn setting_editable_list(
                     let can_move_down =
                         *control.viewport_start + SETTINGS_LIST_VISIBLE_ROWS < items.len();
                     if ui
-                        .add_enabled(can_move_down, egui::Button::new("Down"))
-                        .on_hover_text("Show next items")
+                        .add_enabled(
+                            can_move_down,
+                            egui::Button::new(localizer.text(UiText::Down)),
+                        )
+                        .on_hover_text(localizer.text(UiText::ShowNextItems))
                         .clicked()
                     {
                         *control.viewport_start += 1;
@@ -1131,8 +1172,8 @@ fn setting_editable_list(
 
                     let can_move_up = *control.viewport_start > 0;
                     if ui
-                        .add_enabled(can_move_up, egui::Button::new("Up"))
-                        .on_hover_text("Show previous items")
+                        .add_enabled(can_move_up, egui::Button::new(localizer.text(UiText::Up)))
+                        .on_hover_text(localizer.text(UiText::ShowPreviousItems))
                         .clicked()
                     {
                         *control.viewport_start -= 1;
@@ -1411,27 +1452,27 @@ fn selectable_list_row(
 }
 
 impl SettingsListKind {
-    fn add_window_title(self) -> &'static str {
+    fn add_window_title(self, localizer: super::Localizer) -> &'static str {
         match self {
-            Self::GrassIds => "Add grass ID pattern",
-            Self::Exclude => "Add exclude pattern",
-            Self::IgnoredPlugins => "Add ignored plugin",
-            Self::IncludeGrassIds => "Add include grass ID regex",
-            Self::ExcludeGrassIds => "Add exclude grass ID regex",
-            Self::IncludeOccluderIds => "Add include occluder ID regex",
-            Self::ExcludeOccluderIds => "Add exclude occluder ID regex",
+            Self::GrassIds => localizer.text(UiText::AddGrassIdPatternTitle),
+            Self::Exclude => localizer.text(UiText::AddExcludePatternTitle),
+            Self::IgnoredPlugins => localizer.text(UiText::AddIgnoredPluginTitle),
+            Self::IncludeGrassIds => localizer.text(UiText::AddIncludeGrassIdRegexTitle),
+            Self::ExcludeGrassIds => localizer.text(UiText::AddExcludeGrassIdRegexTitle),
+            Self::IncludeOccluderIds => localizer.text(UiText::AddIncludeOccluderIdRegexTitle),
+            Self::ExcludeOccluderIds => localizer.text(UiText::AddExcludeOccluderIdRegexTitle),
         }
     }
 
-    fn add_prompt(self) -> &'static str {
+    fn add_prompt(self, localizer: super::Localizer) -> &'static str {
         match self {
-            Self::GrassIds => "Grass ID pattern",
-            Self::Exclude => "Exclude pattern",
-            Self::IgnoredPlugins => "Ignored plugin",
-            Self::IncludeGrassIds => "Include grass ID regex",
-            Self::ExcludeGrassIds => "Exclude grass ID regex",
-            Self::IncludeOccluderIds => "Include occluder ID regex",
-            Self::ExcludeOccluderIds => "Exclude occluder ID regex",
+            Self::GrassIds => localizer.text(UiText::GrassIdPatternPrompt),
+            Self::Exclude => localizer.text(UiText::ExcludePatternPrompt),
+            Self::IgnoredPlugins => localizer.text(UiText::IgnoredPluginPrompt),
+            Self::IncludeGrassIds => localizer.text(UiText::IncludeGrassIdRegexPrompt),
+            Self::ExcludeGrassIds => localizer.text(UiText::ExcludeGrassIdRegexPrompt),
+            Self::IncludeOccluderIds => localizer.text(UiText::IncludeOccluderIdRegexPrompt),
+            Self::ExcludeOccluderIds => localizer.text(UiText::ExcludeOccluderIdRegexPrompt),
         }
     }
 }
