@@ -130,6 +130,13 @@ fn no_config_selected_error(_default_config_file: &Path, active_command: &str) -
 }
 
 pub(crate) fn default_user_config_file() -> io::Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = std::env::var_os("GREENMOTE_TEST_DEFAULT_OPENMW_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(path).join("openmw.cfg"));
+    }
+
     openmw_config::try_default_config_path()
         .map(|path| path.join("openmw.cfg"))
         .map_err(|error| {
@@ -288,7 +295,7 @@ mod tests {
         fs::{create_dir, write},
         path::PathBuf,
         sync::{
-            Mutex, OnceLock,
+            Mutex, MutexGuard, OnceLock,
             atomic::{AtomicU64, Ordering},
         },
     };
@@ -300,6 +307,12 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn lock_env() -> MutexGuard<'static, ()> {
+        env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     struct TempDir {
@@ -344,10 +357,28 @@ mod tests {
         }
     }
 
+    struct EnvSnapshot {
+        snapshot: Option<Vec<(String, Option<OsString>)>>,
+    }
+
+    impl EnvSnapshot {
+        fn new(keys: &[&str]) -> Self {
+            Self {
+                snapshot: Some(snapshot_env(keys)),
+            }
+        }
+    }
+
+    impl Drop for EnvSnapshot {
+        fn drop(&mut self) {
+            restore_env(self.snapshot.take().unwrap_or_default());
+        }
+    }
+
     #[test]
     fn implicit_loading_honors_openmw_config_dir_env() {
-        let _guard = env_lock().lock().unwrap();
-        let snapshot = snapshot_env(&["OPENMW_CONFIG", "OPENMW_CONFIG_DIR"]);
+        let _guard = lock_env();
+        let _snapshot = EnvSnapshot::new(&["OPENMW_CONFIG", "OPENMW_CONFIG_DIR"]);
         let dir = TempDir::new();
         write(dir.path.join("openmw.cfg"), "").unwrap();
 
@@ -360,7 +391,6 @@ mod tests {
         let config = load_config_from_path(None).unwrap();
 
         assert_eq!(config.root_config_file(), dir.path.join("openmw.cfg"));
-        restore_env(snapshot);
     }
 
     #[test]
@@ -376,8 +406,8 @@ mod tests {
 
     #[test]
     fn explicit_greenmote_config_path_does_not_force_openmw_discovery() {
-        let _guard = env_lock().lock().unwrap();
-        let snapshot = snapshot_env(&["OPENMW_CONFIG", "OPENMW_CONFIG_DIR"]);
+        let _guard = lock_env();
+        let _snapshot = EnvSnapshot::new(&["OPENMW_CONFIG", "OPENMW_CONFIG_DIR"]);
         let dir = TempDir::new();
         let config_path = dir.path.join("custom-greenmote.toml");
 
@@ -390,20 +420,19 @@ mod tests {
         let resolved = resolve_greenmote_config_path(Some(&config_path), None).unwrap();
 
         assert_eq!(resolved, config_path);
-        restore_env(snapshot);
     }
 
     #[test]
     fn missing_autodetected_config_prompts_for_default_user_config() {
-        let _guard = env_lock().lock().unwrap();
-        let snapshot = snapshot_env(&[
+        let _guard = lock_env();
+        let _snapshot = EnvSnapshot::new(&[
             "OPENMW_CONFIG",
             "OPENMW_CONFIG_DIR",
             "OPENMW_GLOBAL_CONFIG_PATH",
-            "XDG_CONFIG_HOME",
+            "GREENMOTE_TEST_DEFAULT_OPENMW_CONFIG_DIR",
         ]);
         let dir = TempDir::new();
-        let default_config_dir = dir.path.join("xdg").join("openmw");
+        let default_config_dir = dir.path.join("default-user-config");
         std::fs::create_dir_all(&default_config_dir).unwrap();
         let default_config = default_config_dir.join("openmw.cfg");
         write(&default_config, "").unwrap();
@@ -413,7 +442,10 @@ mod tests {
             std::env::remove_var("OPENMW_CONFIG");
             std::env::remove_var("OPENMW_CONFIG_DIR");
             std::env::set_var("OPENMW_GLOBAL_CONFIG_PATH", dir.path.join("missing-global"));
-            std::env::set_var("XDG_CONFIG_HOME", dir.path.join("xdg"));
+            std::env::set_var(
+                "GREENMOTE_TEST_DEFAULT_OPENMW_CONFIG_DIR",
+                &default_config_dir,
+            );
         }
 
         let mut input = io::Cursor::new(b"y\n");
@@ -424,26 +456,29 @@ mod tests {
         let message = String::from_utf8(stderr).unwrap();
         assert!(message.contains("could not find an OpenMW configuration"));
         assert!(message.contains("Use this path? [y/N]:"));
-        restore_env(snapshot);
     }
 
     #[test]
     fn declining_default_user_config_reports_repair_instructions() {
-        let _guard = env_lock().lock().unwrap();
-        let snapshot = snapshot_env(&[
+        let _guard = lock_env();
+        let _snapshot = EnvSnapshot::new(&[
             "OPENMW_CONFIG",
             "OPENMW_CONFIG_DIR",
             "OPENMW_GLOBAL_CONFIG_PATH",
-            "XDG_CONFIG_HOME",
+            "GREENMOTE_TEST_DEFAULT_OPENMW_CONFIG_DIR",
         ]);
         let dir = TempDir::new();
+        let default_config_dir = dir.path.join("default-user-config");
 
         // SAFETY: guarded by a process-wide mutex in this module's tests.
         unsafe {
             std::env::remove_var("OPENMW_CONFIG");
             std::env::remove_var("OPENMW_CONFIG_DIR");
             std::env::set_var("OPENMW_GLOBAL_CONFIG_PATH", dir.path.join("missing-global"));
-            std::env::set_var("XDG_CONFIG_HOME", dir.path.join("xdg"));
+            std::env::set_var(
+                "GREENMOTE_TEST_DEFAULT_OPENMW_CONFIG_DIR",
+                default_config_dir,
+            );
         }
 
         let mut input = io::Cursor::new(b"\n");
@@ -458,15 +493,14 @@ mod tests {
         );
         assert!(error.to_string().contains("--openmw-cfg"));
         assert!(error.to_string().contains(" unclip"));
-        restore_env(snapshot);
     }
 
     #[test]
     fn invalid_cli_path_has_distinct_prompt_message() {
-        let _guard = env_lock().lock().unwrap();
-        let snapshot = snapshot_env(&["XDG_CONFIG_HOME"]);
+        let _guard = lock_env();
+        let _snapshot = EnvSnapshot::new(&["GREENMOTE_TEST_DEFAULT_OPENMW_CONFIG_DIR"]);
         let dir = TempDir::new();
-        let default_config_dir = dir.path.join("xdg").join("openmw");
+        let default_config_dir = dir.path.join("default-user-config");
         std::fs::create_dir_all(&default_config_dir).unwrap();
         let default_config = default_config_dir.join("openmw.cfg");
         write(&default_config, "").unwrap();
@@ -474,7 +508,10 @@ mod tests {
 
         // SAFETY: guarded by a process-wide mutex in this module's tests.
         unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", dir.path.join("xdg"));
+            std::env::set_var(
+                "GREENMOTE_TEST_DEFAULT_OPENMW_CONFIG_DIR",
+                &default_config_dir,
+            );
         }
 
         let mut input = io::Cursor::new(b"yes\n");
@@ -486,6 +523,5 @@ mod tests {
         let message = String::from_utf8(stderr).unwrap();
         assert!(message.contains("requested OpenMW configuration"));
         assert!(message.contains(&bad_config.display().to_string()));
-        restore_env(snapshot);
     }
 }
