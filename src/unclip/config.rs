@@ -189,9 +189,10 @@ impl UnclipConfig {
                 &args.include_occluder_ids,
                 persisted.include_occluder_ids,
             ),
-            exclude_occluder_ids: merge_list(
+            exclude_occluder_ids: merge_list_with_default(
                 &args.exclude_occluder_ids,
                 persisted.exclude_occluder_ids,
+                default_tree_occluder_exclude_ids(),
             ),
         })
     }
@@ -226,7 +227,7 @@ impl PersistedUnclipConfig {
             include_grass_ids: Some(Vec::new()),
             exclude_grass_ids: Some(Vec::new()),
             include_occluder_ids: Some(Vec::new()),
-            exclude_occluder_ids: Some(Vec::new()),
+            exclude_occluder_ids: Some(default_tree_occluder_exclude_ids()),
             ..Self::default()
         }
     }
@@ -243,6 +244,30 @@ fn merge_list(cli: &[String], persisted: Option<Vec<String>>) -> Vec<String> {
     } else {
         cli.to_vec()
     }
+}
+
+fn merge_list_with_default(
+    cli: &[String],
+    persisted: Option<Vec<String>>,
+    default: Vec<String>,
+) -> Vec<String> {
+    if cli.is_empty() {
+        persisted.unwrap_or(default)
+    } else {
+        cli.to_vec()
+    }
+}
+
+pub(crate) fn default_tree_occluder_exclude_ids() -> Vec<String> {
+    vec![
+        "flora_(tree|ashtree|treestump|treedead|root)_.*".to_owned(),
+        "flora_(ash_)?log_.*".to_owned(),
+        "flora_bm_(treebranch|treestump|snowbranch|snowstump|(snow_)?log)_.*".to_owned(),
+        "flora_bc_(tree|knee|log)_.*".to_owned(),
+        "ex_t_(bigroot|root).*".to_owned(),
+        "t_.*flora.*(tree|branch|root|stump|log|palm).*".to_owned(),
+        "t_cyr_flora(gc|str)_bush_.*".to_owned(),
+    ]
 }
 
 fn validate_non_negative_f32(name: &str, value: f32) -> io::Result<()> {
@@ -509,6 +534,38 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.include_grass_ids, vec!["cli_.*"]);
+    }
+
+    #[test]
+    fn default_occluder_filter_excludes_tree_like_statics() {
+        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
+        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
+        let policy = config.policy().unwrap();
+
+        assert_eq!(
+            config.exclude_occluder_ids,
+            default_tree_occluder_exclude_ids()
+        );
+        assert!(!policy.occluder_filter.includes("flora_tree_wg_01"));
+        assert!(!policy.occluder_filter.includes("T_Sky_Flora_TreePine1_01"));
+        assert!(!policy.occluder_filter.includes("T_Cyr_FloraGC_Bush_01"));
+        assert!(policy.occluder_filter.includes("ex_common_rock_01"));
+    }
+
+    #[test]
+    fn persisted_empty_occluder_filter_overrides_default_tree_exclusions() {
+        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
+        let config = UnclipConfig::merge(
+            &args,
+            PersistedUnclipConfig {
+                exclude_occluder_ids: Some(Vec::new()),
+                ..PersistedUnclipConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(config.exclude_occluder_ids.is_empty());
     }
 
     #[test]

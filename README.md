@@ -241,7 +241,15 @@ orientation_epsilon = 1.0
 include_grass_ids = []
 exclude_grass_ids = []
 include_occluder_ids = []
-exclude_occluder_ids = []
+exclude_occluder_ids = [
+  "flora_(tree|ashtree|treestump|treedead|root)_.*",
+  "flora_(ash_)?log_.*",
+  "flora_bm_(treebranch|treestump|snowbranch|snowstump|(snow_)?log)_.*",
+  "flora_bc_(tree|knee|log)_.*",
+  "ex_t_(bigroot|root).*",
+  "t_.*flora.*(tree|branch|root|stump|log|palm).*",
+  "t_cyr_flora(gc|str)_bush_.*",
+]
 ```
 
 Key notes:
@@ -259,6 +267,7 @@ Key notes:
 - `[unclip].write_actions` selects which write fixes are allowed.
 - `[unclip].*_epsilon`, `relocation_step`, and `relocation_steps` tune inspection/write policy.
 - Include/exclude ID filters are case-insensitive regex lists.
+- Default occluder excludes skip common vanilla, Bloodmoon, and `Tamriel_Data` tree statics whose broad canopy bounds often produce false static-occlusion hits. Set `exclude_occluder_ids = []` to opt back into treating them as blockers.
 - Unknown TOML keys are rejected.
 
 ## Generated Shell Completions And Manpage
