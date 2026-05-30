@@ -495,6 +495,7 @@ pub(crate) fn find_valid_relocation_transform(
     } = transform;
     let original = [translation[0], translation[1]];
     let grass_bounds = bounds.world_aabb(translation, rotation, scale);
+    let contact_offset = contact.local_contact_offset(rotation, scale);
 
     for step in 1..=relocation.steps {
         let radius = f32::from(step) * relocation.step;
@@ -519,7 +520,11 @@ pub(crate) fn find_valid_relocation_transform(
             let mut candidate_translation = translation;
             candidate_translation[0] = candidate_xy[0];
             candidate_translation[1] = candidate_xy[1];
-            let contact_position = contact.world_position(candidate_translation, rotation, scale);
+            let contact_position = [
+                contact_offset[0] + candidate_translation[0],
+                contact_offset[1] + candidate_translation[1],
+                contact_offset[2] + candidate_translation[2],
+            ];
             let terrain_z = terrain.height_at(contact_position[0], contact_position[1])?;
             candidate_translation[2] -= contact_position[2] - terrain_z;
             let final_bounds = bounds.world_aabb(candidate_translation, rotation, scale);

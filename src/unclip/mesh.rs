@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     io,
+    sync::Mutex,
 };
 
 use glam::{Affine3A, EulerRot, Mat3, Vec3};
@@ -60,9 +61,16 @@ impl StaticMeshIndex {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct MeshContact {
-    pub vertices: Vec<[f32; 3]>,
+    vertices: Vec<[f32; 3]>,
+    transform_cache: Mutex<HashMap<ContactTransformKey, [f32; 3]>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ContactTransformKey {
+    rotation: [u32; 3],
+    scale: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,20 +93,83 @@ pub struct MeshGeometry {
 
 impl MeshContact {
     #[must_use]
+    pub fn new(vertices: Vec<[f32; 3]>) -> Self {
+        Self {
+            vertices,
+            transform_cache: Mutex::default(),
+        }
+    }
+
+    #[must_use]
     pub fn world_position(
         &self,
         translation: [f32; 3],
         rotation: [f32; 3],
         scale: Option<f32>,
     ) -> [f32; 3] {
+        let offset = self.local_contact_offset(rotation, scale);
+        [
+            offset[0] + translation[0],
+            offset[1] + translation[1],
+            offset[2] + translation[2],
+        ]
+    }
+
+    #[must_use]
+    pub(crate) fn local_contact_offset(&self, rotation: [f32; 3], scale: Option<f32>) -> [f32; 3] {
+        let scale = scale.unwrap_or(1.0);
+        let key = ContactTransformKey {
+            rotation: rotation.map(f32::to_bits),
+            scale: scale.to_bits(),
+        };
+
+        if let Some(offset) = self
+            .transform_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .copied()
+        {
+            return offset;
+        }
+
+        let offset = self.local_contact_offset_uncached(rotation, scale);
+        self.transform_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(key)
+            .or_insert(offset);
+        offset
+    }
+
+    #[cfg(test)]
+    fn cached_transform_count(&self) -> usize {
+        self.transform_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    fn local_contact_offset_uncached(&self, rotation: [f32; 3], scale: f32) -> [f32; 3] {
         // Match OpenMW's ESM-to-scene conversion: Z, then Y, then X, with negated axes.
         let rotation = Mat3::from_euler(EulerRot::ZYX, -rotation[2], -rotation[1], -rotation[0]);
-        let scale = scale.unwrap_or(1.0);
         self.vertices
             .iter()
-            .map(|vertex| rotation * (Vec3::from(*vertex) * scale) + Vec3::from(translation))
+            .map(|vertex| rotation * (Vec3::from(*vertex) * scale))
             .min_by(|left, right| left.z.total_cmp(&right.z))
-            .map_or(translation, |position| position.to_array())
+            .map_or([0.0; 3], |position| position.to_array())
+    }
+}
+
+impl Clone for MeshContact {
+    fn clone(&self) -> Self {
+        Self::new(self.vertices.clone())
+    }
+}
+
+impl PartialEq for MeshContact {
+    fn eq(&self, other: &Self) -> bool {
+        self.vertices == other.vertices
     }
 }
 
@@ -331,9 +402,7 @@ fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
     dedup_vertices_preserving_order(&mut vertices);
 
     Some(MeshGeometry {
-        contact: MeshContact {
-            vertices: vertices.iter().map(glam::Vec3::to_array).collect(),
-        },
+        contact: MeshContact::new(vertices.iter().map(glam::Vec3::to_array).collect()),
         bounds: MeshAabb {
             min: accumulated.min.to_array(),
             max: accumulated.max.to_array(),
@@ -487,14 +556,96 @@ mod tests {
 
     #[test]
     fn mesh_contact_world_z_applies_reference_transform() {
-        let contact = MeshContact {
-            vertices: vec![[0.0, 0.0, -10.0]],
-        };
+        let contact = MeshContact::new(vec![[0.0, 0.0, -10.0]]);
 
         assert!(
             (contact.world_position([1.0, 2.0, 100.0], [0.0; 3], Some(2.0))[2] - 80.0).abs()
                 < f32::EPSILON
         );
+    }
+
+    #[test]
+    fn mesh_contact_world_position_applies_openmw_axis_order() {
+        let contact = MeshContact::new(vec![[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+
+        let position = contact.world_position(
+            [10.0, 20.0, 30.0],
+            [std::f32::consts::FRAC_PI_2, 0.0, 0.0],
+            None,
+        );
+
+        assert_position_close(position, [10.0, 20.0, 29.0]);
+    }
+
+    #[test]
+    fn mesh_contact_world_position_uses_cached_transform_for_repeated_calls() {
+        let contact = test_contact();
+        let rotation = [0.1, 0.2, 0.3];
+        let scale = Some(1.5);
+
+        let first = contact.world_position([10.0, 20.0, 30.0], rotation, scale);
+        let second = contact.world_position([10.0, 20.0, 30.0], rotation, scale);
+
+        assert_position_close(
+            first,
+            reference_world_position(&contact, [10.0, 20.0, 30.0], rotation, scale),
+        );
+        assert_position_close(second, first);
+        assert_eq!(contact.cached_transform_count(), 1);
+    }
+
+    #[test]
+    fn mesh_contact_world_position_reuses_cached_offset_for_different_translations() {
+        let contact = test_contact();
+        let rotation = [0.1, 0.2, 0.3];
+        let scale = Some(1.5);
+
+        let first = contact.world_position([10.0, 20.0, 30.0], rotation, scale);
+        let second = contact.world_position([-5.0, 12.0, 80.0], rotation, scale);
+
+        assert_position_close(
+            first,
+            reference_world_position(&contact, [10.0, 20.0, 30.0], rotation, scale),
+        );
+        assert_position_close(
+            second,
+            reference_world_position(&contact, [-5.0, 12.0, 80.0], rotation, scale),
+        );
+        assert_eq!(contact.cached_transform_count(), 1);
+    }
+
+    #[test]
+    fn mesh_contact_world_position_caches_different_rotation_and_scale_separately() {
+        let contact = test_contact();
+
+        let first = contact.world_position([10.0, 20.0, 30.0], [0.1, 0.2, 0.3], Some(1.5));
+        let second = contact.world_position([10.0, 20.0, 30.0], [0.3, 0.2, 0.1], Some(0.75));
+
+        assert_position_close(
+            first,
+            reference_world_position(&contact, [10.0, 20.0, 30.0], [0.1, 0.2, 0.3], Some(1.5)),
+        );
+        assert_position_close(
+            second,
+            reference_world_position(&contact, [10.0, 20.0, 30.0], [0.3, 0.2, 0.1], Some(0.75)),
+        );
+        assert_eq!(contact.cached_transform_count(), 2);
+    }
+
+    #[test]
+    fn mesh_contact_world_position_normalizes_missing_scale_to_one() {
+        let contact = test_contact();
+        let rotation = [0.1, 0.2, 0.3];
+
+        let implicit = contact.world_position([10.0, 20.0, 30.0], rotation, None);
+        let explicit = contact.world_position([10.0, 20.0, 30.0], rotation, Some(1.0));
+
+        assert_position_close(implicit, explicit);
+        assert_position_close(
+            implicit,
+            reference_world_position(&contact, [10.0, 20.0, 30.0], rotation, None),
+        );
+        assert_eq!(contact.cached_transform_count(), 1);
     }
 
     #[test]
@@ -519,5 +670,29 @@ mod tests {
             normalize_mesh_key("Meshes/Grass/Foo.nif"),
             normalize_mesh_key("grass\\foo.nif")
         );
+    }
+
+    fn test_contact() -> MeshContact {
+        MeshContact::new(vec![[0.0, 0.0, -10.0], [5.0, -2.0, -3.0], [-4.0, 3.0, 2.0]])
+    }
+
+    fn reference_world_position(
+        contact: &MeshContact,
+        translation: [f32; 3],
+        rotation: [f32; 3],
+        scale: Option<f32>,
+    ) -> [f32; 3] {
+        let offset = contact.local_contact_offset_uncached(rotation, scale.unwrap_or(1.0));
+        [
+            offset[0] + translation[0],
+            offset[1] + translation[1],
+            offset[2] + translation[2],
+        ]
+    }
+
+    fn assert_position_close(actual: [f32; 3], expected: [f32; 3]) {
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 0.000_01);
+        }
     }
 }
