@@ -43,7 +43,9 @@ fn collect_winning_statics(
     for loaded in plugins_in_reverse_load_order {
         for static_record in loaded.plugin.objects_of_type::<Static>() {
             let lower_id = static_record.id.to_ascii_lowercase();
-            if !seen_static_ids.insert(lower_id.clone()) || !config.matches_static_id(&lower_id) {
+            if !seen_static_ids.insert(lower_id.clone())
+                || !config.matches_static(&static_record.id, &static_record.mesh)
+            {
                 continue;
             }
 

@@ -118,7 +118,7 @@ fn later_static_definition_wins_for_duplicate_ids() {
         ),
         loaded(
             1,
-            vec![static_record("flora_grass_01", "flora\\planter.nif").into()],
+            vec![static_record("flora_grass_01", "flora\\grass_late.nif").into()],
         ),
     ];
 
@@ -132,7 +132,7 @@ fn later_static_definition_wins_for_duplicate_ids() {
     );
     assert_eq!(
         plan.static_plans[0].output_static().unwrap().mesh,
-        "grass\\flora\\planter.nif"
+        "grass\\flora\\grass_late.nif"
     );
     assert!(plan.matched_static_ids.contains("flora_grass_01"));
 }
@@ -162,6 +162,28 @@ fn existing_grass_meshes_are_planned_for_copy_when_used() {
         plan.static_plans[0].output_static().unwrap().mesh,
         "Grass\\Sky_Flora_GS_01_01.nif"
     );
+}
+
+#[test]
+fn static_mesh_paths_can_match_grass_patterns() {
+    let plugins = vec![loaded(
+        0,
+        vec![
+            static_record("sky_flora_gs_01_01", "Grass\\Sky_Flora_GS_01_01.nif").into(),
+            exterior_cell("", [((0, 1), reference("sky_flora_gs_01_01"))]).into(),
+        ],
+    )];
+
+    let plan = build_conversion_plan(&plugins, &config());
+    let mesh_paths = plan.used_mesh_paths().unwrap();
+
+    assert_eq!(plan.static_plans.len(), 1);
+    assert!(plan.matched_static_ids.contains("sky_flora_gs_01_01"));
+    assert_eq!(plan.cell_plans[0].touched_refs, 1);
+    assert!(mesh_paths.contains(&mesh::MeshCopyPath {
+        source: "grass\\sky_flora_gs_01_01.nif".to_owned(),
+        target: "sky_flora_gs_01_01.nif".to_owned(),
+    }));
 }
 
 #[test]

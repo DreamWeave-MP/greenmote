@@ -110,7 +110,7 @@ Generated defaults are meant to be editable. Greenmote validates regular express
 
 Important behavior:
 
-- Matching is `STAT`-based. Greenmote searches static IDs using configured include and exclude regular expressions.
+- Matching is `STAT`-based. Greenmote searches static IDs and static mesh paths using configured include and exclude regular expressions.
 - Only exterior `CELL` records are scanned. Interiors are intentionally excluded.
 - Matching static definitions are selected in reverse load order, so later content wins.
 - Generated output includes only references touched by matching statics.
@@ -244,8 +244,8 @@ exclude_occluder_ids = []
 
 Key notes:
 
-- `[convert].grass_ids` is the include list for static IDs.
-- `[convert].exclude` removes matching static IDs from conversion.
+- `[convert].grass_ids` is the include list for static IDs or static mesh paths.
+- `[convert].exclude` removes matching static IDs or static mesh paths from conversion.
 - `[convert].ignored_plugins` removes matching plugin file names from conversion.
 - `[convert].dry_run`, `[convert].debug`, and `[convert].auto_enable` persist their corresponding Convert toggles.
 - `[unclip].plugin` is the default Unclip target plugin.

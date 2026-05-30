@@ -74,8 +74,8 @@ fn missing_config_default_initializes_next_to_user_config() {
     let config = get_config(args, &dir, default_output_directory.clone()).unwrap();
 
     assert_eq!(config.output_directory, default_output_directory);
-    assert!(config.matches_static_id("flora_grass_01"));
-    assert!(!config.matches_static_id("ab_furn_impplantergrass"));
+    assert!(config.matches_static("flora_grass_01", "flora\\grass.nif"));
+    assert!(!config.matches_static("ab_furn_impplantergrass", "flora\\grass.nif"));
     assert!(default_config_path(&dir).is_file());
     let contents = read_to_string(default_config_path(&dir)).unwrap();
     assert!(contents.contains("[convert]"));
@@ -344,6 +344,34 @@ fn invalid_regex_fails_validation() {
     };
 
     assert!(config.compile_regex_sets().is_err());
+}
+
+#[test]
+fn convert_match_regexes_are_case_insensitive() {
+    let mut config = GroundcoverConfig {
+        grass_ids: vec!["FERN".to_owned()],
+        exclude: vec!["PLANTER".to_owned()],
+        ignored_plugins: vec!["GENERATED".to_owned()],
+        ..GroundcoverConfig::default()
+    };
+    config.compile_regex_sets().unwrap();
+
+    assert!(config.matches_static("flora_fern_01", "flora\\fern.nif"));
+    assert!(!config.matches_static("flora_fern_planter", "flora\\fern.nif"));
+    assert!(config.is_ignored_plugin_name("my-generated-plugin.esp"));
+}
+
+#[test]
+fn convert_match_patterns_apply_to_static_mesh_paths() {
+    let mut config = GroundcoverConfig {
+        grass_ids: vec!["grass".to_owned()],
+        exclude: vec!["grassplane".to_owned()],
+        ..GroundcoverConfig::default()
+    };
+    config.compile_regex_sets().unwrap();
+
+    assert!(config.matches_static("sky_flora_gs_01_01", "Grass/Sky_Flora_GS_01_01.nif"));
+    assert!(!config.matches_static("harmless_id", "flora/grassplane.nif"));
 }
 
 #[test]

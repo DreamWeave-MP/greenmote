@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use regex::RegexSet;
+use regex::{RegexSet, RegexSetBuilder};
 
 use crate::{
     groundcover::{GroundcoverArgs, default, openmw},
@@ -39,14 +39,14 @@ pub struct GroundcoverConfig {
 
     pub(crate) output_directory_source: openmw::ConvertOutputDirectorySource,
 
-    /// Case-insensitive regex fragments used to include static IDs for conversion.
+    /// Case-insensitive regex fragments used to include static IDs or mesh paths for conversion.
     ///
     /// These values are compiled into private caches before conversion. Mutating them on an already
     /// loaded value does not by itself run a conversion; use the public command entry points for real
     /// work so validation and cache refresh happen in the intended order.
     pub grass_ids: Vec<String>,
 
-    /// Case-insensitive regex fragments used to exclude static IDs from conversion.
+    /// Case-insensitive regex fragments used to exclude static IDs or mesh paths from conversion.
     ///
     /// These values are compiled into private caches before conversion. See [`Self::grass_ids`] for
     /// the mutation caveat.
@@ -245,17 +245,20 @@ impl GroundcoverConfig {
     ///
     /// Returns an invalid-data error if any configured regex is malformed.
     pub(crate) fn compile_regex_sets(&mut self) -> io::Result<()> {
-        self.include_set = RegexSet::new(&self.grass_ids).map_err(to_io_error)?;
-        self.exclude_set = RegexSet::new(&self.exclude).map_err(to_io_error)?;
-        self.ignored_plugin_set = RegexSet::new(&self.ignored_plugins).map_err(to_io_error)?;
+        self.include_set = case_insensitive_regex_set(&self.grass_ids)?;
+        self.exclude_set = case_insensitive_regex_set(&self.exclude)?;
+        self.ignored_plugin_set = case_insensitive_regex_set(&self.ignored_plugins)?;
 
         Ok(())
     }
 
-    /// Returns whether a static ID is included by `grass_ids` and not excluded by `exclude`.
+    /// Returns whether a static record is included by `grass_ids` and not excluded by `exclude`.
     #[must_use]
-    pub(crate) fn matches_static_id(&self, id: &str) -> bool {
-        self.include_set.is_match(id) && !self.exclude_set.is_match(id)
+    pub(crate) fn matches_static(&self, id: &str, mesh: &str) -> bool {
+        let normalized_mesh = mesh.replace('/', "\\");
+        let included = self.include_set.is_match(id) || self.include_set.is_match(&normalized_mesh);
+        let excluded = self.exclude_set.is_match(id) || self.exclude_set.is_match(&normalized_mesh);
+        included && !excluded
     }
 
     /// Returns whether a plugin filename matches the ignored-plugin regex set.
@@ -263,6 +266,13 @@ impl GroundcoverConfig {
     pub(crate) fn is_ignored_plugin_name(&self, plugin_name: &str) -> bool {
         self.ignored_plugin_set.is_match(plugin_name)
     }
+}
+
+fn case_insensitive_regex_set(patterns: &[String]) -> io::Result<RegexSet> {
+    RegexSetBuilder::new(patterns)
+        .case_insensitive(true)
+        .build()
+        .map_err(to_io_error)
 }
 
 pub(crate) fn regenerate_for_edit(
