@@ -25,7 +25,7 @@ impl StaticOccluderIndex {
         let mut cells = BTreeMap::<CellCoord, Vec<usize>>::new();
         let mut large_occluders = Vec::new();
         for (index, occluder) in occluders.iter().enumerate() {
-            if let Some(occluder_cells) = cells_for_bounds(occluder.bounds) {
+            if let Some(occluder_cells) = cell_span_for_bounds(occluder.bounds) {
                 for cell in occluder_cells {
                     cells.entry(cell).or_default().push(index);
                 }
@@ -42,7 +42,7 @@ impl StaticOccluderIndex {
 
     pub(crate) fn candidates_for(&self, bounds: WorldAabb) -> Vec<&StaticOccluder> {
         let mut indices = BTreeSet::new();
-        if let Some(cells) = cells_for_bounds(bounds) {
+        if let Some(cells) = cell_span_for_bounds(bounds) {
             for cell in cells {
                 if let Some(cell_indices) = self.cells.get(&cell) {
                     indices.extend(cell_indices.iter().copied());
@@ -60,28 +60,53 @@ impl StaticOccluderIndex {
     }
 
     pub(crate) fn intersects_volume(&self, bounds: WorldAabb) -> bool {
-        self.candidates_for(bounds)
-            .into_iter()
+        if let Some(cells) = cell_span_for_bounds(bounds) {
+            for cell in cells {
+                if let Some(cell_indices) = self.cells.get(&cell)
+                    && cell_indices
+                        .iter()
+                        .any(|&index| self.intersects_index(bounds, index))
+                {
+                    return true;
+                }
+            }
+
+            return self
+                .large_occluders
+                .iter()
+                .any(|&index| self.intersects_index(bounds, index));
+        }
+
+        self.occluders
+            .iter()
             .any(|occluder| bounds.intersection(occluder.bounds).is_some())
+    }
+
+    fn intersects_index(&self, bounds: WorldAabb, index: usize) -> bool {
+        self.occluders
+            .get(index)
+            .is_some_and(|occluder| bounds.intersection(occluder.bounds).is_some())
     }
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn cells_for_bounds(bounds: WorldAabb) -> Option<Vec<CellCoord>> {
+fn cell_span_for_bounds(bounds: WorldAabb) -> Option<CellSpan> {
     let min_x = cell_coord(bounds.min[0]);
     let min_y = cell_coord(bounds.min[1]);
-    let max_x = cell_coord(previous_f32(bounds.max[0]));
-    let max_y = cell_coord(previous_f32(bounds.max[1]));
-    if max_x - min_x >= MAX_INDEXED_CELL_SPAN || max_y - min_y >= MAX_INDEXED_CELL_SPAN {
+    let max_x = exclusive_max_cell_coord(bounds.max[0]);
+    let max_y = exclusive_max_cell_coord(bounds.max[1]);
+    if i64::from(max_x) - i64::from(min_x) >= i64::from(MAX_INDEXED_CELL_SPAN)
+        || i64::from(max_y) - i64::from(min_y) >= i64::from(MAX_INDEXED_CELL_SPAN)
+    {
         return None;
     }
-    let mut cells = Vec::new();
-    for y in min_y..=max_y {
-        for x in min_x..=max_x {
-            cells.push((x, y));
-        }
-    }
-    Some(cells)
+    Some(CellSpan {
+        min_x,
+        max_x,
+        max_y,
+        next_x: min_x,
+        next_y: min_y,
+    })
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -89,19 +114,37 @@ fn cell_coord(position: f32) -> i32 {
     (position / CELL_SIZE).floor() as i32
 }
 
-fn previous_f32(value: f32) -> f32 {
-    if value.is_nan() || value == f32::NEG_INFINITY {
-        return value;
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn exclusive_max_cell_coord(position: f32) -> i32 {
+    ((position / CELL_SIZE).ceil() as i32).saturating_sub(1)
+}
+
+#[derive(Clone)]
+struct CellSpan {
+    min_x: i32,
+    max_x: i32,
+    max_y: i32,
+    next_x: i32,
+    next_y: i32,
+}
+
+impl Iterator for CellSpan {
+    type Item = CellCoord;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_y > self.max_y || self.next_x > self.max_x {
+            return None;
+        }
+
+        let cell = (self.next_x, self.next_y);
+        if self.next_x == self.max_x {
+            self.next_x = self.min_x;
+            self.next_y += 1;
+        } else {
+            self.next_x += 1;
+        }
+        Some(cell)
     }
-    if value == 0.0 {
-        return -f32::MIN_POSITIVE;
-    }
-    let bits = value.to_bits();
-    f32::from_bits(if value.is_sign_positive() {
-        bits - 1
-    } else {
-        bits + 1
-    })
 }
 
 pub(crate) enum StaticBoundsAction<'a> {
@@ -171,6 +214,14 @@ pub(crate) fn static_bounds_occlusion_ratio(
         return 0.0;
     }
 
+    if let [occluder] = occluders {
+        return grass_bounds
+            .intersection(*occluder)
+            .map_or(0.0, |intersection| {
+                (intersection.volume() / grass_volume).min(1.0)
+            });
+    }
+
     let intersections = occluders
         .iter()
         .filter_map(|occluder| grass_bounds.intersection(*occluder))
@@ -235,8 +286,8 @@ pub(crate) fn translate_bounds_xy(bounds: WorldAabb, x: f32, y: f32) -> WorldAab
 #[cfg(test)]
 mod tests {
     use super::{
-        StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
-        static_bounds_occlusion_ratio,
+        StaticBoundsAction, StaticOccluder, StaticOccluderIndex, cell_span_for_bounds,
+        decide_static_bounds_action, static_bounds_occlusion_ratio,
     };
     use crate::unclip::mesh::WorldAabb;
 
@@ -321,6 +372,42 @@ mod tests {
     }
 
     #[test]
+    fn static_occluder_index_intersects_cross_cell_occluders_without_dedup() {
+        let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
+            [8190.0, 0.0, 0.0],
+            [8200.0, 10.0, 10.0],
+        ))]);
+
+        let query = aabb([8191.0, 0.0, 0.0], [8193.0, 10.0, 10.0]);
+
+        assert_eq!(occluders.candidates_for(query).len(), 1);
+        assert!(occluders.intersects_volume(query));
+    }
+
+    #[test]
+    fn static_occluder_index_intersects_large_occluders() {
+        let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
+            [0.0, 0.0, 0.0],
+            [8192.0 * 40.0, 10.0, 10.0],
+        ))]);
+
+        assert!(occluders.intersects_volume(aabb(
+            [8192.0 * 20.0, 0.0, 0.0],
+            [8192.0 * 20.0 + 1.0, 1.0, 1.0],
+        )));
+    }
+
+    #[test]
+    fn static_occluder_index_reports_no_volume_intersection_for_duplicate_cell_hits() {
+        let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
+            [8190.0, 0.0, 0.0],
+            [8200.0, 10.0, 10.0],
+        ))]);
+
+        assert!(!occluders.intersects_volume(aabb([8191.0, 0.0, 10.0], [8193.0, 10.0, 20.0],)));
+    }
+
+    #[test]
     fn static_occluder_index_ignores_distant_cells() {
         let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
             [0.0, 0.0, 0.0],
@@ -377,6 +464,27 @@ mod tests {
         assert!(!occluders.intersects_volume(aabb([5.0, 5.0, 10.0], [15.0, 15.0, 20.0],)));
     }
 
+    #[test]
+    fn cell_span_treats_max_bounds_as_exclusive() {
+        assert_eq!(
+            cells_for_test(aabb([0.0, 0.0, 0.0], [8192.0, 8192.0, 1.0])),
+            vec![(0, 0)]
+        );
+        assert_eq!(
+            cells_for_test(aabb([-8192.0, -8192.0, 0.0], [0.0, 0.0, 1.0])),
+            vec![(-1, -1)]
+        );
+    }
+
+    #[test]
+    fn cell_span_includes_crossed_cells_and_empty_zero_width_bounds() {
+        assert_eq!(
+            cells_for_test(aabb([8191.0, 0.0, 0.0], [8193.0, 1.0, 1.0])),
+            vec![(0, 0), (1, 0)]
+        );
+        assert!(cells_for_test(aabb([0.0, 0.0, 0.0], [0.0, 1.0, 1.0])).is_empty());
+    }
+
     fn aabb(min: [f32; 3], max: [f32; 3]) -> WorldAabb {
         WorldAabb { min, max }
     }
@@ -388,6 +496,10 @@ mod tests {
             reference_key: [1, 2],
             bounds,
         }
+    }
+
+    fn cells_for_test(bounds: WorldAabb) -> Vec<(i32, i32)> {
+        cell_span_for_bounds(bounds).into_iter().flatten().collect()
     }
 
     fn assert_close(actual: f32, expected: f32) {
