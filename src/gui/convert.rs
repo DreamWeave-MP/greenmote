@@ -12,7 +12,6 @@ use super::{ConvertRunOptions, GreenmoteApp, UiText, UnclipRunOptions};
 const MAX_EVENTS_PER_FRAME: usize = 256;
 const MIN_WIDGET_SIZE: f32 = 1.0;
 const UNCLIP_RUN_OPTIONS_WIDTH: f32 = 420.0;
-const TOP_CONTROLS_RIGHT_MARGIN: f32 = 8.0;
 
 #[derive(Default)]
 pub(super) struct ConvertUiState {
@@ -177,29 +176,25 @@ impl GreenmoteApp {
     pub(super) fn show_convert_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // Keep the controls row at its natural height. The output area below owns
         // the remaining vertical space so dry-run results stay visible.
-        let unclip_right = ui
-            .horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    self.show_convert_heading(ui);
-                    self.show_convert_panel(ui);
-                });
-                let unclip_spacer =
-                    ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
-                ui.add_space(unclip_spacer.max(0.0));
-                let unclip_response = ui.vertical(|ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
-                        ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
-                        self.show_unclip_heading(ui);
-                        self.show_unclip_panel(ui);
-                    });
-                });
-                ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
-                unclip_response.response.rect.right()
-            })
-            .inner;
-        self.show_convert_action_row(ui, ctx, unclip_right);
+        self.show_convert_heading(ui);
+        self.show_convert_panel(ui);
+        self.show_convert_action_row(ui, ctx);
         ui.separator();
 
+        self.show_run_output(ui, ctx);
+    }
+
+    pub(super) fn show_unclip_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.show_unclip_heading(ui);
+        self.show_unclip_panel(ui);
+        self.show_unclip_action_row(ui, ctx);
+        ui.separator();
+
+        self.show_run_output(ui, ctx);
+        self.show_unclip_write_confirmation(ctx);
+    }
+
+    fn show_run_output(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("convert_output_actions")
             .resizable(false)
             .show_separator_line(true)
@@ -218,8 +213,6 @@ impl GreenmoteApp {
                         .selectable(false),
                 );
             });
-
-        self.show_unclip_write_confirmation(ctx);
     }
 
     fn show_convert_panel(&mut self, ui: &mut egui::Ui) {
@@ -233,18 +226,8 @@ impl GreenmoteApp {
     }
 
     fn show_unclip_heading(&self, ui: &mut egui::Ui) {
-        let row_height = ui
-            .spacing()
-            .interact_size
-            .y
-            .max(ui.text_style_height(&egui::TextStyle::Heading));
-        ui.allocate_ui_with_layout(
-            egui::vec2(UNCLIP_RUN_OPTIONS_WIDTH, row_height),
-            egui::Layout::right_to_left(egui::Align::Center),
-            |ui| {
-                ui.heading(self.localizer.text(UiText::Unclip));
-            },
-        );
+        ui.set_min_width(300.0);
+        ui.heading(self.localizer.text(UiText::Unclip));
     }
 
     fn show_unclip_panel(&mut self, ui: &mut egui::Ui) {
@@ -316,63 +299,20 @@ impl GreenmoteApp {
         });
     }
 
-    fn show_convert_action_row(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        unclip_right: f32,
-    ) {
+    fn show_convert_action_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add_space(8.0);
-        let row_height = ui.spacing().interact_size.y;
-        let available_rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        ui.horizontal(|ui| {
+            self.show_start_conversion_button(ui, ctx);
+            self.show_action_row_status(ui);
+        });
+    }
 
-        let (row_rect, _) = ui.allocate_exact_size(
-            egui::vec2(finite_widget_extent(available_rect.width()), row_height),
-            egui::Sense::hover(),
-        );
-        let left_rect = row_rect;
-
-        let left_response = ui
-            .scope_builder(
-                egui::UiBuilder::new()
-                    .max_rect(left_rect)
-                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                |ui| self.show_start_conversion_button(ui, ctx),
-            )
-            .inner;
-
-        let item_spacing = ui.spacing().item_spacing.x;
-        // Align to the measured Unclip column edge instead of reconstructing spacer geometry.
-        let right_edge = unclip_right.min(row_rect.right()).max(row_rect.left());
-        let right_rect = egui::Rect::from_min_max(
-            egui::pos2(
-                (right_edge - UNCLIP_RUN_OPTIONS_WIDTH).max(row_rect.left()),
-                row_rect.top(),
-            ),
-            egui::pos2(right_edge.max(row_rect.left()), row_rect.bottom()),
-        );
-
-        let right_response = ui
-            .scope_builder(
-                egui::UiBuilder::new()
-                    .max_rect(right_rect)
-                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
-                |ui| self.show_unclip_action_button(ui, ctx),
-            )
-            .inner;
-
-        let status_rect = egui::Rect::from_min_max(
-            egui::pos2(left_response.rect.right() + item_spacing, row_rect.top()),
-            egui::pos2(right_response.rect.left() - item_spacing, row_rect.bottom()),
-        );
-        if status_rect.width() > 0.0 {
-            ui.scope_builder(
-                egui::UiBuilder::new().max_rect(status_rect).layout(
-                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                ),
-                |ui| self.show_action_row_status(ui),
-            );
-        }
+    fn show_unclip_action_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            self.show_unclip_action_button(ui, ctx);
+            self.show_action_row_status(ui);
+        });
     }
 
     fn show_start_conversion_button(

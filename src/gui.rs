@@ -30,6 +30,7 @@ struct GreenmoteApp {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AppTab {
     Convert,
+    Unclip,
     Settings,
 }
 
@@ -85,6 +86,16 @@ impl GreenmoteApp {
             }
 
             if ui
+                .add(egui::Button::selectable(
+                    self.selected_tab == AppTab::Unclip,
+                    self.localizer.text(UiText::Unclip),
+                ))
+                .clicked()
+            {
+                self.request_unclip();
+            }
+
+            if ui
                 .add_enabled(
                     !self.convert.is_running(),
                     egui::Button::selectable(
@@ -102,6 +113,7 @@ impl GreenmoteApp {
     fn show_active_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         match self.selected_tab {
             AppTab::Convert => self.show_convert_screen(ui, ctx),
+            AppTab::Unclip => self.show_unclip_screen(ui, ctx),
             AppTab::Settings => self.show_settings_screen(ui, ctx),
         }
     }
@@ -118,21 +130,30 @@ impl GreenmoteApp {
     }
 
     fn request_convert(&mut self) {
+        self.request_tab(AppTab::Convert);
+    }
+
+    fn request_unclip(&mut self) {
+        self.request_tab(AppTab::Unclip);
+    }
+
+    fn request_tab(&mut self, tab: AppTab) {
+        if self.selected_tab == tab {
+            return;
+        }
+
         if self.selected_tab != AppTab::Settings {
+            self.selected_tab = tab;
             return;
         }
 
         self.settings.commit_active_list_edit();
 
         if self.settings.is_dirty() {
-            self.queue_pending_navigation(PendingNavigation::Tab(AppTab::Convert));
+            self.queue_pending_navigation(PendingNavigation::Tab(tab));
         } else {
-            self.show_convert();
+            self.selected_tab = tab;
         }
-    }
-
-    fn show_convert(&mut self) {
-        self.selected_tab = AppTab::Convert;
     }
 
     fn check_initial_config(&mut self) {
