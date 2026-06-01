@@ -13,6 +13,7 @@ mod mesh;
 mod model;
 mod occlusion;
 mod orientation;
+mod physics;
 mod report;
 mod setup;
 mod static_occluders;
@@ -23,7 +24,7 @@ mod write_policy;
 mod write_status;
 mod writer;
 
-pub use args::{PlacementModelArg, UnclipArgs, WriteActionArg};
+pub use args::{UnclipArgs, WriteActionArg};
 
 /// Runs the groundcover unclipping subcommand.
 ///

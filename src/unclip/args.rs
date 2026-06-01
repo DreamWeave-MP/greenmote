@@ -36,10 +36,6 @@ pub struct UnclipArgs {
     #[arg(long = "meshgenerator-ini", value_name = "INI")]
     pub meshgenerator_ini: Option<PathBuf>,
 
-    /// Placement model used for terrain Z and orientation sampling.
-    #[arg(long = "placement-model", value_enum)]
-    pub placement_model: Option<PlacementModelArg>,
-
     /// Emit the compact summary as machine-readable JSON.
     #[arg(long = "structured", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
     pub structured: Option<bool>,
@@ -89,18 +85,6 @@ pub struct UnclipArgs {
     pub exclude_occluder_ids: Vec<String>,
 }
 
-/// Placement model used by Unclip terrain fixes.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-pub enum PlacementModelArg {
-    /// Infer contact-vs-origin anchoring per mesh from the target plugin and terrain.
-    Auto,
-    /// Treat visible mesh contact as the placement anchor.
-    Contact,
-    /// Treat reference origin as the placement anchor and infer its terrain-relative Z offset.
-    Origin,
-}
-
 /// Write actions accepted by `unclip --write-actions` and `[unclip].write_actions`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[non_exhaustive]
@@ -123,7 +107,6 @@ pub enum WriteActionArg {
 #[derive(Clone, Debug)]
 pub(crate) struct UnclipPolicy {
     pub(crate) write_actions: WriteActions,
-    pub(crate) placement_model: PlacementModelArg,
     pub(crate) contact_epsilon: f32,
     pub(crate) origin_epsilon: f32,
     pub(crate) orientation_epsilon_degrees: f32,
@@ -166,7 +149,6 @@ impl UnclipArgs {
             openmw_cfg: None,
             plugin: plugin.clone(),
             meshgenerator_ini: self.meshgenerator_ini.clone(),
-            placement_model: self.placement_model.unwrap_or(PlacementModelArg::Auto),
             verbose: self.verbose.or(self.instances).unwrap_or(false),
             structured: self.structured.unwrap_or(false),
             write: self.write.unwrap_or(false),
@@ -205,7 +187,6 @@ impl crate::unclip::config::UnclipConfig {
         let write_actions = WriteActions::from_args(&self.write_actions)?;
         Ok(UnclipPolicy {
             write_actions,
-            placement_model: self.placement_model,
             contact_epsilon: self.contact_epsilon,
             origin_epsilon: self.origin_epsilon,
             orientation_epsilon_degrees: self.orientation_epsilon,
@@ -218,16 +199,6 @@ impl crate::unclip::config::UnclipConfig {
             occluder_filter: IdFilter::new(&self.include_occluder_ids, &self.exclude_occluder_ids)
                 .map_err(|error| format!("invalid occluder id filter: {error}"))?,
         })
-    }
-}
-
-impl PlacementModelArg {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Contact => "contact",
-            Self::Origin => "origin",
-        }
     }
 }
 

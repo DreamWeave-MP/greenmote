@@ -156,7 +156,7 @@ Inspection mode:
 - Writes detailed per-reference diagnostics to `greenmote.log` with `--verbose`.
 - Keeps `--instances` as a deprecated alias for `--verbose`.
 - Emits machine-readable compact JSON with `--structured`.
-- Infers whether each mesh is contact-anchored or generator-style origin-anchored before planning terrain Z fixes.
+- Samples reference origins for terrain Z fixes and orientation. Terrain Z writes and static relocation require an inferred terrain-relative origin offset.
 - Accepts `--meshgenerator-ini INI` as an optional hint for plugins produced by `mw-groundcover-generator`; the target plugin's measured terrain-relative residuals remain the source of truth.
 
 Write mode:
@@ -182,8 +182,7 @@ Policy knobs:
 - `--relocation-step` controls horizontal spacing for static-bounds relocation probes.
 - `--relocation-steps` controls how many relocation probe rings are attempted.
 - `--orientation-epsilon` controls the tilt angle treated as already aligned.
-- `--placement-model auto|contact|origin` selects the placement anchor policy. `auto` is the default and infers per mesh; `contact` always uses visible mesh contact; `origin` always uses the reference origin with an inferred terrain-relative Z offset.
-- `--meshgenerator-ini` reads `mw-groundcover-generator` mesh lists as optional hints for `auto`; inferred origin-anchored refs preserve `ref.z = terrain_z_at_origin + offset` within the generator-style 4-unit tolerance.
+- `--meshgenerator-ini` reads `mw-groundcover-generator` mesh lists as optional hints for origin-offset inference; measured target-plugin residuals remain the source of truth, and inferred refs preserve `ref.z = terrain_z_at_origin + offset` within the generator-style 4-unit tolerance.
 - `--include-grass-id` and `--exclude-grass-id` filter target groundcover reference IDs with case-insensitive regexes.
 - `--include-occluder-id` and `--exclude-occluder-id` filter static occluder IDs with case-insensitive regexes.
 
@@ -228,7 +227,6 @@ auto_enable = false
 [unclip]
 plugin = "groundcover.omwaddon"
 meshgenerator_ini = "mesh_generator_ini_files/groundcover.ini"
-placement_model = "auto"
 verbose = false
 structured = false
 write = false
@@ -259,8 +257,7 @@ Key notes:
 - `[convert].ignored_plugins` removes matching plugin file names from conversion.
 - `[convert].dry_run`, `[convert].debug`, and `[convert].auto_enable` persist their corresponding Convert toggles.
 - `[unclip].plugin` is the default Unclip target plugin.
-- `[unclip].placement_model` defaults to `auto`; use `contact` or `origin` only to override inference deliberately.
-- `[unclip].meshgenerator_ini` provides optional `mw-groundcover-generator` mesh-list hints for automatic placement-model inference.
+- `[unclip].meshgenerator_ini` provides optional `mw-groundcover-generator` mesh-list hints for origin placement inference.
 - `[unclip].verbose` writes detailed per-reference diagnostics to `greenmote.log`; `[unclip].instances` is still accepted as a deprecated compatibility alias.
 - `[unclip].structured` switches the compact stdout summary to JSON.
 - `[unclip].write` arms CLI write mode from config; use this carefully.

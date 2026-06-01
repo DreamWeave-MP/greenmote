@@ -127,7 +127,6 @@ mod tests {
             Some(std::path::PathBuf::from("groundcover.omwaddon"))
         );
         assert_eq!(args.meshgenerator_ini, None);
-        assert_eq!(args.placement_model, None);
         assert_eq!(args.instances, None);
         assert_eq!(args.verbose, None);
         assert_eq!(args.structured, None);
@@ -161,24 +160,31 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_unclip_placement_model() {
-        let cli = Cli::parse_from([
+    fn parser_rejects_removed_unclip_placement_model() {
+        let error = Cli::try_parse_from([
             "greenmote",
             "unclip",
             "--plugin",
             "groundcover.omwaddon",
             "--placement-model",
-            "origin",
+            "contact",
         ]);
 
-        let Some(Command::Unclip(args)) = cli.command else {
-            panic!("unclip command should parse");
-        };
+        assert!(error.is_err());
+    }
 
-        assert_eq!(
-            args.placement_model,
-            Some(crate::unclip::PlacementModelArg::Origin)
-        );
+    #[test]
+    fn parser_rejects_removed_unclip_auto_placement_model() {
+        let error = Cli::try_parse_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--placement-model",
+            "auto",
+        ]);
+
+        assert!(error.is_err());
     }
 
     #[test]

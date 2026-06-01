@@ -379,7 +379,6 @@ fn write_policy_summary_text(
         policy.write_actions.join(", ")
     };
     writeln!(stdout, "  write actions: {actions}")?;
-    writeln!(stdout, "  placement model: {}", policy.placement_model)?;
     if policy.has_target_filter() {
         writeln!(
             stdout,

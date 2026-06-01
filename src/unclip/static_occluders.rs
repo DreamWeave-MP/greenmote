@@ -7,6 +7,7 @@ use super::{
     cells::CellCoord,
     mesh::{MeshCache, StaticMeshIndex, WorldAabb},
     occlusion::{StaticOccluder, StaticOccluderIndex},
+    physics::RapierCollider,
 };
 
 const HUGE_OCCLUDER_FOOTPRINT_SIDE: f32 = 4096.0;
@@ -86,6 +87,12 @@ pub(crate) fn build_static_occluders(
             cell: [key.cell.0, key.cell.1],
             reference_key: [key.reference.0, key.reference.1],
             bounds: world_bounds,
+            collider: RapierCollider::from_mesh_bounds(
+                bounds,
+                reference.translation,
+                reference.rotation,
+                reference.scale,
+            ),
         });
     }
 

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{cells::CellCoord, mesh::WorldAabb};
+use super::{cells::CellCoord, mesh::WorldAabb, physics::RapierCollider};
 
 const CELL_SIZE: f32 = 8192.0;
 const MAX_INDEXED_CELL_SPAN: i32 = 32;
@@ -11,6 +11,7 @@ pub(crate) struct StaticOccluder {
     pub(crate) cell: [i32; 2],
     pub(crate) reference_key: [u32; 2],
     pub(crate) bounds: WorldAabb,
+    pub(crate) collider: RapierCollider,
 }
 
 #[derive(Default)]
@@ -59,13 +60,19 @@ impl StaticOccluderIndex {
             .collect()
     }
 
+    #[cfg(test)]
     pub(crate) fn intersects_volume(&self, bounds: WorldAabb) -> bool {
+        self.intersects_shape(&RapierCollider::from_world_aabb(bounds))
+    }
+
+    pub(crate) fn intersects_shape(&self, collider: &RapierCollider) -> bool {
+        let bounds = collider.bounds();
         if let Some(cells) = cell_span_for_bounds(bounds) {
             for cell in cells {
                 if let Some(cell_indices) = self.cells.get(&cell)
                     && cell_indices
                         .iter()
-                        .any(|&index| self.intersects_index(bounds, index))
+                        .any(|&index| self.intersects_shape_index(collider, index))
                 {
                     return true;
                 }
@@ -74,19 +81,24 @@ impl StaticOccluderIndex {
             return self
                 .large_occluders
                 .iter()
-                .any(|&index| self.intersects_index(bounds, index));
+                .any(|&index| self.intersects_shape_index(collider, index));
         }
 
         self.occluders
             .iter()
-            .any(|occluder| bounds.intersection(occluder.bounds).is_some())
+            .any(|occluder| shape_intersects(occluder, collider))
     }
 
-    fn intersects_index(&self, bounds: WorldAabb, index: usize) -> bool {
+    fn intersects_shape_index(&self, collider: &RapierCollider, index: usize) -> bool {
         self.occluders
             .get(index)
-            .is_some_and(|occluder| bounds.intersection(occluder.bounds).is_some())
+            .is_some_and(|occluder| shape_intersects(occluder, collider))
     }
+}
+
+fn shape_intersects(occluder: &StaticOccluder, collider: &RapierCollider) -> bool {
+    occluder.bounds.intersection(collider.bounds()).is_some()
+        && occluder.collider.intersects(collider)
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
@@ -147,6 +159,7 @@ impl Iterator for CellSpan {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum StaticBoundsAction<'a> {
     None,
     Delete {
@@ -159,15 +172,16 @@ pub(crate) enum StaticBoundsAction<'a> {
     },
 }
 
-pub(crate) fn decide_static_bounds_action(
+pub(crate) fn decide_static_bounds_action<'a>(
     grass_bounds: WorldAabb,
-    static_occluders: &StaticOccluderIndex,
-) -> StaticBoundsAction<'_> {
+    grass_collider: &RapierCollider,
+    static_occluders: &'a StaticOccluderIndex,
+) -> StaticBoundsAction<'a> {
     let candidates = static_occluders.candidates_for(grass_bounds);
     if let Some(occluder) = candidates
         .iter()
         .copied()
-        .find(|occluder| occluder.bounds.contains(grass_bounds))
+        .find(|occluder| occluder.collider.contains(grass_collider))
     {
         return StaticBoundsAction::Delete {
             ratio: 1.0,
@@ -175,6 +189,10 @@ pub(crate) fn decide_static_bounds_action(
         };
     }
 
+    let candidates = candidates
+        .into_iter()
+        .filter(|occluder| shape_intersects(occluder, grass_collider))
+        .collect::<Vec<_>>();
     let candidate_bounds = candidates
         .iter()
         .map(|occluder| occluder.bounds)
@@ -276,20 +294,16 @@ fn sort_dedup_f32(values: &mut Vec<f32>) {
     values.dedup_by(|left, right| (*left - *right).abs() <= f32::EPSILON);
 }
 
-pub(crate) fn translate_bounds_xy(bounds: WorldAabb, x: f32, y: f32) -> WorldAabb {
-    WorldAabb {
-        min: [bounds.min[0] + x, bounds.min[1] + y, bounds.min[2]],
-        max: [bounds.max[0] + x, bounds.max[1] + y, bounds.max[2]],
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, cell_span_for_bounds,
         decide_static_bounds_action, static_bounds_occlusion_ratio,
     };
-    use crate::unclip::mesh::WorldAabb;
+    use crate::unclip::{
+        mesh::{MeshAabb, WorldAabb},
+        physics::RapierCollider,
+    };
 
     #[test]
     fn static_bounds_occlusion_ratio_counts_intersection_volume() {
@@ -317,8 +331,41 @@ mod tests {
         ))]);
 
         assert!(matches!(
-            decide_static_bounds_action(grass, &occluders),
+            decide_static_bounds_action(grass, &RapierCollider::from_world_aabb(grass), &occluders),
             StaticBoundsAction::None
+        ));
+    }
+
+    #[test]
+    fn static_bounds_action_ignores_broad_aabb_overlap_without_shape_collision() {
+        let grass_collider =
+            RapierCollider::from_world_aabb(aabb([-0.25, 3.25, -0.25], [0.25, 3.75, 0.25]));
+        let grass = grass_collider.bounds();
+        let occluders = StaticOccluderIndex::new(vec![static_occluder_from_collider(
+            RapierCollider::from_mesh_bounds(
+                mesh_aabb([-5.0, -0.5, -0.5], [5.0, 0.5, 0.5]),
+                [0.0; 3],
+                [0.0, 0.0, std::f32::consts::FRAC_PI_4],
+                None,
+            ),
+        )]);
+
+        assert!(occluders.candidates_for(grass).len() == 1);
+        assert!(matches!(
+            decide_static_bounds_action(grass, &grass_collider, &occluders),
+            StaticBoundsAction::None
+        ));
+    }
+
+    #[test]
+    fn static_bounds_action_detects_actual_shape_collision() {
+        let grass = RapierCollider::from_world_aabb(aabb([0.0; 3], [2.0; 3]));
+        let occluders =
+            StaticOccluderIndex::new(vec![static_occluder(aabb([1.0, 1.0, 1.0], [3.0; 3]))]);
+
+        assert!(matches!(
+            decide_static_bounds_action(grass.bounds(), &grass, &occluders),
+            StaticBoundsAction::Move { .. }
         ));
     }
 
@@ -330,7 +377,11 @@ mod tests {
             [11.0, 11.0, 11.0],
         ))]);
 
-        match decide_static_bounds_action(grass, &occluders) {
+        match decide_static_bounds_action(
+            grass,
+            &RapierCollider::from_world_aabb(grass),
+            &occluders,
+        ) {
             StaticBoundsAction::Delete { ratio, occluder } => {
                 assert_close(ratio, 1.0);
                 assert_eq!(occluder.id, "rock");
@@ -347,7 +398,11 @@ mod tests {
             [10.0, 10.0, 10.0],
         ))]);
 
-        match decide_static_bounds_action(grass, &occluders) {
+        match decide_static_bounds_action(
+            grass,
+            &RapierCollider::from_world_aabb(grass),
+            &occluders,
+        ) {
             StaticBoundsAction::Move { ratio, occluder } => {
                 assert_close(ratio, 0.5);
                 assert_eq!(occluder.id, "rock");
@@ -489,12 +544,22 @@ mod tests {
         WorldAabb { min, max }
     }
 
+    fn mesh_aabb(min: [f32; 3], max: [f32; 3]) -> MeshAabb {
+        MeshAabb { min, max }
+    }
+
     fn static_occluder(bounds: WorldAabb) -> StaticOccluder {
+        static_occluder_from_collider(RapierCollider::from_world_aabb(bounds))
+    }
+
+    fn static_occluder_from_collider(collider: RapierCollider) -> StaticOccluder {
+        let bounds = collider.bounds();
         StaticOccluder {
             id: "rock".to_owned(),
             cell: [0, 0],
             reference_key: [1, 2],
             bounds,
+            collider,
         }
     }
 

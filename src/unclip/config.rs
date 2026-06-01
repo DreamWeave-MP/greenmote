@@ -12,7 +12,7 @@ use super::{
     UnclipArgs,
     args::{
         DEFAULT_ORIENTATION_EPSILON_DEGREES, DEFAULT_RELOCATION_STEP, DEFAULT_RELOCATION_STEPS,
-        PlacementModelArg, WriteActionArg, default_write_actions,
+        WriteActionArg, default_write_actions,
     },
     model::{CONTACT_TERRAIN_EPSILON, ORIGIN_TERRAIN_EPSILON},
 };
@@ -22,7 +22,6 @@ pub(crate) struct UnclipConfig {
     pub(crate) openmw_cfg: Option<PathBuf>,
     pub(crate) plugin: PathBuf,
     pub(crate) meshgenerator_ini: Option<PathBuf>,
-    pub(crate) placement_model: PlacementModelArg,
     pub(crate) verbose: bool,
     pub(crate) structured: bool,
     pub(crate) write: bool,
@@ -46,9 +45,6 @@ pub(crate) struct PersistedUnclipConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) meshgenerator_ini: Option<PathBuf>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) placement_model: Option<PlacementModelArg>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) instances: Option<bool>,
@@ -144,10 +140,6 @@ impl UnclipConfig {
                 .meshgenerator_ini
                 .clone()
                 .or(persisted.meshgenerator_ini),
-            placement_model: args
-                .placement_model
-                .or(persisted.placement_model)
-                .unwrap_or(PlacementModelArg::Auto),
             verbose: args
                 .verbose
                 .or(args.instances)
@@ -215,7 +207,6 @@ impl PersistedUnclipConfig {
     pub(crate) fn generated_default() -> Self {
         Self {
             verbose: Some(false),
-            placement_model: Some(PlacementModelArg::Auto),
             structured: Some(false),
             write: Some(false),
             write_actions: Some(default_write_actions()),
@@ -369,26 +360,29 @@ mod tests {
     }
 
     #[test]
-    fn cli_placement_model_overrides_persisted_model() {
-        let args = unclip_args(&[
+    fn placement_model_cli_flag_is_unknown() {
+        let result = Cli::try_parse_from([
             "greenmote",
             "unclip",
             "--plugin",
             "cli.omwaddon",
             "--placement-model",
-            "origin",
+            "contact",
         ]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                placement_model: Some(PlacementModelArg::Contact),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
 
-        assert_eq!(config.placement_model, PlacementModelArg::Origin);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn persisted_placement_model_key_fails_toml_parse() {
+        let result = PersistedUnclipConfig::from_toml(
+            r#"
+[unclip]
+placement_model = "contact"
+"#,
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]

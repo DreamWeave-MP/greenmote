@@ -99,7 +99,6 @@ pub(crate) struct UnclipReportContextInput<'a> {
 #[derive(Clone, Serialize)]
 pub(crate) struct UnclipPolicySummary {
     pub(crate) write_actions: Vec<&'static str>,
-    pub(crate) placement_model: &'static str,
     pub(crate) origin_terrain_epsilon: f32,
     pub(crate) mesh_contact_terrain_epsilon: f32,
     pub(crate) orientation_epsilon_degrees: f32,
@@ -115,7 +114,6 @@ impl UnclipPolicySummary {
     fn from_policy(policy: &UnclipPolicy) -> Self {
         Self {
             write_actions: policy.write_actions.enabled_names(),
-            placement_model: policy.placement_model.label(),
             origin_terrain_epsilon: policy.origin_epsilon,
             mesh_contact_terrain_epsilon: policy.contact_epsilon,
             orientation_epsilon_degrees: policy.orientation_epsilon_degrees,
@@ -150,7 +148,6 @@ impl UnclipReportContext {
             static_occluder_report: StaticOccluderBuildReport::default(),
             policy: UnclipPolicySummary {
                 write_actions: vec!["terrain-z", "static-delete", "static-move", "orient"],
-                placement_model: "auto",
                 origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
                 mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
                 orientation_epsilon_degrees: 1.0,

@@ -282,6 +282,25 @@ impl GreenmoteApp {
                     egui::vec2(group_content_width, ui.spacing().interact_size.y),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
+                        ui.label(self.localizer.text(UiText::MeshGeneratorIni));
+                        ui.add(
+                            egui::TextEdit::singleline(
+                                &mut self.convert.unclip.run_options.meshgenerator_ini,
+                            )
+                            .desired_width(190.0),
+                        );
+                        if ui.button(self.localizer.text(UiText::Browse)).clicked()
+                            && let Some(path) = select_meshgenerator_ini_file(self.localizer)
+                        {
+                            self.convert.unclip.run_options.meshgenerator_ini =
+                                path.display().to_string();
+                        }
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    egui::vec2(group_content_width, ui.spacing().interact_size.y),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
                         ui.checkbox(
                             &mut self.convert.unclip.run_options.write,
                             self.localizer.text(UiText::WriteChangesToPlugin),
@@ -1209,6 +1228,13 @@ fn select_plugin_file(localizer: super::Localizer) -> Option<std::path::PathBuf>
         .pick_file()
 }
 
+fn select_meshgenerator_ini_file(localizer: super::Localizer) -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .set_title(localizer.text(UiText::SelectMeshGeneratorIni))
+        .add_filter("INI", &["ini"])
+        .pick_file()
+}
+
 #[cfg(target_os = "windows")]
 fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
     vec![OpenCommand {
@@ -1348,6 +1374,7 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
             plugin: "target.omwaddon".to_owned(),
+            meshgenerator_ini: String::new(),
             verbose: false,
             write: true,
         };
@@ -1372,6 +1399,7 @@ mod tests {
         app.settings.clear_unclip_write_actions_for_test();
         app.convert.unclip.run_options = UnclipRunOptions {
             plugin: "target.omwaddon".to_owned(),
+            meshgenerator_ini: String::new(),
             verbose: false,
             write: true,
         };

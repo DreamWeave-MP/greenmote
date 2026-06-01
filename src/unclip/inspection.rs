@@ -16,6 +16,7 @@ use super::{
         StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
     },
     orientation::orientation_angle_degrees,
+    physics::RapierCollider,
     target::TargetRefIndex,
     terrain::TerrainIndex,
     write_plan::{WriteStaticBoundsAnalysis, WriteStatusIndex},
@@ -80,7 +81,6 @@ fn count_reference(
         static_occluders: context.static_occluders,
         policy: context.policy,
         write: context.write,
-        contact_baselines: context.contact_baselines,
         generated_placements: context.generated_placements,
     };
     let mesh_contact = resolve_ref_mesh_contact(
@@ -166,7 +166,6 @@ fn inspect_reference(
         static_occluders: context.static_occluders,
         policy: context.policy,
         write: context.write,
-        contact_baselines: context.contact_baselines,
         generated_placements: context.generated_placements,
     };
     let mesh_contact = resolve_ref_mesh_contact(
@@ -410,7 +409,6 @@ struct StaticBoundsContext<'a> {
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
     write: Option<&'a WriteStatusIndex>,
-    contact_baselines: &'a ContactBaselineIndex,
     generated_placements: &'a GeneratedPlacementIndex,
 }
 
@@ -434,77 +432,35 @@ fn classify_static_bounds_occlusion(
         return Some(static_bounds_details_from_write_analysis(report, analysis));
     }
     let mut corrected_translation = input.reference.translation;
-    let contact_position = contact.world_position(
-        input.reference.translation,
-        input.reference.rotation,
-        input.reference.scale,
-    );
-    let contact_baseline = input.context.contact_baselines.get(&input.reference.id);
     let generated_placement = input.context.generated_placements.get(static_mesh);
-    if let Some(terrain_z) = contact_terrain_z(
+    if let Some(terrain_z) = origin_terrain_z(
         input.context.terrain,
         input.reference.translation,
-        contact_position,
-        contact_baseline,
         generated_placement,
     ) {
-        corrected_translation[2] -= terrain_delta(
-            input.reference.translation,
-            contact_position,
-            terrain_z,
-            contact_baseline,
-            generated_placement,
-        );
+        corrected_translation[2] -=
+            terrain_delta(input.reference.translation, terrain_z, generated_placement);
     }
-    let corrected_bounds = bounds.world_aabb(
+    let (corrected_bounds, corrected_collider) = corrected_static_bounds(
+        *bounds,
         corrected_translation,
         input.reference.rotation,
         input.reference.scale,
     );
-    let action = decide_static_bounds_action(corrected_bounds, input.context.static_occluders);
-    let (status, ratio, occluder) = match action {
-        StaticBoundsAction::None => ("static_bounds_clear", 0.0, None),
-        StaticBoundsAction::Delete { ratio, occluder }
-            if input.context.policy.write_actions.static_move()
-                && can_relocate_static_bounds(
-                    input,
-                    contact,
-                    *bounds,
-                    corrected_translation,
-                    generated_placement,
-                ) =>
-        {
-            record_static_bounds_report_counts(report, "static_bounds_relocatable");
-            ("static_bounds_relocatable", ratio, Some(occluder.clone()))
-        }
-        StaticBoundsAction::Delete { ratio, occluder } => {
-            record_static_bounds_report_counts(report, "static_bounds_fully_occluded");
-            (
-                "static_bounds_fully_occluded",
-                ratio,
-                Some(occluder.clone()),
-            )
-        }
-        StaticBoundsAction::Move {
-            ratio, occluder, ..
-        } if can_relocate_static_bounds(
-            input,
-            contact,
-            *bounds,
-            corrected_translation,
-            generated_placement,
-        ) =>
-        {
-            record_static_bounds_report_counts(report, "static_bounds_relocatable");
-            ("static_bounds_relocatable", ratio, Some(occluder.clone()))
-        }
-        StaticBoundsAction::Move {
-            ratio, occluder, ..
-        } => {
-            record_static_bounds_report_counts(report, "static_bounds_blocked");
-            ("static_bounds_blocked", ratio, Some(occluder.clone()))
-        }
-    };
+    let action = decide_static_bounds_action(
+        corrected_bounds,
+        &corrected_collider,
+        input.context.static_occluders,
+    );
+    let (status, ratio, occluder) = classify_static_bounds_action(
+        report,
+        action,
+        input,
+        contact,
+        *bounds,
+        corrected_translation,
+        generated_placement,
+    );
 
     let intersection_volume = occluder
         .as_ref()
@@ -521,7 +477,7 @@ fn classify_static_bounds_occlusion(
 
 fn can_relocate_static_bounds(
     input: StaticBoundsOcclusionInput<'_, '_>,
-    contact: &MeshContact,
+    _contact: &MeshContact,
     bounds: MeshAabb,
     corrected_translation: [f32; 3],
     generated_placement: Option<GeneratedPlacement>,
@@ -534,43 +490,45 @@ fn can_relocate_static_bounds(
             scale: input.reference.scale,
         },
         RelocationSearchContext {
-            contact,
             bounds,
             terrain: input.context.terrain,
             static_occluders: input.context.static_occluders,
             relocation: input.context.policy.relocation,
-            contact_baseline: input.context.contact_baselines.get(&input.reference.id),
             generated_placement,
         },
     )
     .is_some()
 }
 
-fn contact_terrain_z(
+fn corrected_static_bounds(
+    bounds: MeshAabb,
+    translation: [f32; 3],
+    rotation: [f32; 3],
+    scale: Option<f32>,
+) -> (WorldAabb, RapierCollider) {
+    (
+        bounds.world_aabb(translation, rotation, scale),
+        RapierCollider::from_mesh_bounds(bounds, translation, rotation, scale),
+    )
+}
+
+fn origin_terrain_z(
     terrain: &TerrainIndex,
     translation: [f32; 3],
-    contact_position: [f32; 3],
-    contact_baseline: ContactBaseline,
     generated_placement: Option<GeneratedPlacement>,
 ) -> Option<f32> {
-    if generated_placement.is_some() || contact_baseline.is_calibrated() {
-        terrain.height_at(translation[0], translation[1])
-    } else {
-        terrain.height_at(contact_position[0], contact_position[1])
-    }
+    generated_placement?;
+    terrain.height_at(translation[0], translation[1])
 }
 
 fn terrain_delta(
     translation: [f32; 3],
-    contact_position: [f32; 3],
     terrain_z: f32,
-    contact_baseline: ContactBaseline,
     generated_placement: Option<GeneratedPlacement>,
 ) -> f32 {
-    generated_placement.map_or_else(
-        || contact_position[2] - terrain_z - contact_baseline.delta,
-        |placement| translation[2] - terrain_z - placement.z_offset,
-    )
+    generated_placement.map_or(0.0, |placement| {
+        translation[2] - terrain_z - placement.z_offset
+    })
 }
 
 fn static_bounds_details_from_write_analysis(
@@ -581,17 +539,72 @@ fn static_bounds_details_from_write_analysis(
     StaticBoundsOcclusionDetails {
         status: analysis.status,
         ratio: analysis.ratio,
-        occluder: analysis.occluder_id.as_ref().map(|id| StaticOccluder {
-            id: id.clone(),
-            cell: analysis.occluder_cell.unwrap_or([0, 0]),
-            reference_key: analysis.occluder_reference_key.unwrap_or([0, 0]),
-            bounds: analysis.occluder_bounds.unwrap_or(WorldAabb {
+        occluder: analysis.occluder_id.as_ref().map(|id| {
+            let bounds = analysis.occluder_bounds.unwrap_or(WorldAabb {
                 min: [0.0; 3],
                 max: [0.0; 3],
-            }),
+            });
+            StaticOccluder {
+                id: id.clone(),
+                cell: analysis.occluder_cell.unwrap_or([0, 0]),
+                reference_key: analysis.occluder_reference_key.unwrap_or([0, 0]),
+                bounds,
+                collider: RapierCollider::from_world_aabb(bounds),
+            }
         }),
         target_bounds: analysis.target_bounds,
         intersection_volume: analysis.intersection_volume,
+    }
+}
+
+fn classify_static_bounds_action(
+    report: &mut TerrainInspectionReport,
+    action: StaticBoundsAction<'_>,
+    input: StaticBoundsOcclusionInput<'_, '_>,
+    contact: &MeshContact,
+    bounds: MeshAabb,
+    corrected_translation: [f32; 3],
+    generated_placement: Option<GeneratedPlacement>,
+) -> (&'static str, f32, Option<StaticOccluder>) {
+    match action {
+        StaticBoundsAction::None => ("static_bounds_clear", 0.0, None),
+        StaticBoundsAction::Delete { ratio, occluder }
+            if input.context.policy.write_actions.static_move()
+                && can_relocate_static_bounds(
+                    input,
+                    contact,
+                    bounds,
+                    corrected_translation,
+                    generated_placement,
+                ) =>
+        {
+            record_static_bounds_report_counts(report, "static_bounds_relocatable");
+            ("static_bounds_relocatable", ratio, Some(occluder.clone()))
+        }
+        StaticBoundsAction::Delete { ratio, occluder } => {
+            record_static_bounds_report_counts(report, "static_bounds_fully_occluded");
+            (
+                "static_bounds_fully_occluded",
+                ratio,
+                Some(occluder.clone()),
+            )
+        }
+        StaticBoundsAction::Move { ratio, occluder }
+            if can_relocate_static_bounds(
+                input,
+                contact,
+                bounds,
+                corrected_translation,
+                generated_placement,
+            ) =>
+        {
+            record_static_bounds_report_counts(report, "static_bounds_relocatable");
+            ("static_bounds_relocatable", ratio, Some(occluder.clone()))
+        }
+        StaticBoundsAction::Move { ratio, occluder } => {
+            record_static_bounds_report_counts(report, "static_bounds_blocked");
+            ("static_bounds_blocked", ratio, Some(occluder.clone()))
+        }
     }
 }
 
@@ -825,8 +838,7 @@ mod tests {
         classify_static_bounds_occlusion, deleted_reference_inspection,
     };
     use crate::unclip::{
-        args::{IdFilter, PlacementModelArg, RelocationPolicy, UnclipPolicy, WriteActions},
-        contact_baseline::ContactBaselineIndex,
+        args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
         generated_placement::GeneratedPlacementIndex,
         mesh::{MeshAabb, MeshContact, StaticMesh, WorldAabb},
         model::TerrainInspectionReport,
@@ -871,7 +883,6 @@ mod tests {
 
         let terrain = TerrainIndex::from_landscapes(std::iter::empty());
         let static_occluders = StaticOccluderIndex::default();
-        let contact_baselines = ContactBaselineIndex::default();
         let generated_placements = GeneratedPlacementIndex::default();
         let policy = test_policy();
         let reference = reference_at_z(10.0);
@@ -887,7 +898,6 @@ mod tests {
                     static_occluders: &static_occluders,
                     policy: &policy,
                     write: Some(&write),
-                    contact_baselines: &contact_baselines,
                     generated_placements: &generated_placements,
                 },
             },
@@ -920,7 +930,6 @@ mod tests {
 
         let terrain = TerrainIndex::from_landscapes(std::iter::empty());
         let static_occluders = StaticOccluderIndex::default();
-        let contact_baselines = ContactBaselineIndex::default();
         let generated_placements = GeneratedPlacementIndex::default();
         let policy = test_policy();
         let reference = reference_at_z(10.0);
@@ -936,7 +945,6 @@ mod tests {
                     static_occluders: &static_occluders,
                     policy: &policy,
                     write: Some(&write),
-                    contact_baselines: &contact_baselines,
                     generated_placements: &generated_placements,
                 },
             },
@@ -985,7 +993,6 @@ mod tests {
     fn test_policy() -> UnclipPolicy {
         UnclipPolicy {
             write_actions: WriteActions::all(),
-            placement_model: PlacementModelArg::Auto,
             contact_epsilon: 0.5,
             origin_epsilon: 0.5,
             orientation_epsilon_degrees: 1.0,

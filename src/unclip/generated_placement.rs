@@ -3,18 +3,15 @@ use std::{collections::BTreeMap, io, path::Path};
 use tes3::esp::Plugin;
 
 use super::{
-    args::PlacementModelArg,
-    mesh::{MeshCache, StaticMesh, StaticMeshIndex},
+    mesh::{StaticMesh, StaticMeshIndex},
     target::TargetRefIndex,
     terrain::TerrainIndex,
 };
 
 const DEFAULT_ORIGIN_TOLERANCE: f32 = 4.0;
 const MIN_INFERRED_SAMPLES: usize = 16;
-const MIN_AUTO_MODE_SHARE: f32 = 0.35;
 const MIN_HINTED_MODE_SHARE: f32 = 0.20;
-const MAX_AUTO_ORIGIN_P05_P95_SPREAD: f32 = DEFAULT_ORIGIN_TOLERANCE * 2.0;
-const MIN_CONTACT_P05_P95_SPREAD: f32 = 12.0;
+const MIN_ORIGIN_MODE_SHARE: f32 = 0.35;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GeneratedPlacementIndex {
@@ -35,34 +32,21 @@ struct IniSection {
 
 impl GeneratedPlacementIndex {
     pub(crate) fn build(
-        placement_model: PlacementModelArg,
         meshgenerator_ini: Option<&Path>,
         plugin: &Plugin,
         target_refs: &TargetRefIndex,
         terrain: &TerrainIndex,
         static_index: &StaticMeshIndex,
-        mesh_contacts: &mut MeshCache<'_>,
     ) -> io::Result<Self> {
-        if placement_model == PlacementModelArg::Contact {
-            return Ok(Self::default());
-        }
-
         let hints =
             meshgenerator_ini.map_or_else(|| Ok(BTreeMap::new()), read_meshgenerator_hints)?;
-        let mut samples = OriginPlacementSamples::collect(
-            plugin,
-            target_refs,
-            terrain,
-            static_index,
-            mesh_contacts,
-            &hints,
-        );
+        let samples =
+            OriginPlacementSamples::collect(plugin, target_refs, terrain, static_index, &hints);
         let placements_by_mesh = samples
             .groups
-            .iter_mut()
+            .iter()
             .filter_map(|(mesh_key, group)| {
-                inferred_placement(placement_model, group)
-                    .map(|placement| (mesh_key.clone(), placement))
+                inferred_placement(group).map(|placement| (mesh_key.clone(), placement))
             })
             .collect();
 
@@ -107,7 +91,6 @@ struct OriginPlacementSamples {
 #[derive(Clone, Debug, Default)]
 struct OriginPlacementSampleGroup {
     origin_residuals: Vec<f32>,
-    contact_residuals: Vec<f32>,
     rounded_origin_residuals: BTreeMap<i32, usize>,
     hinted: bool,
 }
@@ -124,7 +107,6 @@ impl OriginPlacementSamples {
         target_refs: &TargetRefIndex,
         terrain: &TerrainIndex,
         static_index: &StaticMeshIndex,
-        mesh_contacts: &mut MeshCache<'_>,
         hints: &BTreeMap<String, f32>,
     ) -> Self {
         let mut groups = BTreeMap::<String, OriginPlacementSampleGroup>::new();
@@ -150,17 +132,6 @@ impl OriginPlacementSamples {
                 .rounded_origin_residuals
                 .entry(origin_residual.round() as i32)
                 .or_default() += 1;
-
-            if let Ok(geometry) = mesh_contacts.geometry(static_mesh) {
-                let contact = geometry.contact.world_position(
-                    reference.translation,
-                    reference.rotation,
-                    reference.scale,
-                );
-                if let Some(contact_terrain_z) = terrain.height_at(contact[0], contact[1]) {
-                    group.contact_residuals.push(contact[2] - contact_terrain_z);
-                }
-            }
         }
 
         Self { groups }
@@ -168,21 +139,18 @@ impl OriginPlacementSamples {
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn inferred_placement(
-    placement_model: PlacementModelArg,
-    group: &mut OriginPlacementSampleGroup,
-) -> Option<GeneratedPlacement> {
+fn inferred_placement(group: &OriginPlacementSampleGroup) -> Option<GeneratedPlacement> {
     if group.origin_residuals.len() < MIN_INFERRED_SAMPLES {
         return None;
     }
     let (z_offset, mode_count) = modal_origin_residual(group)?;
     let mode_share = mode_count as f32 / group.origin_residuals.len() as f32;
-    let inferred = match placement_model {
-        PlacementModelArg::Contact => false,
-        PlacementModelArg::Origin => true,
-        PlacementModelArg::Auto => origin_model_is_better(group, mode_share),
+    let minimum_mode_share = if group.hinted {
+        MIN_HINTED_MODE_SHARE
+    } else {
+        MIN_ORIGIN_MODE_SHARE
     };
-    inferred.then_some(GeneratedPlacement {
+    (mode_share >= minimum_mode_share).then_some(GeneratedPlacement {
         z_offset: z_offset as f32,
         tolerance: DEFAULT_ORIGIN_TOLERANCE,
     })
@@ -198,44 +166,6 @@ fn modal_origin_residual(group: &OriginPlacementSampleGroup) -> Option<(i32, usi
                 .then_with(|| right_offset.cmp(left_offset))
         })
         .map(|(&offset, &count)| (offset, count))
-}
-
-fn origin_model_is_better(group: &mut OriginPlacementSampleGroup, mode_share: f32) -> bool {
-    let minimum_mode_share = if group.hinted {
-        MIN_HINTED_MODE_SHARE
-    } else {
-        MIN_AUTO_MODE_SHARE
-    };
-    if mode_share < minimum_mode_share {
-        return false;
-    }
-    let origin_spread = percentile_spread(&mut group.origin_residuals, 0.05, 0.95);
-    if origin_spread > MAX_AUTO_ORIGIN_P05_P95_SPREAD {
-        return false;
-    }
-    let contact_spread = percentile_spread(&mut group.contact_residuals, 0.05, 0.95);
-    group.contact_residuals.len() < MIN_INFERRED_SAMPLES
-        || contact_spread >= MIN_CONTACT_P05_P95_SPREAD
-        || contact_spread > origin_spread * 2.0
-}
-
-fn percentile_spread(samples: &mut [f32], low: f32, high: f32) -> f32 {
-    if samples.is_empty() {
-        return f32::INFINITY;
-    }
-    samples.sort_by(f32::total_cmp);
-    percentile_sorted(samples, high) - percentile_sorted(samples, low)
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss
-)]
-fn percentile_sorted(samples: &[f32], percentile: f32) -> f32 {
-    let max_index = samples.len() - 1;
-    let index = (max_index as f32 * percentile).round() as usize;
-    samples[index.min(max_index)]
 }
 
 fn read_meshgenerator_hints(path: &Path) -> io::Result<BTreeMap<String, f32>> {
@@ -327,7 +257,6 @@ fn normalize_mesh_key(mesh_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{GeneratedPlacementIndex, OriginPlacementSampleGroup, inferred_placement};
-    use crate::unclip::args::PlacementModelArg;
     use crate::unclip::mesh::StaticMesh;
 
     #[test]
@@ -375,22 +304,20 @@ mod tests {
     }
 
     #[test]
-    fn auto_infers_origin_model_when_origin_residuals_are_tight() {
+    fn origin_model_infers_modal_origin_residual() {
         let mut group = OriginPlacementSampleGroup::default();
         for _ in 0..40 {
             group.origin_residuals.push(21.1);
             *group.rounded_origin_residuals.entry(21).or_default() += 1;
-            group.contact_residuals.push(-30.0);
-            group.contact_residuals.push(30.0);
         }
 
-        let placement = inferred_placement(PlacementModelArg::Auto, &mut group).unwrap();
+        let placement = inferred_placement(&group).unwrap();
 
         assert!((placement.z_offset - 21.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn auto_keeps_contact_model_when_origin_residuals_are_broad() {
+    fn origin_model_rejects_weak_modal_origin_residual() {
         let mut group = OriginPlacementSampleGroup::default();
         for offset in 0_i16..40 {
             let residual = f32::from(offset);
@@ -399,10 +326,9 @@ mod tests {
                 .rounded_origin_residuals
                 .entry(i32::from(offset))
                 .or_default() += 1;
-            group.contact_residuals.push(0.1);
         }
 
-        assert!(inferred_placement(PlacementModelArg::Auto, &mut group).is_none());
+        assert!(inferred_placement(&group).is_none());
     }
 
     #[test]
@@ -413,7 +339,7 @@ mod tests {
             *group.rounded_origin_residuals.entry(rounded).or_default() += 1;
         }
 
-        let placement = inferred_placement(PlacementModelArg::Origin, &mut group).unwrap();
+        let placement = inferred_placement(&group).unwrap();
 
         assert!((placement.z_offset - 21.0).abs() < f32::EPSILON);
     }

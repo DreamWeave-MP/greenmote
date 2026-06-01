@@ -54,7 +54,6 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         &target_refs,
         &terrain,
         &target_static_index,
-        &mut mesh_cache,
     )?;
     let contact_baselines = build_contact_baselines(
         &target_plugin_data,
@@ -92,7 +91,6 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
             mesh_contacts: &mut mesh_cache,
             static_occluders: &static_occluders,
             policy: &policy,
-            contact_baselines: &contact_baselines,
             generated_placements: &generated_placements,
         },
         write_actions_enabled,
@@ -311,16 +309,13 @@ fn load_generated_placements(
     target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
-    mesh_contacts: &mut MeshCache<'_>,
 ) -> io::Result<GeneratedPlacementIndex> {
     GeneratedPlacementIndex::build(
-        config.placement_model,
         config.meshgenerator_ini.as_deref(),
         plugin,
         target_refs,
         terrain,
         static_index,
-        mesh_contacts,
     )
 }
 
@@ -355,7 +350,7 @@ fn write_log_footer(
 #[cfg(test)]
 mod tests {
     use crate::unclip::{
-        args::{PlacementModelArg, WriteActionArg},
+        args::WriteActionArg,
         config::UnclipConfig,
         contact_baseline::ContactBaselineIndex,
         model::{TerrainInspectionReport, UnclipReportContext},
@@ -370,7 +365,6 @@ mod tests {
             openmw_cfg: None,
             plugin: "plugin.omwaddon".into(),
             meshgenerator_ini: None,
-            placement_model: PlacementModelArg::Auto,
             verbose: true,
             structured: true,
             write: true,
@@ -422,7 +416,6 @@ mod tests {
             openmw_cfg: None,
             plugin: "plugin.omwaddon".into(),
             meshgenerator_ini: None,
-            placement_model: PlacementModelArg::Auto,
             verbose: false,
             structured: false,
             write: true,

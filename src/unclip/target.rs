@@ -87,9 +87,7 @@ impl TargetRefIndex {
 mod tests {
     use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
-    use crate::unclip::args::{
-        IdFilter, PlacementModelArg, RelocationPolicy, UnclipPolicy, WriteActions,
-    };
+    use crate::unclip::args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions};
 
     use super::TargetRefIndex;
 
@@ -208,7 +206,6 @@ mod tests {
     fn test_policy_with_filter(include_ids: &[&str], exclude_ids: &[&str]) -> UnclipPolicy {
         UnclipPolicy {
             write_actions: WriteActions::all(),
-            placement_model: PlacementModelArg::Auto,
             contact_epsilon: 0.5,
             origin_epsilon: 0.5,
             orientation_epsilon_degrees: 1.0,
