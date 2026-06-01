@@ -338,6 +338,17 @@ struct StaticBoundsPlanningContext<'a> {
     generated_placement: Option<GeneratedPlacement>,
 }
 
+#[derive(Clone, Copy)]
+struct StaticBoundsMovePlanInput<'a, 'b> {
+    target: WriteTarget,
+    reference: &'a tes3::esp::Reference,
+    corrected_translation: [f32; 3],
+    corrected_bounds: WorldAabb,
+    geometry: &'a MeshGeometry,
+    context: StaticBoundsPlanningContext<'a>,
+    cause: StaticBoundsMoveCause<'b>,
+}
+
 fn plan_static_bounds_change(
     changes: &mut WriteReferenceChanges,
     target: WriteTarget,
@@ -416,34 +427,70 @@ fn plan_static_bounds_change(
             occluder,
             reason,
         } if context.policy.write_actions.static_move() => {
-            let move_ = try_static_bounds_move(
-                target,
-                reference,
-                corrected_translation,
-                relocation_search_context(geometry, context),
-                StaticBoundsMoveCause {
-                    ratio,
-                    occluder,
-                    reason,
+            return plan_static_bounds_move_change(
+                changes,
+                StaticBoundsMovePlanInput {
+                    target,
+                    reference,
+                    corrected_translation,
+                    corrected_bounds,
+                    geometry,
+                    context,
+                    cause: StaticBoundsMoveCause {
+                        ratio,
+                        occluder,
+                        reason,
+                    },
                 },
             );
-            changes.static_bounds_analysis = Some(static_bounds_analysis(
-                target,
-                static_bounds_move_status(reason, move_.is_some()),
-                ratio,
-                Some(occluder),
-                corrected_bounds,
-            ));
-            let Some(move_) = move_ else {
-                return StaticBoundsPlanResult::FinishTerrainAndOrientation(reference.translation);
-            };
-            let new_position = move_.new_position;
-            changes.move_ = Some(move_);
-            return StaticBoundsPlanResult::Continue(new_position);
         }
         StaticBoundsAction::Move { .. } => {}
     }
     StaticBoundsPlanResult::Continue(reference.translation)
+}
+
+fn plan_static_bounds_move_change(
+    changes: &mut WriteReferenceChanges,
+    input: StaticBoundsMovePlanInput<'_, '_>,
+) -> StaticBoundsPlanResult {
+    let move_ = try_static_bounds_move(
+        input.target,
+        input.reference,
+        input.corrected_translation,
+        relocation_search_context(input.geometry, input.context),
+        input.cause,
+    );
+    let status = static_bounds_move_status(input.cause.reason, move_.is_some());
+    changes.static_bounds_analysis = Some(static_bounds_analysis(
+        input.target,
+        status,
+        input.cause.ratio,
+        Some(input.cause.occluder),
+        input.corrected_bounds,
+    ));
+    let Some(move_) = move_ else {
+        if input.context.policy.write_actions.static_delete() {
+            changes.static_bounds_analysis = Some(static_bounds_analysis(
+                input.target,
+                static_bounds_failed_relocation_delete_status(input.cause.reason),
+                input.cause.ratio,
+                Some(input.cause.occluder),
+                input.corrected_bounds,
+            ));
+            changes.deletion = Some(static_bounds_deletion(
+                input.target.cell,
+                input.target.key,
+                input.reference,
+                input.cause.ratio,
+                input.cause.occluder,
+            ));
+            return StaticBoundsPlanResult::Stop;
+        }
+        return StaticBoundsPlanResult::FinishTerrainAndOrientation(input.reference.translation);
+    };
+    let new_position = move_.new_position;
+    changes.move_ = Some(move_);
+    StaticBoundsPlanResult::Continue(new_position)
 }
 
 fn corrected_static_bounds(
@@ -468,6 +515,15 @@ const fn static_bounds_move_status(
         (StaticBoundsBlockReason::Clearance, false) => "static_clearance_blocked",
         (StaticBoundsBlockReason::Volume, true) => "static_bounds_relocatable",
         (StaticBoundsBlockReason::Volume, false) => "static_bounds_blocked",
+    }
+}
+
+const fn static_bounds_failed_relocation_delete_status(
+    reason: StaticBoundsBlockReason,
+) -> &'static str {
+    match reason {
+        StaticBoundsBlockReason::Clearance => "static_clearance_deleted_no_relocation",
+        StaticBoundsBlockReason::Volume => "static_bounds_deleted_no_relocation",
     }
 }
 
@@ -1081,7 +1137,79 @@ mod tests {
         };
         assert!(changes.move_.is_some());
         assert!(changes.deletion.is_none());
+        assert_eq!(
+            changes.static_bounds_analysis.unwrap().status,
+            "static_bounds_relocatable"
+        );
         assert_close(new_position[0], 32.0);
+    }
+
+    #[test]
+    fn clearance_move_failure_deletes_when_static_delete_enabled() {
+        let mut policy = test_policy();
+        policy.relocation.steps = 0;
+        let (result, changes) = plan_wide_static_bounds_test(thin_clearance_board(), &policy);
+
+        assert!(matches!(result, StaticBoundsPlanResult::Stop));
+        assert!(changes.move_.is_none());
+        assert!(changes.deletion.is_some());
+        assert_eq!(
+            changes.static_bounds_analysis.unwrap().status,
+            "static_clearance_deleted_no_relocation"
+        );
+    }
+
+    #[test]
+    fn volume_move_failure_deletes_when_static_delete_enabled() {
+        let mut policy = test_policy();
+        policy.relocation.steps = 0;
+        let (result, changes) = plan_wide_static_bounds_test(corner_volume_rock(), &policy);
+
+        assert!(matches!(result, StaticBoundsPlanResult::Stop));
+        assert!(changes.move_.is_none());
+        assert!(changes.deletion.is_some());
+        assert_eq!(
+            changes.static_bounds_analysis.unwrap().status,
+            "static_bounds_deleted_no_relocation"
+        );
+    }
+
+    #[test]
+    fn move_failure_remains_blocked_when_static_delete_disabled() {
+        let mut policy = test_policy();
+        policy.relocation.steps = 0;
+        policy.write_actions.disable_static_delete();
+        let (result, changes) = plan_wide_static_bounds_test(corner_volume_rock(), &policy);
+
+        assert!(matches!(
+            result,
+            StaticBoundsPlanResult::FinishTerrainAndOrientation(_)
+        ));
+        assert!(changes.move_.is_none());
+        assert!(changes.deletion.is_none());
+        assert_eq!(
+            changes.static_bounds_analysis.unwrap().status,
+            "static_bounds_blocked"
+        );
+    }
+
+    #[test]
+    fn clearance_move_failure_remains_blocked_when_static_delete_disabled() {
+        let mut policy = test_policy();
+        policy.relocation.steps = 0;
+        policy.write_actions.disable_static_delete();
+        let (result, changes) = plan_wide_static_bounds_test(thin_clearance_board(), &policy);
+
+        assert!(matches!(
+            result,
+            StaticBoundsPlanResult::FinishTerrainAndOrientation(_)
+        ));
+        assert!(changes.move_.is_none());
+        assert!(changes.deletion.is_none());
+        assert_eq!(
+            changes.static_bounds_analysis.unwrap().status,
+            "static_clearance_blocked"
+        );
     }
 
     #[test]
@@ -1333,6 +1461,80 @@ mod tests {
                 min: [0.0; 3],
                 max: [1.0; 3],
             }),
+        }
+    }
+
+    fn wide_test_geometry() -> MeshGeometry {
+        let bounds = MeshAabb {
+            min: [-50.0, -50.0, 0.0],
+            max: [50.0, 50.0, 100.0],
+        };
+        MeshGeometry {
+            contact: MeshContact::new(vec![[0.0; 3]]),
+            bounds,
+            occluder_bounds: bounds,
+            occluder_parts: crate::unclip::mesh::MeshColliderParts::from_mesh_aabb(bounds),
+        }
+    }
+
+    fn plan_wide_static_bounds_test(
+        occluder: StaticOccluder,
+        policy: &UnclipPolicy,
+    ) -> (StaticBoundsPlanResult, WriteReferenceChanges) {
+        let reference = reference_at_z(0.0);
+        let geometry = wide_test_geometry();
+        let terrain = flat_terrain();
+        let static_occluders = StaticOccluderIndex::new(vec![occluder]);
+        let mut changes = WriteReferenceChanges::default();
+        let result = plan_static_bounds_change(
+            &mut changes,
+            super::WriteTarget {
+                cell: (0, 0),
+                key: (3, 4),
+            },
+            &reference,
+            reference.translation,
+            &geometry,
+            StaticBoundsPlanningContext {
+                terrain: &terrain,
+                static_occluders: &static_occluders,
+                policy,
+                generated_placement: Some(GeneratedPlacement {
+                    z_offset: 0.0,
+                    tolerance: 4.0,
+                }),
+            },
+        );
+        (result, changes)
+    }
+
+    fn thin_clearance_board() -> StaticOccluder {
+        test_static_occluder(
+            "thin_board",
+            WorldAabb {
+                min: [-2.0, -60.0, 40.0],
+                max: [2.0, 60.0, 42.0],
+            },
+        )
+    }
+
+    fn corner_volume_rock() -> StaticOccluder {
+        test_static_occluder(
+            "corner_rock",
+            WorldAabb {
+                min: [40.0, 40.0, 40.0],
+                max: [60.0, 60.0, 60.0],
+            },
+        )
+    }
+
+    fn test_static_occluder(id: &str, bounds: WorldAabb) -> StaticOccluder {
+        StaticOccluder {
+            id: id.to_owned(),
+            cell: [0, 0],
+            reference_key: [1, 1],
+            bounds,
+            collider: RapierCollider::from_world_aabb(bounds),
         }
     }
 

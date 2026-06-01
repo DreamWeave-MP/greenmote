@@ -73,6 +73,13 @@ pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
                     return "would_delete_static_bounds_occluded";
                 }
             }
+            "static_bounds_deleted_no_relocation" | "static_clearance_deleted_no_relocation"
+                if input.write.actions.static_delete() =>
+            {
+                if matches!(input.write.plan, WritePlanEvidence::NotPlanned) {
+                    return "would_delete_static_bounds_no_relocation";
+                }
+            }
             "static_bounds_relocatable" | "static_clearance_relocatable"
                 if input.write.actions.static_move() =>
             {
@@ -219,6 +226,11 @@ mod tests {
         assert_eq!(
             write_status_label(&input),
             "would_move_static_bounds_occluded"
+        );
+        input.static_bounds_status = Some("static_clearance_deleted_no_relocation");
+        assert_eq!(
+            write_status_label(&input),
+            "would_delete_static_bounds_no_relocation"
         );
     }
 

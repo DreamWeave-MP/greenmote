@@ -616,6 +616,21 @@ fn classify_static_bounds_action(
             ratio,
             occluder,
             reason,
+        } if input.context.policy.write_actions.static_move()
+            && input.context.policy.write_actions.static_delete() =>
+        {
+            let status = if matches!(reason, StaticBoundsBlockReason::Clearance) {
+                "static_clearance_deleted_no_relocation"
+            } else {
+                "static_bounds_deleted_no_relocation"
+            };
+            record_static_bounds_report_counts(report, status);
+            (status, ratio, Some(occluder.clone()))
+        }
+        StaticBoundsAction::Move {
+            ratio,
+            occluder,
+            reason,
         } => {
             let status = if matches!(reason, StaticBoundsBlockReason::Clearance) {
                 "static_clearance_blocked"
@@ -638,7 +653,10 @@ fn record_static_bounds_report_counts(report: &mut TerrainInspectionReport, stat
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_relocatable += 1;
         }
-        "static_bounds_blocked" | "static_clearance_blocked" => {
+        "static_bounds_blocked"
+        | "static_clearance_blocked"
+        | "static_bounds_deleted_no_relocation"
+        | "static_clearance_deleted_no_relocation" => {
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_blocked += 1;
         }
