@@ -14,8 +14,8 @@ use super::to_io_error;
 // Mirrors the public TOML schema. Convert-specific knobs live under `[convert]`; root-level command
 // knobs are not supported because this tool is still wet paint, not a museum.
 pub(super) struct GroundcoverConfigFile {
-    #[serde(default, skip_serializing)]
-    validate_config: Option<bool>,
+    #[serde(default, rename = "validate_config", skip_serializing)]
+    _validate_config: Option<bool>,
 
     #[serde(default)]
     convert: ConvertConfigFile,
@@ -51,7 +51,7 @@ struct ConvertConfigFile {
 impl GroundcoverConfigFile {
     pub(super) fn from_runtime(config: &GroundcoverConfig) -> Self {
         Self {
-            validate_config: None,
+            _validate_config: None,
             convert: ConvertConfigFile {
                 grass_ids: Some(config.grass_ids.clone()),
                 exclude: Some(config.exclude.clone()),
@@ -70,9 +70,6 @@ impl GroundcoverConfigFile {
         openmw_cfg_override: Option<PathBuf>,
     ) -> std::io::Result<GroundcoverConfig> {
         let file = toml::from_str::<Self>(contents).map_err(to_io_error)?;
-        if file.validate_config.is_some() {
-            return Err(to_io_error("validate_config is a CLI-only option"));
-        }
         let convert = file.convert;
         let unclip = if is_empty_unclip_config(&file.unclip) {
             PersistedUnclipConfig::generated_default()

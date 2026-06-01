@@ -184,6 +184,8 @@ fn stale_unknown_convert_fields_are_ignored() {
     std::fs::write(
         &config_path,
         r#"
+validate_config = true
+
 [convert]
 validate_config = true
 old_option = "unused"
@@ -200,18 +202,7 @@ old_option = "unused"
     let config = get_config(args, &dir, dir.path.join("data-local")).unwrap();
 
     assert!(config.dry_run);
-}
-
-#[test]
-fn root_validate_config_is_rejected() {
-    let dir = TempDir::new();
-    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
-    std::fs::write(&config_path, "validate_config = true\n").unwrap();
-    let args = GroundcoverArgs::parse_from(["convert"]);
-
-    let result = get_config(args, &dir, dir.path.join("data-local"));
-
-    assert!(result.is_err());
+    assert!(!config.validate_config);
 }
 
 #[test]
