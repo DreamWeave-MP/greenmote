@@ -27,7 +27,7 @@ struct GreenmoteApp {
     localizer: Localizer,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppTab {
     Convert,
     Unclip,
@@ -123,7 +123,7 @@ impl GreenmoteApp {
             return;
         }
 
-        self.selected_tab = AppTab::Settings;
+        self.select_tab(AppTab::Settings);
         if !self.load_settings() {
             self.record_settings_load_failure();
         }
@@ -143,7 +143,7 @@ impl GreenmoteApp {
         }
 
         if self.selected_tab != AppTab::Settings {
-            self.selected_tab = tab;
+            self.select_tab(tab);
             return;
         }
 
@@ -152,8 +152,20 @@ impl GreenmoteApp {
         if self.settings.is_dirty() {
             self.queue_pending_navigation(PendingNavigation::Tab(tab));
         } else {
-            self.selected_tab = tab;
+            self.select_tab(tab);
         }
+    }
+
+    fn select_tab(&mut self, tab: AppTab) {
+        if self.selected_tab == tab {
+            return;
+        }
+
+        if self.selected_tab == AppTab::Unclip {
+            self.convert.cancel_pending_unclip_write_confirmation();
+        }
+
+        self.selected_tab = tab;
     }
 
     fn check_initial_config(&mut self) {
@@ -224,7 +236,7 @@ impl GreenmoteApp {
         };
 
         match navigation {
-            PendingNavigation::Tab(tab) => self.selected_tab = tab,
+            PendingNavigation::Tab(tab) => self.select_tab(tab),
             PendingNavigation::OpenMwConfig(path) => self.apply_selected_openmw_config(&path),
         }
     }
@@ -267,8 +279,12 @@ impl GreenmoteApp {
                 self.perform_pending_dirty_navigation();
             }
         } else if cancel {
-            self.pending_navigation = None;
+            self.cancel_pending_dirty_navigation();
         }
+    }
+
+    fn cancel_pending_dirty_navigation(&mut self) {
+        self.pending_navigation = None;
     }
 
     fn show_config_recovery_prompt(&mut self, ctx: &egui::Context) {
@@ -459,7 +475,17 @@ pub fn run() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_openmw_config_settings_error, openmw_config_error_message};
+    use super::{
+        AppTab, GreenmoteApp, PendingNavigation, is_openmw_config_settings_error,
+        openmw_config_error_message,
+    };
+
+    fn pending_tab(app: &GreenmoteApp) -> Option<AppTab> {
+        match &app.pending_navigation {
+            Some(PendingNavigation::Tab(tab)) => Some(*tab),
+            Some(PendingNavigation::OpenMwConfig(_)) | None => None,
+        }
+    }
 
     #[test]
     fn openmw_config_errors_are_not_malformed_greenmote_config_errors() {
@@ -486,5 +512,60 @@ mod tests {
             ),
             "failed to read OpenMW configuration: missing openmw.cfg"
         );
+    }
+
+    #[test]
+    fn dirty_settings_convert_tab_navigation_targets_convert_after_resolution() {
+        let mut app = GreenmoteApp {
+            selected_tab: AppTab::Settings,
+            ..GreenmoteApp::default()
+        };
+        app.settings.set_dirty_for_test(true);
+
+        app.request_convert();
+
+        assert_eq!(app.selected_tab, AppTab::Settings);
+        assert_eq!(pending_tab(&app), Some(AppTab::Convert));
+
+        app.settings.set_dirty_for_test(false);
+        app.perform_pending_dirty_navigation();
+
+        assert_eq!(app.selected_tab, AppTab::Convert);
+        assert!(app.pending_navigation.is_none());
+    }
+
+    #[test]
+    fn dirty_settings_unclip_tab_navigation_targets_unclip_after_resolution() {
+        let mut app = GreenmoteApp {
+            selected_tab: AppTab::Settings,
+            ..GreenmoteApp::default()
+        };
+        app.settings.set_dirty_for_test(true);
+
+        app.request_unclip();
+
+        assert_eq!(app.selected_tab, AppTab::Settings);
+        assert_eq!(pending_tab(&app), Some(AppTab::Unclip));
+
+        app.settings.set_dirty_for_test(false);
+        app.perform_pending_dirty_navigation();
+
+        assert_eq!(app.selected_tab, AppTab::Unclip);
+        assert!(app.pending_navigation.is_none());
+    }
+
+    #[test]
+    fn cancel_dirty_settings_tab_navigation_stays_on_settings_and_clears_target() {
+        let mut app = GreenmoteApp {
+            selected_tab: AppTab::Settings,
+            ..GreenmoteApp::default()
+        };
+        app.settings.set_dirty_for_test(true);
+
+        app.request_unclip();
+        app.cancel_pending_dirty_navigation();
+
+        assert_eq!(app.selected_tab, AppTab::Settings);
+        assert!(app.pending_navigation.is_none());
     }
 }

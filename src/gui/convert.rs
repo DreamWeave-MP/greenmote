@@ -163,6 +163,10 @@ impl ConvertUiState {
         self.unclip.pending_write_confirmation = false;
     }
 
+    pub(super) fn cancel_pending_unclip_write_confirmation(&mut self) {
+        self.unclip.pending_write_confirmation = false;
+    }
+
     fn run_options_differ_from_saved(&self) -> bool {
         self.run_options != self.saved_run_options
     }
@@ -1211,7 +1215,7 @@ mod tests {
     use super::{
         ConvertRunOptions, ConvertUiState, UnclipRunOptions, egui, loaded_openmw_config_status,
     };
-    use crate::gui::GreenmoteApp;
+    use crate::gui::{AppTab, GreenmoteApp};
 
     #[cfg(all(unix, not(target_os = "macos")))]
     use super::path_open_commands;
@@ -1340,6 +1344,34 @@ mod tests {
             error,
             "Unclip write mode is blocked because no write actions are enabled in Settings."
         );
+    }
+
+    #[test]
+    fn leaving_unclip_cancels_pending_write_confirmation() {
+        let mut app = GreenmoteApp {
+            selected_tab: AppTab::Unclip,
+            ..GreenmoteApp::default()
+        };
+        app.convert.unclip.pending_write_confirmation = true;
+
+        app.request_convert();
+
+        assert_eq!(app.selected_tab, AppTab::Convert);
+        assert!(!app.convert.unclip.pending_write_confirmation);
+    }
+
+    #[test]
+    fn leaving_unclip_for_settings_cancels_pending_write_confirmation() {
+        let mut app = GreenmoteApp {
+            selected_tab: AppTab::Unclip,
+            ..GreenmoteApp::default()
+        };
+        app.convert.unclip.pending_write_confirmation = true;
+
+        app.show_settings();
+
+        assert_eq!(app.selected_tab, AppTab::Settings);
+        assert!(!app.convert.unclip.pending_write_confirmation);
     }
 
     #[test]

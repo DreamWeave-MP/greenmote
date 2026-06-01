@@ -154,6 +154,11 @@ impl SettingsUiState {
         self.draft.unclip_policy.write_actions = [false; UNCLIP_WRITE_ACTION_COUNT];
     }
 
+    #[cfg(test)]
+    pub(super) fn set_dirty_for_test(&mut self, dirty: bool) {
+        self.dirty = dirty;
+    }
+
     pub(super) fn output_directory(&self) -> &Path {
         self.draft.output_directory.as_path()
     }
