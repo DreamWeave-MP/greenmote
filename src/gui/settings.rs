@@ -316,7 +316,7 @@ impl GreenmoteApp {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.set_min_width(560.0);
+                    ui.set_width(finite_settings_list_width(ui.available_width()));
                     self.show_general_settings(ui);
                     ui.add_space(16.0);
                     self.show_convert_settings(ui);
@@ -332,7 +332,7 @@ impl GreenmoteApp {
         ui.heading(self.localizer.text(UiText::General));
         ui.add_space(6.0);
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(self.localizer.text(UiText::Language));
             let mut language = self.localizer.language();
             egui::ComboBox::from_id_salt("greenmote_ui_language")
@@ -491,42 +491,35 @@ impl GreenmoteApp {
         ui.add_space(8.0);
         ui.label(self.localizer.text(UiText::PolicyNumbers));
         ui.add_space(4.0);
-        {
-            let policy = &mut self.settings.draft.unclip_policy;
-            egui::Grid::new("unclip_policy_numbers")
-                .num_columns(2)
-                .spacing([12.0, 6.0])
-                .show(ui, |ui| {
-                    setting_text_field(
-                        ui,
-                        self.localizer.text(UiText::OriginHeightTolerance),
-                        self.localizer.text(UiText::OriginHeightToleranceTooltip),
-                        &mut policy.origin_epsilon,
-                        &mut self.settings.dirty,
-                    );
-                    setting_text_field(
-                        ui,
-                        self.localizer.text(UiText::OrientationTolerance),
-                        self.localizer.text(UiText::OrientationToleranceTooltip),
-                        &mut policy.orientation_epsilon,
-                        &mut self.settings.dirty,
-                    );
-                    setting_text_field(
-                        ui,
-                        self.localizer.text(UiText::RelocationStepDistance),
-                        self.localizer.text(UiText::RelocationStepDistanceTooltip),
-                        &mut policy.relocation_step,
-                        &mut self.settings.dirty,
-                    );
-                    setting_text_field(
-                        ui,
-                        self.localizer.text(UiText::RelocationProbeRings),
-                        self.localizer.text(UiText::RelocationProbeRingsTooltip),
-                        &mut policy.relocation_steps,
-                        &mut self.settings.dirty,
-                    );
-                });
-        }
+        let policy = &mut self.settings.draft.unclip_policy;
+        setting_text_field(
+            ui,
+            self.localizer.text(UiText::OriginHeightTolerance),
+            self.localizer.text(UiText::OriginHeightToleranceTooltip),
+            &mut policy.origin_epsilon,
+            &mut self.settings.dirty,
+        );
+        setting_text_field(
+            ui,
+            self.localizer.text(UiText::OrientationTolerance),
+            self.localizer.text(UiText::OrientationToleranceTooltip),
+            &mut policy.orientation_epsilon,
+            &mut self.settings.dirty,
+        );
+        setting_text_field(
+            ui,
+            self.localizer.text(UiText::RelocationStepDistance),
+            self.localizer.text(UiText::RelocationStepDistanceTooltip),
+            &mut policy.relocation_step,
+            &mut self.settings.dirty,
+        );
+        setting_text_field(
+            ui,
+            self.localizer.text(UiText::RelocationProbeRings),
+            self.localizer.text(UiText::RelocationProbeRingsTooltip),
+            &mut policy.relocation_steps,
+            &mut self.settings.dirty,
+        );
     }
 
     fn show_unclip_filter_lists(&mut self, ui: &mut egui::Ui) {
@@ -1020,7 +1013,6 @@ fn setting_text_field(
     if response.changed() {
         *dirty = true;
     }
-    ui.end_row();
 }
 
 fn parse_non_negative_f32(name: &str, value: &str) -> Result<f32, String> {
@@ -1475,7 +1467,10 @@ fn output_path_frame(ui: &mut egui::Ui, path: &Path) {
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
-            ui.monospace(path.display().to_string());
+            ui.add(
+                egui::Label::new(egui::RichText::new(path.display().to_string()).monospace())
+                    .wrap_mode(egui::TextWrapMode::Wrap),
+            );
         });
 }
 
