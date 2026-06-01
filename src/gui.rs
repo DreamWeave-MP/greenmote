@@ -60,6 +60,8 @@ impl eframe::App for GreenmoteApp {
         self.check_initial_config();
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            self.show_tab_bar(ui);
+            ui.separator();
             self.show_active_screen(ui, ctx);
         });
 
@@ -70,6 +72,33 @@ impl eframe::App for GreenmoteApp {
 }
 
 impl GreenmoteApp {
+    fn show_tab_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui
+                .add(egui::Button::selectable(
+                    self.selected_tab == AppTab::Convert,
+                    self.localizer.text(UiText::Convert),
+                ))
+                .clicked()
+            {
+                self.request_convert();
+            }
+
+            if ui
+                .add_enabled(
+                    !self.convert.is_running(),
+                    egui::Button::selectable(
+                        self.selected_tab == AppTab::Settings,
+                        self.localizer.text(UiText::Settings),
+                    ),
+                )
+                .clicked()
+            {
+                self.show_settings();
+            }
+        });
+    }
+
     fn show_active_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         match self.selected_tab {
             AppTab::Convert => self.show_convert_screen(ui, ctx),

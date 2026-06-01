@@ -677,16 +677,6 @@ impl GreenmoteApp {
             {
                 self.open_file(&log_path, "log");
             }
-
-            if ui
-                .add_enabled(
-                    !self.convert.running,
-                    egui::Button::new(self.localizer.text(UiText::Settings)),
-                )
-                .clicked()
-            {
-                self.show_settings();
-            }
         });
     }
 
