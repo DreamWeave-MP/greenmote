@@ -11,8 +11,6 @@ use super::{ConvertRunOptions, GreenmoteApp, UiText, UnclipRunOptions};
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
 const MIN_WIDGET_SIZE: f32 = 1.0;
-const UNCLIP_RUN_OPTIONS_WIDTH: f32 = 420.0;
-const TOP_CONTROLS_RIGHT_MARGIN: f32 = 8.0;
 
 #[derive(Default)]
 pub(super) struct ConvertUiState {
@@ -164,6 +162,10 @@ impl ConvertUiState {
         self.unclip.pending_write_confirmation = false;
     }
 
+    pub(super) fn cancel_pending_unclip_write_confirmation(&mut self) {
+        self.unclip.pending_write_confirmation = false;
+    }
+
     fn run_options_differ_from_saved(&self) -> bool {
         self.run_options != self.saved_run_options
     }
@@ -177,29 +179,25 @@ impl GreenmoteApp {
     pub(super) fn show_convert_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         // Keep the controls row at its natural height. The output area below owns
         // the remaining vertical space so dry-run results stay visible.
-        let unclip_right = ui
-            .horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    self.show_convert_heading(ui);
-                    self.show_convert_panel(ui);
-                });
-                let unclip_spacer =
-                    ui.available_width() - UNCLIP_RUN_OPTIONS_WIDTH - TOP_CONTROLS_RIGHT_MARGIN;
-                ui.add_space(unclip_spacer.max(0.0));
-                let unclip_response = ui.vertical(|ui| {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
-                        ui.set_width(UNCLIP_RUN_OPTIONS_WIDTH);
-                        self.show_unclip_heading(ui);
-                        self.show_unclip_panel(ui);
-                    });
-                });
-                ui.add_space(TOP_CONTROLS_RIGHT_MARGIN);
-                unclip_response.response.rect.right()
-            })
-            .inner;
-        self.show_convert_action_row(ui, ctx, unclip_right);
+        self.show_convert_heading(ui);
+        self.show_convert_panel(ui);
+        self.show_convert_action_row(ui, ctx);
         ui.separator();
 
+        self.show_run_output(ui, ctx);
+    }
+
+    pub(super) fn show_unclip_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.show_unclip_heading(ui);
+        self.show_unclip_panel(ui);
+        self.show_unclip_action_row(ui, ctx);
+        ui.separator();
+
+        self.show_run_output(ui, ctx);
+        self.show_unclip_write_confirmation(ctx);
+    }
+
+    fn show_run_output(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("convert_output_actions")
             .resizable(false)
             .show_separator_line(true)
@@ -218,161 +216,83 @@ impl GreenmoteApp {
                         .selectable(false),
                 );
             });
-
-        self.show_unclip_write_confirmation(ctx);
     }
 
     fn show_convert_panel(&mut self, ui: &mut egui::Ui) {
-        ui.set_min_width(300.0);
         self.show_convert_run_options(ui);
     }
 
     fn show_convert_heading(&self, ui: &mut egui::Ui) {
-        ui.set_min_width(300.0);
         ui.heading(self.localizer.text(UiText::Convert));
     }
 
     fn show_unclip_heading(&self, ui: &mut egui::Ui) {
-        let row_height = ui
-            .spacing()
-            .interact_size
-            .y
-            .max(ui.text_style_height(&egui::TextStyle::Heading));
-        ui.allocate_ui_with_layout(
-            egui::vec2(UNCLIP_RUN_OPTIONS_WIDTH, row_height),
-            egui::Layout::right_to_left(egui::Align::Center),
-            |ui| {
-                ui.heading(self.localizer.text(UiText::Unclip));
-            },
-        );
+        ui.heading(self.localizer.text(UiText::Unclip));
     }
 
     fn show_unclip_panel(&mut self, ui: &mut egui::Ui) {
-        let group_frame = egui::Frame::group(ui.style());
-        let group_content_width =
-            (UNCLIP_RUN_OPTIONS_WIDTH - group_frame.total_margin().sum().x).max(0.0);
-
-        group_frame.show(ui, |ui| {
-            ui.set_min_width(group_content_width);
-            ui.allocate_ui_with_layout(
-                egui::vec2(group_content_width, ui.spacing().interact_size.y),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    ui.label(egui::RichText::new(self.localizer.text(UiText::RunOptions)).strong());
-                },
-            );
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(finite_widget_extent(ui.available_width()));
+            ui.label(egui::RichText::new(self.localizer.text(UiText::RunOptions)).strong());
             ui.add_enabled_ui(!self.convert.running, |ui| {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(group_content_width, ui.spacing().interact_size.y),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        ui.label(self.localizer.text(UiText::TargetPlugin));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
-                                .desired_width(190.0),
-                        );
-                        if ui.button(self.localizer.text(UiText::Browse)).clicked()
-                            && let Some(path) = select_plugin_file(self.localizer)
-                        {
-                            self.convert.unclip.run_options.plugin = path.display().to_string();
-                        }
-                    },
-                );
-                ui.allocate_ui_with_layout(
-                    egui::vec2(group_content_width, ui.spacing().interact_size.y),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        ui.label(self.localizer.text(UiText::MeshGeneratorIni));
-                        ui.add(
-                            egui::TextEdit::singleline(
-                                &mut self.convert.unclip.run_options.meshgenerator_ini,
-                            )
-                            .desired_width(190.0),
-                        );
-                        if ui.button(self.localizer.text(UiText::Browse)).clicked()
-                            && let Some(path) = select_meshgenerator_ini_file(self.localizer)
-                        {
-                            self.convert.unclip.run_options.meshgenerator_ini =
-                                path.display().to_string();
-                        }
-                    },
-                );
-                ui.allocate_ui_with_layout(
-                    egui::vec2(group_content_width, ui.spacing().interact_size.y),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        ui.checkbox(
-                            &mut self.convert.unclip.run_options.write,
-                            self.localizer.text(UiText::WriteChangesToPlugin),
-                        );
-                        ui.checkbox(
-                            &mut self.convert.unclip.run_options.verbose,
-                            self.localizer.text(UiText::DetailedRefDiagnostics),
+                ui.label(self.localizer.text(UiText::TargetPlugin));
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
+                            .desired_width(finite_widget_extent(ui.available_width() - 84.0)),
+                    );
+                    if ui.button(self.localizer.text(UiText::Browse)).clicked()
+                        && let Some(path) = select_plugin_file(self.localizer)
+                    {
+                        self.convert.unclip.run_options.plugin = path.display().to_string();
+                    }
+                });
+
+                ui.label(self.localizer.text(UiText::MeshGeneratorIni));
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(
+                            &mut self.convert.unclip.run_options.meshgenerator_ini,
                         )
-                        .on_hover_text(self.localizer.text(UiText::DetailedRefDiagnosticsTooltip));
-                    },
-                );
+                        .desired_width(finite_widget_extent(ui.available_width() - 84.0)),
+                    );
+                    if ui.button(self.localizer.text(UiText::Browse)).clicked()
+                        && let Some(path) = select_meshgenerator_ini_file(self.localizer)
+                    {
+                        self.convert.unclip.run_options.meshgenerator_ini =
+                            path.display().to_string();
+                    }
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(
+                        &mut self.convert.unclip.run_options.write,
+                        self.localizer.text(UiText::WriteChangesToPlugin),
+                    );
+                    ui.checkbox(
+                        &mut self.convert.unclip.run_options.verbose,
+                        self.localizer.text(UiText::DetailedRefDiagnostics),
+                    )
+                    .on_hover_text(self.localizer.text(UiText::DetailedRefDiagnosticsTooltip));
+                });
             });
         });
     }
 
-    fn show_convert_action_row(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        unclip_right: f32,
-    ) {
+    fn show_convert_action_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add_space(8.0);
-        let row_height = ui.spacing().interact_size.y;
-        let available_rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        ui.horizontal_wrapped(|ui| {
+            self.show_start_conversion_button(ui, ctx);
+            self.show_action_row_status(ui);
+        });
+    }
 
-        let (row_rect, _) = ui.allocate_exact_size(
-            egui::vec2(finite_widget_extent(available_rect.width()), row_height),
-            egui::Sense::hover(),
-        );
-        let left_rect = row_rect;
-
-        let left_response = ui
-            .scope_builder(
-                egui::UiBuilder::new()
-                    .max_rect(left_rect)
-                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                |ui| self.show_start_conversion_button(ui, ctx),
-            )
-            .inner;
-
-        let item_spacing = ui.spacing().item_spacing.x;
-        // Align to the measured Unclip column edge instead of reconstructing spacer geometry.
-        let right_edge = unclip_right.min(row_rect.right()).max(row_rect.left());
-        let right_rect = egui::Rect::from_min_max(
-            egui::pos2(
-                (right_edge - UNCLIP_RUN_OPTIONS_WIDTH).max(row_rect.left()),
-                row_rect.top(),
-            ),
-            egui::pos2(right_edge.max(row_rect.left()), row_rect.bottom()),
-        );
-
-        let right_response = ui
-            .scope_builder(
-                egui::UiBuilder::new()
-                    .max_rect(right_rect)
-                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
-                |ui| self.show_unclip_action_button(ui, ctx),
-            )
-            .inner;
-
-        let status_rect = egui::Rect::from_min_max(
-            egui::pos2(left_response.rect.right() + item_spacing, row_rect.top()),
-            egui::pos2(right_response.rect.left() - item_spacing, row_rect.bottom()),
-        );
-        if status_rect.width() > 0.0 {
-            ui.scope_builder(
-                egui::UiBuilder::new().max_rect(status_rect).layout(
-                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                ),
-                |ui| self.show_action_row_status(ui),
-            );
-        }
+    fn show_unclip_action_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            self.show_unclip_action_button(ui, ctx);
+            self.show_action_row_status(ui);
+        });
     }
 
     fn show_start_conversion_button(
@@ -676,16 +596,6 @@ impl GreenmoteApp {
                 && let Some(log_path) = self.settings.log_path()
             {
                 self.open_file(&log_path, "log");
-            }
-
-            if ui
-                .add_enabled(
-                    !self.convert.running,
-                    egui::Button::new(self.localizer.text(UiText::Settings)),
-                )
-                .clicked()
-            {
-                self.show_settings();
             }
         });
     }
@@ -1281,7 +1191,7 @@ mod tests {
     use super::{
         ConvertRunOptions, ConvertUiState, UnclipRunOptions, egui, loaded_openmw_config_status,
     };
-    use crate::gui::GreenmoteApp;
+    use crate::gui::{AppTab, GreenmoteApp};
 
     #[cfg(all(unix, not(target_os = "macos")))]
     use super::path_open_commands;
@@ -1410,6 +1320,34 @@ mod tests {
             error,
             "Unclip write mode is blocked because no write actions are enabled in Settings."
         );
+    }
+
+    #[test]
+    fn leaving_unclip_cancels_pending_write_confirmation() {
+        let mut app = GreenmoteApp {
+            selected_tab: AppTab::Unclip,
+            ..GreenmoteApp::default()
+        };
+        app.convert.unclip.pending_write_confirmation = true;
+
+        app.request_convert();
+
+        assert_eq!(app.selected_tab, AppTab::Convert);
+        assert!(!app.convert.unclip.pending_write_confirmation);
+    }
+
+    #[test]
+    fn leaving_unclip_for_settings_cancels_pending_write_confirmation() {
+        let mut app = GreenmoteApp {
+            selected_tab: AppTab::Unclip,
+            ..GreenmoteApp::default()
+        };
+        app.convert.unclip.pending_write_confirmation = true;
+
+        app.show_settings();
+
+        assert_eq!(app.selected_tab, AppTab::Settings);
+        assert!(!app.convert.unclip.pending_write_confirmation);
     }
 
     #[test]

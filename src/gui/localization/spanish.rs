@@ -19,7 +19,6 @@ const fn language_text(key: UiText) -> &'static str {
         UiText::General => "General",
         UiText::Browse => "Examinar...",
         UiText::Save => "Guardar",
-        UiText::Back => "Atrás",
         UiText::Cancel => "Cancelar",
         UiText::Add => "Añadir",
         UiText::Discard => "Descartar",
