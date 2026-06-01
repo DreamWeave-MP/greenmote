@@ -16,7 +16,7 @@ use run_options::{ConvertRunOptions, UnclipRunOptions};
 use settings::SettingsUiState;
 
 struct GreenmoteApp {
-    showing_settings: bool,
+    selected_tab: AppTab,
     convert: ConvertUiState,
     settings: SettingsUiState,
     pending_navigation: Option<PendingNavigation>,
@@ -27,15 +27,21 @@ struct GreenmoteApp {
     localizer: Localizer,
 }
 
-enum PendingNavigation {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AppTab {
     Convert,
+    Settings,
+}
+
+enum PendingNavigation {
+    Tab(AppTab),
     OpenMwConfig(PathBuf),
 }
 
 impl Default for GreenmoteApp {
     fn default() -> Self {
         Self {
-            showing_settings: false,
+            selected_tab: AppTab::Convert,
             convert: ConvertUiState::ready(),
             settings: SettingsUiState::default(),
             pending_navigation: None,
@@ -65,40 +71,39 @@ impl eframe::App for GreenmoteApp {
 
 impl GreenmoteApp {
     fn show_active_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if self.showing_settings {
-            self.show_settings_screen(ui, ctx);
-        } else {
-            self.show_convert_screen(ui, ctx);
+        match self.selected_tab {
+            AppTab::Convert => self.show_convert_screen(ui, ctx),
+            AppTab::Settings => self.show_settings_screen(ui, ctx),
         }
     }
 
     fn show_settings(&mut self) {
-        if self.showing_settings {
+        if self.selected_tab == AppTab::Settings {
             return;
         }
 
-        self.showing_settings = true;
+        self.selected_tab = AppTab::Settings;
         if !self.load_settings() {
             self.record_settings_load_failure();
         }
     }
 
     fn request_convert(&mut self) {
-        if !self.showing_settings {
+        if self.selected_tab != AppTab::Settings {
             return;
         }
 
         self.settings.commit_active_list_edit();
 
         if self.settings.is_dirty() {
-            self.queue_pending_navigation(PendingNavigation::Convert);
+            self.queue_pending_navigation(PendingNavigation::Tab(AppTab::Convert));
         } else {
             self.show_convert();
         }
     }
 
     fn show_convert(&mut self) {
-        self.showing_settings = false;
+        self.selected_tab = AppTab::Convert;
     }
 
     fn check_initial_config(&mut self) {
@@ -169,7 +174,7 @@ impl GreenmoteApp {
         };
 
         match navigation {
-            PendingNavigation::Convert => self.show_convert(),
+            PendingNavigation::Tab(tab) => self.selected_tab = tab,
             PendingNavigation::OpenMwConfig(path) => self.apply_selected_openmw_config(&path),
         }
     }
@@ -313,7 +318,7 @@ impl GreenmoteApp {
             return;
         }
 
-        if self.showing_settings {
+        if self.selected_tab == AppTab::Settings {
             self.settings.commit_active_list_edit();
         }
 
