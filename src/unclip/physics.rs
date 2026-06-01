@@ -4,7 +4,7 @@ use rapier3d::{
     prelude::{Cuboid, Isometry, Point, Translation, Vector},
 };
 
-use super::mesh::{MeshAabb, WorldAabb};
+use super::mesh::{LocalObb, MeshAabb, MeshColliderParts, WorldAabb};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RapierCollider {
@@ -16,12 +16,6 @@ pub(crate) struct RapierCollider {
 struct RapierCuboid {
     half_extents: [f32; 3],
     position: Isometry<f32>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct LocalCuboid {
-    center: [f32; 3],
-    half_extents: [f32; 3],
 }
 
 const CLEARANCE_CENTER_FOOTPRINT_FRACTION: f32 = 0.16;
@@ -40,8 +34,27 @@ impl RapierCollider {
         rotation: [f32; 3],
         scale: Option<f32>,
     ) -> Self {
-        let local = LocalCuboid::from_bounds(bounds);
-        Self::from_local_cuboids([local], translation, rotation, scale)
+        Self::from_mesh_collider_parts(
+            &MeshColliderParts::from_mesh_aabb(bounds),
+            translation,
+            rotation,
+            scale,
+        )
+    }
+
+    #[must_use]
+    pub(crate) fn from_mesh_collider_parts(
+        parts: &MeshColliderParts,
+        translation: [f32; 3],
+        rotation: [f32; 3],
+        scale: Option<f32>,
+    ) -> Self {
+        Self::from_local_obbs(
+            parts.iter().map(|part| part.obb),
+            translation,
+            rotation,
+            scale,
+        )
     }
 
     #[must_use]
@@ -71,7 +84,7 @@ impl RapierCollider {
         rotation: [f32; 3],
         scale: Option<f32>,
     ) -> Self {
-        Self::from_local_cuboids(
+        Self::from_local_obbs(
             placement_clearance_cuboids(bounds),
             translation,
             rotation,
@@ -125,8 +138,8 @@ impl RapierCollider {
         moved
     }
 
-    fn from_local_cuboids(
-        local_cuboids: impl IntoIterator<Item = LocalCuboid>,
+    fn from_local_obbs(
+        local_obbs: impl IntoIterator<Item = LocalObb>,
         translation: [f32; 3],
         rotation: [f32; 3],
         scale: Option<f32>,
@@ -134,7 +147,7 @@ impl RapierCollider {
         let scale = scale.unwrap_or(1.0);
         let rotation = openmw_rotation(rotation);
         let translation = Vec3::from(translation);
-        let cuboids = local_cuboids
+        let cuboids = local_obbs
             .into_iter()
             .map(|local| local.to_world(translation, rotation, scale))
             .collect::<Vec<_>>();
@@ -192,30 +205,19 @@ impl RapierCuboid {
     }
 }
 
-impl LocalCuboid {
-    fn from_bounds(bounds: MeshAabb) -> Self {
-        let min = Vec3::from(bounds.min);
-        let max = Vec3::from(bounds.max);
-        let center = (min + max) * 0.5;
-        let half = (max - min).abs() * 0.5;
-        Self {
-            center: center.to_array(),
-            half_extents: positive_half_extents(half),
-        }
-    }
-
+impl LocalObb {
     fn to_world(self, translation: Vec3, rotation: Quat, scale: f32) -> RapierCuboid {
         let center = Vec3::from(self.center) * scale;
         let half = Vec3::from(self.half_extents) * scale.abs();
         let world_center = rotation * center + translation;
         RapierCuboid {
             half_extents: positive_half_extents(half),
-            position: isometry(world_center, rotation),
+            position: isometry(world_center, rotation * self.orientation),
         }
     }
 }
 
-fn placement_clearance_cuboids(bounds: MeshAabb) -> [LocalCuboid; 5] {
+fn placement_clearance_cuboids(bounds: MeshAabb) -> [LocalObb; 5] {
     let min = Vec3::from(bounds.min);
     let max = Vec3::from(bounds.max);
     let half_size = (max - min).abs() * 0.5;
@@ -240,10 +242,11 @@ fn placement_clearance_cuboids(bounds: MeshAabb) -> [LocalCuboid; 5] {
     ]
 }
 
-fn clearance_cuboid(center: [f32; 3], half_width: f32, half_height: f32) -> LocalCuboid {
-    LocalCuboid {
+fn clearance_cuboid(center: [f32; 3], half_width: f32, half_height: f32) -> LocalObb {
+    LocalObb {
         center,
         half_extents: [half_width, half_width, half_height],
+        orientation: Quat::IDENTITY,
     }
 }
 
@@ -312,15 +315,17 @@ mod tests {
 
     #[test]
     fn separated_compound_cuboids_leave_gap_clear() {
-        let compound = RapierCollider::from_local_cuboids(
+        let compound = RapierCollider::from_local_obbs(
             [
-                LocalCuboid {
+                LocalObb {
                     center: [-10.0, 0.0, 0.0],
                     half_extents: [2.0, 2.0, 2.0],
+                    orientation: Quat::IDENTITY,
                 },
-                LocalCuboid {
+                LocalObb {
                     center: [10.0, 0.0, 0.0],
                     half_extents: [2.0, 2.0, 2.0],
+                    orientation: Quat::IDENTITY,
                 },
             ],
             [0.0; 3],
@@ -331,6 +336,45 @@ mod tests {
 
         assert!(compound.bounds().intersection(gap_probe.bounds()).is_some());
         assert!(!compound.intersects(&gap_probe));
+    }
+
+    #[test]
+    fn mesh_bounds_and_single_part_fallback_are_equivalent_for_rotated_scaled_refs() {
+        let bounds = mesh_bounds([-3.0, -1.0, -0.5], [5.0, 2.0, 4.0]);
+        let translation = [12.0, -8.0, 3.0];
+        let rotation = [0.4, -0.2, 0.9];
+        let scale = Some(1.75);
+        let from_bounds = RapierCollider::from_mesh_bounds(bounds, translation, rotation, scale);
+        let from_parts = RapierCollider::from_mesh_collider_parts(
+            &MeshColliderParts::from_mesh_aabb(bounds),
+            translation,
+            rotation,
+            scale,
+        );
+        let probe =
+            RapierCollider::from_world_aabb(world_bounds([12.0, -8.0, 3.0], [13.0, -7.0, 4.0]));
+
+        assert_eq!(from_bounds.bounds(), from_parts.bounds());
+        assert_eq!(
+            from_bounds.intersects(&probe),
+            from_parts.intersects(&probe)
+        );
+    }
+
+    #[test]
+    fn single_part_containment_matches_mesh_bounds_fallback() {
+        let outer_bounds = mesh_bounds([-4.0, -4.0, -4.0], [4.0, 4.0, 4.0]);
+        let inner = RapierCollider::from_world_aabb(world_bounds([-1.0; 3], [1.0; 3]));
+        let from_bounds = RapierCollider::from_mesh_bounds(outer_bounds, [0.0; 3], [0.0; 3], None);
+        let from_parts = RapierCollider::from_mesh_collider_parts(
+            &MeshColliderParts::from_mesh_aabb(outer_bounds),
+            [0.0; 3],
+            [0.0; 3],
+            None,
+        );
+
+        assert!(from_bounds.contains(&inner));
+        assert_eq!(from_bounds.contains(&inner), from_parts.contains(&inner));
     }
 
     fn mesh_bounds(min: [f32; 3], max: [f32; 3]) -> MeshAabb {

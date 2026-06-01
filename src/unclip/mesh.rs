@@ -4,7 +4,7 @@ use std::{
     sync::Mutex,
 };
 
-use glam::{Affine3A, EulerRot, Mat3, Vec3};
+use glam::{Affine3A, EulerRot, Mat3, Quat, Vec3};
 use tes3::{
     esp::{ObjectFlags, Static},
     nif::{
@@ -101,6 +101,23 @@ pub struct MeshGeometry {
     pub contact: MeshContact,
     pub bounds: MeshAabb,
     pub occluder_bounds: MeshAabb,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MeshColliderParts {
+    parts: Vec<MeshColliderPart>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MeshColliderPart {
+    pub(crate) obb: LocalObb,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LocalObb {
+    pub(crate) center: [f32; 3],
+    pub(crate) half_extents: [f32; 3],
+    pub(crate) orientation: Quat,
 }
 
 impl MeshContact {
@@ -220,6 +237,36 @@ impl MeshAabb {
         WorldAabb {
             min: world_min.to_array(),
             max: world_max.to_array(),
+        }
+    }
+}
+
+impl MeshColliderParts {
+    #[must_use]
+    pub(crate) fn from_mesh_aabb(bounds: MeshAabb) -> Self {
+        Self {
+            parts: vec![MeshColliderPart {
+                obb: LocalObb::from_mesh_aabb(bounds),
+            }],
+        }
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &MeshColliderPart> {
+        self.parts.iter()
+    }
+}
+
+impl LocalObb {
+    #[must_use]
+    pub(crate) fn from_mesh_aabb(bounds: MeshAabb) -> Self {
+        let min = Vec3::from(bounds.min);
+        let max = Vec3::from(bounds.max);
+        let center = (min + max) * 0.5;
+        let half = (max - min).abs() * 0.5;
+        Self {
+            center: center.to_array(),
+            half_extents: half.to_array(),
+            orientation: Quat::IDENTITY,
         }
     }
 }

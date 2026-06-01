@@ -5,7 +5,7 @@ use tes3::esp::{Cell, Plugin};
 use super::{
     args::IdFilter,
     cells::CellCoord,
-    mesh::{MeshCache, StaticMeshIndex, WorldAabb},
+    mesh::{MeshCache, MeshColliderParts, StaticMeshIndex, WorldAabb},
     occlusion::{StaticOccluder, StaticOccluderIndex},
     physics::RapierCollider,
 };
@@ -81,14 +81,15 @@ pub(crate) fn build_static_occluders(
         if huge_footprint(world_bounds) {
             build_report.huge_footprint += 1;
         }
+        let collider_parts = MeshColliderParts::from_mesh_aabb(bounds);
 
         occluders.push(StaticOccluder {
             id: reference.id.clone(),
             cell: [key.cell.0, key.cell.1],
             reference_key: [key.reference.0, key.reference.1],
             bounds: world_bounds,
-            collider: RapierCollider::from_mesh_bounds(
-                bounds,
+            collider: RapierCollider::from_mesh_collider_parts(
+                &collider_parts,
                 reference.translation,
                 reference.rotation,
                 reference.scale,
