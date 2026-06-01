@@ -13,7 +13,8 @@ use super::{
         StaticBoundsOcclusionInspection, StaticMeshInspection, TerrainInspectionReport,
     },
     occlusion::{
-        StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
+        StaticBoundsAction, StaticBoundsBlockReason, StaticOccluder, StaticOccluderIndex,
+        decide_static_bounds_action,
     },
     orientation::orientation_angle_degrees,
     physics::RapierCollider,
@@ -441,7 +442,7 @@ fn classify_static_bounds_occlusion(
         corrected_translation[2] -=
             terrain_delta(input.reference.translation, terrain_z, generated_placement);
     }
-    let (corrected_bounds, corrected_collider) = corrected_static_bounds(
+    let (corrected_bounds, corrected_collider, clearance_collider) = corrected_static_bounds(
         *bounds,
         corrected_translation,
         input.reference.rotation,
@@ -450,6 +451,7 @@ fn classify_static_bounds_occlusion(
     let action = decide_static_bounds_action(
         corrected_bounds,
         &corrected_collider,
+        &clearance_collider,
         input.context.static_occluders,
     );
     let (status, ratio, occluder) = classify_static_bounds_action(
@@ -505,10 +507,11 @@ fn corrected_static_bounds(
     translation: [f32; 3],
     rotation: [f32; 3],
     scale: Option<f32>,
-) -> (WorldAabb, RapierCollider) {
+) -> (WorldAabb, RapierCollider, RapierCollider) {
     (
         bounds.world_aabb(translation, rotation, scale),
         RapierCollider::from_mesh_bounds(bounds, translation, rotation, scale),
+        RapierCollider::placement_clearance_from_mesh_bounds(bounds, translation, rotation, scale),
     )
 }
 
@@ -589,21 +592,38 @@ fn classify_static_bounds_action(
                 Some(occluder.clone()),
             )
         }
-        StaticBoundsAction::Move { ratio, occluder }
-            if can_relocate_static_bounds(
-                input,
-                contact,
-                bounds,
-                corrected_translation,
-                generated_placement,
-            ) =>
+        StaticBoundsAction::Move {
+            ratio,
+            occluder,
+            reason,
+        } if can_relocate_static_bounds(
+            input,
+            contact,
+            bounds,
+            corrected_translation,
+            generated_placement,
+        ) =>
         {
-            record_static_bounds_report_counts(report, "static_bounds_relocatable");
-            ("static_bounds_relocatable", ratio, Some(occluder.clone()))
+            let status = if matches!(reason, StaticBoundsBlockReason::Clearance) {
+                "static_clearance_relocatable"
+            } else {
+                "static_bounds_relocatable"
+            };
+            record_static_bounds_report_counts(report, status);
+            (status, ratio, Some(occluder.clone()))
         }
-        StaticBoundsAction::Move { ratio, occluder } => {
-            record_static_bounds_report_counts(report, "static_bounds_blocked");
-            ("static_bounds_blocked", ratio, Some(occluder.clone()))
+        StaticBoundsAction::Move {
+            ratio,
+            occluder,
+            reason,
+        } => {
+            let status = if matches!(reason, StaticBoundsBlockReason::Clearance) {
+                "static_clearance_blocked"
+            } else {
+                "static_bounds_blocked"
+            };
+            record_static_bounds_report_counts(report, status);
+            (status, ratio, Some(occluder.clone()))
         }
     }
 }
@@ -614,11 +634,11 @@ fn record_static_bounds_report_counts(report: &mut TerrainInspectionReport, stat
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_fully_occluded += 1;
         }
-        "static_bounds_relocatable" => {
+        "static_bounds_relocatable" | "static_clearance_relocatable" => {
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_relocatable += 1;
         }
-        "static_bounds_blocked" => {
+        "static_bounds_blocked" | "static_clearance_blocked" => {
             report.refs_static_bounds_occluded += 1;
             report.refs_static_bounds_blocked += 1;
         }

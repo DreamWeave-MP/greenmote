@@ -8,7 +8,8 @@ use super::{
     generated_placement::{GeneratedPlacement, GeneratedPlacementIndex},
     mesh::{MeshAabb, MeshCache, MeshGeometry, StaticMeshIndex, WorldAabb},
     occlusion::{
-        StaticBoundsAction, StaticOccluder, StaticOccluderIndex, decide_static_bounds_action,
+        StaticBoundsAction, StaticBoundsBlockReason, StaticOccluder, StaticOccluderIndex,
+        decide_static_bounds_action,
     },
     orientation::{OrientationResult, orientation_to_terrain},
     physics::RapierCollider,
@@ -226,6 +227,7 @@ struct WriteReferenceChanges {
 struct StaticBoundsMoveCause<'a> {
     ratio: f32,
     occluder: &'a StaticOccluder,
+    reason: StaticBoundsBlockReason,
 }
 
 #[derive(Clone, Copy)]
@@ -344,11 +346,7 @@ fn plan_static_bounds_change(
     geometry: &MeshGeometry,
     context: StaticBoundsPlanningContext<'_>,
 ) -> StaticBoundsPlanResult {
-    let corrected_bounds =
-        geometry
-            .bounds
-            .world_aabb(corrected_translation, reference.rotation, reference.scale);
-    let corrected_collider = RapierCollider::from_mesh_bounds(
+    let (corrected_bounds, corrected_collider, clearance_collider) = corrected_static_bounds(
         geometry.bounds,
         corrected_translation,
         reference.rotation,
@@ -357,6 +355,7 @@ fn plan_static_bounds_change(
     match decide_static_bounds_action(
         corrected_bounds,
         &corrected_collider,
+        &clearance_collider,
         context.static_occluders,
     ) {
         StaticBoundsAction::None => {
@@ -375,7 +374,11 @@ fn plan_static_bounds_change(
                     reference,
                     corrected_translation,
                     relocation_search_context(geometry, context),
-                    StaticBoundsMoveCause { ratio, occluder },
+                    StaticBoundsMoveCause {
+                        ratio,
+                        occluder,
+                        reason: StaticBoundsBlockReason::Volume,
+                    },
                 )
             });
             if let Some(Some(move_)) = move_ {
@@ -408,23 +411,25 @@ fn plan_static_bounds_change(
                 return StaticBoundsPlanResult::Stop;
             }
         }
-        StaticBoundsAction::Move { ratio, occluder }
-            if context.policy.write_actions.static_move() =>
-        {
+        StaticBoundsAction::Move {
+            ratio,
+            occluder,
+            reason,
+        } if context.policy.write_actions.static_move() => {
             let move_ = try_static_bounds_move(
                 target,
                 reference,
                 corrected_translation,
                 relocation_search_context(geometry, context),
-                StaticBoundsMoveCause { ratio, occluder },
+                StaticBoundsMoveCause {
+                    ratio,
+                    occluder,
+                    reason,
+                },
             );
             changes.static_bounds_analysis = Some(static_bounds_analysis(
                 target,
-                if move_.is_some() {
-                    "static_bounds_relocatable"
-                } else {
-                    "static_bounds_blocked"
-                },
+                static_bounds_move_status(reason, move_.is_some()),
                 ratio,
                 Some(occluder),
                 corrected_bounds,
@@ -439,6 +444,31 @@ fn plan_static_bounds_change(
         StaticBoundsAction::Move { .. } => {}
     }
     StaticBoundsPlanResult::Continue(reference.translation)
+}
+
+fn corrected_static_bounds(
+    bounds: MeshAabb,
+    translation: [f32; 3],
+    rotation: [f32; 3],
+    scale: Option<f32>,
+) -> (WorldAabb, RapierCollider, RapierCollider) {
+    (
+        bounds.world_aabb(translation, rotation, scale),
+        RapierCollider::from_mesh_bounds(bounds, translation, rotation, scale),
+        RapierCollider::placement_clearance_from_mesh_bounds(bounds, translation, rotation, scale),
+    )
+}
+
+const fn static_bounds_move_status(
+    reason: StaticBoundsBlockReason,
+    relocated: bool,
+) -> &'static str {
+    match (reason, relocated) {
+        (StaticBoundsBlockReason::Clearance, true) => "static_clearance_relocatable",
+        (StaticBoundsBlockReason::Clearance, false) => "static_clearance_blocked",
+        (StaticBoundsBlockReason::Volume, true) => "static_bounds_relocatable",
+        (StaticBoundsBlockReason::Volume, false) => "static_bounds_blocked",
+    }
 }
 
 fn relocation_search_context<'a>(
@@ -620,12 +650,20 @@ fn apply_static_bounds_move(
         reference_key: [target.key.0, target.key.1],
         id: reference.id.clone(),
         occlusion_ratio: cause.ratio,
+        block_reason: static_bounds_block_reason(cause.reason),
         old_position,
         new_position,
         occluder_id: cause.occluder.id.clone(),
         occluder_cell: cause.occluder.cell,
         occluder_reference_key: cause.occluder.reference_key,
     })
+}
+
+const fn static_bounds_block_reason(reason: StaticBoundsBlockReason) -> &'static str {
+    match reason {
+        StaticBoundsBlockReason::Volume => "volume",
+        StaticBoundsBlockReason::Clearance => "clearance",
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -650,6 +688,12 @@ pub(crate) fn find_valid_relocation_transform(
     let original = [translation[0], translation[1]];
     let grass_collider =
         RapierCollider::from_mesh_bounds(search.bounds, translation, rotation, scale);
+    let clearance_collider = RapierCollider::placement_clearance_from_mesh_bounds(
+        search.bounds,
+        translation,
+        rotation,
+        scale,
+    );
 
     for step in 1..=search.relocation.steps {
         let radius = f32::from(step) * search.relocation.step;
@@ -664,7 +708,11 @@ pub(crate) fn find_valid_relocation_transform(
 
             let moved_collider = grass_collider
                 .translated_xy(candidate_xy[0] - original[0], candidate_xy[1] - original[1]);
-            if search.static_occluders.intersects_shape(&moved_collider) {
+            let moved_clearance = clearance_collider
+                .translated_xy(candidate_xy[0] - original[0], candidate_xy[1] - original[1]);
+            if search.static_occluders.intersects_shape(&moved_collider)
+                || search.static_occluders.intersects_shape(&moved_clearance)
+            {
                 continue;
             }
 
@@ -684,7 +732,15 @@ pub(crate) fn find_valid_relocation_transform(
                 rotation,
                 scale,
             );
-            if !search.static_occluders.intersects_shape(&final_collider) {
+            let final_clearance = RapierCollider::placement_clearance_from_mesh_bounds(
+                search.bounds,
+                candidate_translation,
+                rotation,
+                scale,
+            );
+            if !search.static_occluders.intersects_shape(&final_collider)
+                && !search.static_occluders.intersects_shape(&final_clearance)
+            {
                 return Some(candidate_translation);
             }
         }
@@ -1067,6 +1123,54 @@ mod tests {
         assert!(matches!(result, StaticBoundsPlanResult::Stop));
         assert!(changes.move_.is_none());
         assert!(changes.deletion.is_some());
+    }
+
+    #[test]
+    fn relocation_rejects_candidate_when_clearance_probe_still_intersects_static() {
+        let terrain = flat_terrain();
+        let bounds = MeshAabb {
+            min: [-1.0, -1.0, 0.0],
+            max: [1.0, 1.0, 10.0],
+        };
+        let static_occluders = StaticOccluderIndex::new(vec![StaticOccluder {
+            id: "board".to_owned(),
+            cell: [0, 0],
+            reference_key: [1, 1],
+            bounds: WorldAabb {
+                min: [131.0, 103.0, 4.0],
+                max: [133.0, 105.0, 5.0],
+            },
+            collider: RapierCollider::from_world_aabb(WorldAabb {
+                min: [131.0, 103.0, 4.0],
+                max: [133.0, 105.0, 5.0],
+            }),
+        }]);
+
+        let moved = super::find_valid_relocation_transform(
+            (0, 0),
+            super::RefTransform {
+                translation: [100.0, 100.0, 0.0],
+                rotation: [0.0; 3],
+                scale: None,
+            },
+            super::RelocationSearchContext {
+                bounds,
+                terrain: &terrain,
+                static_occluders: &static_occluders,
+                relocation: RelocationPolicy {
+                    step: 32.0,
+                    steps: 1,
+                },
+                generated_placement: Some(GeneratedPlacement {
+                    z_offset: 0.0,
+                    tolerance: 4.0,
+                }),
+            },
+        )
+        .unwrap();
+
+        assert_close(moved[0], 68.0);
+        assert_close(moved[1], 100.0);
     }
 
     #[test]

@@ -154,6 +154,7 @@ Inspection mode:
 - Accepts a filesystem path or a VFS plugin name.
 - Reports aggregate diagnostics by default.
 - Writes detailed per-reference diagnostics to `greenmote.log` with `--verbose`.
+- Treats static occluders as blockers when they overlap either target mesh volume or bounded placement-clearance probes around the target origin.
 - Keeps `--instances` as a deprecated alias for `--verbose`.
 - Emits machine-readable compact JSON with `--structured`.
 - Samples reference origins for terrain Z fixes and orientation. Terrain Z writes and static relocation require an inferred terrain-relative origin offset.
@@ -170,7 +171,7 @@ Write actions:
 
 - `terrain-z` adjusts reference Z placement toward terrain.
 - `static-delete` deletes references that cannot be safely moved away from static occluders.
-- `static-move` searches for nearby positions outside static occluders.
+- `static-move` searches for nearby positions outside static occluders and placement-clearance blockers.
 - `orient` aligns groundcover orientation to terrain within policy limits.
 - `all` enables all write actions.
 - `none` disables all write actions.

@@ -169,12 +169,20 @@ pub(crate) enum StaticBoundsAction<'a> {
     Move {
         ratio: f32,
         occluder: &'a StaticOccluder,
+        reason: StaticBoundsBlockReason,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StaticBoundsBlockReason {
+    Volume,
+    Clearance,
 }
 
 pub(crate) fn decide_static_bounds_action<'a>(
     grass_bounds: WorldAabb,
     grass_collider: &RapierCollider,
+    clearance_collider: &RapierCollider,
     static_occluders: &'a StaticOccluderIndex,
 ) -> StaticBoundsAction<'a> {
     let candidates = static_occluders.candidates_for(grass_bounds);
@@ -186,6 +194,19 @@ pub(crate) fn decide_static_bounds_action<'a>(
         return StaticBoundsAction::Delete {
             ratio: 1.0,
             occluder,
+        };
+    }
+
+    let clearance_candidates = static_occluders.candidates_for(clearance_collider.bounds());
+    if let Some(occluder) = clearance_candidates
+        .iter()
+        .copied()
+        .find(|occluder| shape_intersects(occluder, clearance_collider))
+    {
+        return StaticBoundsAction::Move {
+            ratio: 0.0,
+            occluder,
+            reason: StaticBoundsBlockReason::Clearance,
         };
     }
 
@@ -204,7 +225,11 @@ pub(crate) fn decide_static_bounds_action<'a>(
     let Some(occluder) = primary_occluder(grass_bounds, &candidates) else {
         return StaticBoundsAction::None;
     };
-    StaticBoundsAction::Move { ratio, occluder }
+    StaticBoundsAction::Move {
+        ratio,
+        occluder,
+        reason: StaticBoundsBlockReason::Volume,
+    }
 }
 
 fn primary_occluder<'a>(
@@ -297,8 +322,8 @@ fn sort_dedup_f32(values: &mut Vec<f32>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        StaticBoundsAction, StaticOccluder, StaticOccluderIndex, cell_span_for_bounds,
-        decide_static_bounds_action, static_bounds_occlusion_ratio,
+        StaticBoundsAction, StaticBoundsBlockReason, StaticOccluder, StaticOccluderIndex,
+        cell_span_for_bounds, decide_static_bounds_action, static_bounds_occlusion_ratio,
     };
     use crate::unclip::{
         mesh::{MeshAabb, WorldAabb},
@@ -331,7 +356,12 @@ mod tests {
         ))]);
 
         assert!(matches!(
-            decide_static_bounds_action(grass, &RapierCollider::from_world_aabb(grass), &occluders),
+            decide_static_bounds_action(
+                grass,
+                &RapierCollider::from_world_aabb(grass),
+                &RapierCollider::from_world_aabb(grass),
+                &occluders
+            ),
             StaticBoundsAction::None
         ));
     }
@@ -352,7 +382,7 @@ mod tests {
 
         assert!(occluders.candidates_for(grass).len() == 1);
         assert!(matches!(
-            decide_static_bounds_action(grass, &grass_collider, &occluders),
+            decide_static_bounds_action(grass, &grass_collider, &grass_collider, &occluders),
             StaticBoundsAction::None
         ));
     }
@@ -364,8 +394,16 @@ mod tests {
             StaticOccluderIndex::new(vec![static_occluder(aabb([1.0, 1.0, 1.0], [3.0; 3]))]);
 
         assert!(matches!(
-            decide_static_bounds_action(grass.bounds(), &grass, &occluders),
-            StaticBoundsAction::Move { .. }
+            decide_static_bounds_action(
+                grass.bounds(),
+                &grass,
+                &RapierCollider::from_world_aabb(aabb([20.0; 3], [21.0; 3])),
+                &occluders
+            ),
+            StaticBoundsAction::Move {
+                reason: StaticBoundsBlockReason::Volume,
+                ..
+            }
         ));
     }
 
@@ -380,6 +418,7 @@ mod tests {
         match decide_static_bounds_action(
             grass,
             &RapierCollider::from_world_aabb(grass),
+            &RapierCollider::from_world_aabb(aabb([20.0; 3], [21.0; 3])),
             &occluders,
         ) {
             StaticBoundsAction::Delete { ratio, occluder } => {
@@ -401,13 +440,51 @@ mod tests {
         match decide_static_bounds_action(
             grass,
             &RapierCollider::from_world_aabb(grass),
+            &RapierCollider::from_world_aabb(aabb([20.0; 3], [21.0; 3])),
             &occluders,
         ) {
-            StaticBoundsAction::Move { ratio, occluder } => {
+            StaticBoundsAction::Move {
+                ratio,
+                occluder,
+                reason,
+            } => {
                 assert_close(ratio, 0.5);
                 assert_eq!(occluder.id, "rock");
+                assert_eq!(reason, StaticBoundsBlockReason::Volume);
             }
             StaticBoundsAction::None | StaticBoundsAction::Delete { .. } => panic!("expected move"),
+        }
+    }
+
+    #[test]
+    fn static_bounds_action_uses_clearance_for_thin_board_with_low_volume_ratio() {
+        let grass_bounds = mesh_aabb([-50.0, -50.0, 0.0], [50.0, 50.0, 100.0]);
+        let grass_collider =
+            RapierCollider::from_mesh_bounds(grass_bounds, [0.0; 3], [0.0; 3], None);
+        let clearance = RapierCollider::placement_clearance_from_mesh_bounds(
+            grass_bounds,
+            [0.0; 3],
+            [0.0; 3],
+            None,
+        );
+        let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
+            [-2.0, -60.0, 40.0],
+            [2.0, 60.0, 42.0],
+        ))]);
+
+        match decide_static_bounds_action(
+            grass_collider.bounds(),
+            &grass_collider,
+            &clearance,
+            &occluders,
+        ) {
+            StaticBoundsAction::Move { ratio, reason, .. } => {
+                assert_close(ratio, 0.0);
+                assert_eq!(reason, StaticBoundsBlockReason::Clearance);
+            }
+            StaticBoundsAction::None | StaticBoundsAction::Delete { .. } => {
+                panic!("expected clearance move")
+            }
         }
     }
 

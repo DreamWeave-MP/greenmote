@@ -73,7 +73,9 @@ pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
                     return "would_delete_static_bounds_occluded";
                 }
             }
-            "static_bounds_relocatable" if input.write.actions.static_move() => {
+            "static_bounds_relocatable" | "static_clearance_relocatable"
+                if input.write.actions.static_move() =>
+            {
                 if matches!(input.write.plan, WritePlanEvidence::NotPlanned) {
                     return "would_move_static_bounds_occluded";
                 }
@@ -92,12 +94,17 @@ pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
             "static_bounds_fully_occluded" if !input.write.actions.static_delete() => {
                 "skipped_static_delete_disabled"
             }
-            "static_bounds_relocatable" | "static_bounds_blocked"
+            "static_bounds_relocatable"
+            | "static_bounds_blocked"
+            | "static_clearance_relocatable"
+            | "static_clearance_blocked"
                 if !input.write.actions.static_move() =>
             {
                 "skipped_static_move_disabled"
             }
-            "static_bounds_blocked" if input.write.actions.static_move() => {
+            "static_bounds_blocked" | "static_clearance_blocked"
+                if input.write.actions.static_move() =>
+            {
                 "static_bounds_blocked_no_relocation"
             }
             _ => mesh_resolution_write_status(input),

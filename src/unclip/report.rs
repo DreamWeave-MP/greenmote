@@ -447,7 +447,7 @@ fn write_static_bounds_summary_text(
     stdout: &mut dyn Write,
     summary: &UnclipSummary,
 ) -> io::Result<()> {
-    writeln!(stdout, "Static bounds occlusion:")?;
+    writeln!(stdout, "Static occlusion and clearance:")?;
     writeln!(
         stdout,
         "  matching occluded: {}",
@@ -621,10 +621,11 @@ fn write_static_bounds_move_text(
 ) -> io::Result<()> {
     writeln!(
         stdout,
-        "MOVE_STATIC_BOUNDS CELL {:?} REF {:?} {} ratio={:.3} old_position={:?} new_position={:?} occluder={} occluder_cell={:?} occluder_ref={:?}",
+        "MOVE_STATIC_BOUNDS CELL {:?} REF {:?} {} reason={} ratio={:.3} old_position={:?} new_position={:?} occluder={} occluder_cell={:?} occluder_ref={:?}",
         move_.cell,
         move_.reference_key,
         move_.id,
+        move_.block_reason,
         move_.occlusion_ratio,
         move_.old_position,
         move_.new_position,

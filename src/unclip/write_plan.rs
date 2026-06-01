@@ -164,6 +164,7 @@ pub(crate) struct WriteStaticBoundsMove {
     pub(crate) reference_key: [u32; 2],
     pub(crate) id: String,
     pub(crate) occlusion_ratio: f32,
+    pub(crate) block_reason: &'static str,
     pub(crate) old_position: [f32; 3],
     pub(crate) new_position: [f32; 3],
     pub(crate) occluder_id: String,
