@@ -26,6 +26,7 @@ impl StaticOccluderIndex {
         let occluders = occluders
             .into_iter()
             .map(|mut occluder| {
+                // Keep this as the index/query broad bounds for the actual collider shape.
                 occluder.bounds = occluder.collider.bounds();
                 occluder
             })

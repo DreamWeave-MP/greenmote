@@ -496,6 +496,11 @@ fn write_occluder_summary_text(
     writeln!(stdout, "  resolved bounds: {}", occluders.resolved_bounds)?;
     writeln!(
         stdout,
+        "  collider part fallbacks: {}",
+        occluders.collider_part_fallbacks
+    )?;
+    writeln!(
+        stdout,
         "  huge footprint: {} over {:.0} units",
         occluders.huge_footprint, occluders.huge_footprint_side_threshold
     )?;
@@ -757,6 +762,24 @@ mod tests {
         assert!(
             output.contains("No plugin written: all write actions disabled at plugin.omwaddon")
         );
+    }
+
+    #[test]
+    fn write_summary_reports_static_occluder_fallbacks() {
+        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
+        context.static_occluder_report.collider_part_fallbacks = 2;
+        let mut output = Vec::new();
+
+        write_summary_text(
+            &mut output,
+            &context,
+            &TerrainInspectionReport::default(),
+            false,
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("  collider part fallbacks: 2"));
     }
 
     #[test]
