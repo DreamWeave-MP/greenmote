@@ -108,6 +108,7 @@ pub struct MeshGeometry {
 pub(crate) struct MeshColliderParts {
     parts: Vec<MeshColliderPart>,
     fallback: Option<ColliderPartsFallback>,
+    source: MeshColliderSource,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,6 +128,12 @@ pub(crate) enum ColliderPartsFallback {
     Empty,
     OverBudget,
     UnsafeTransform,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MeshColliderSource {
+    Collision,
+    VisibleFallback,
 }
 
 const MAX_COLLIDER_PARTS: usize = 32;
@@ -260,13 +267,19 @@ impl MeshColliderParts {
                 obb: LocalObb::from_mesh_aabb(bounds),
             }],
             fallback: None,
+            source: MeshColliderSource::VisibleFallback,
         }
     }
 
     #[must_use]
-    fn aggregate_fallback(bounds: MeshAabb, fallback: ColliderPartsFallback) -> Self {
+    fn aggregate_fallback(
+        bounds: MeshAabb,
+        fallback: ColliderPartsFallback,
+        source: MeshColliderSource,
+    ) -> Self {
         let mut parts = Self::from_mesh_aabb(bounds);
         parts.fallback = Some(fallback);
+        parts.source = source;
         parts
     }
 
@@ -278,6 +291,7 @@ impl MeshColliderParts {
                 .map(|obb| MeshColliderPart { obb })
                 .collect(),
             fallback: None,
+            source: MeshColliderSource::VisibleFallback,
         }
     }
 
@@ -288,6 +302,11 @@ impl MeshColliderParts {
     #[must_use]
     pub(crate) const fn fallback(&self) -> Option<ColliderPartsFallback> {
         self.fallback
+    }
+
+    #[must_use]
+    pub(crate) const fn source(&self) -> MeshColliderSource {
+        self.source
     }
 }
 
@@ -598,21 +617,27 @@ fn mesh_bounds(stream: &NiStream) -> Option<MeshAabb> {
 }
 
 fn mesh_collider_parts(stream: &NiStream, bounds: MeshAabb) -> MeshColliderParts {
-    match collect_mesh_parts(stream, MeshSource::Collision)
-        .or_else(|| collect_mesh_parts(stream, MeshSource::Visible))
-    {
-        Some(Ok(parts)) if parts.is_empty() => {
-            MeshColliderParts::aggregate_fallback(bounds, ColliderPartsFallback::Empty)
+    let (source, collected) = collect_mesh_parts(stream, MeshSource::Collision)
+        .map(|parts| (MeshColliderSource::Collision, parts))
+        .or_else(|| {
+            collect_mesh_parts(stream, MeshSource::Visible)
+                .map(|parts| (MeshColliderSource::VisibleFallback, parts))
+        })
+        .unwrap_or((MeshColliderSource::VisibleFallback, Ok(Vec::new())));
+
+    match collected {
+        Ok(parts) if parts.is_empty() => {
+            MeshColliderParts::aggregate_fallback(bounds, ColliderPartsFallback::Empty, source)
         }
-        Some(Ok(parts)) if parts.len() > MAX_COLLIDER_PARTS => {
-            MeshColliderParts::aggregate_fallback(bounds, ColliderPartsFallback::OverBudget)
+        Ok(parts) if parts.len() > MAX_COLLIDER_PARTS => {
+            MeshColliderParts::aggregate_fallback(bounds, ColliderPartsFallback::OverBudget, source)
         }
-        Some(Ok(parts)) => MeshColliderParts {
+        Ok(parts) => MeshColliderParts {
             parts,
             fallback: None,
+            source,
         },
-        Some(Err(fallback)) => MeshColliderParts::aggregate_fallback(bounds, fallback),
-        None => MeshColliderParts::aggregate_fallback(bounds, ColliderPartsFallback::Empty),
+        Err(fallback) => MeshColliderParts::aggregate_fallback(bounds, fallback, source),
     }
 }
 
@@ -765,7 +790,11 @@ fn visit_object(
     }
 
     if let Some(root_collision_node) = stream.get_as::<_, RootCollisionNode>(link) {
-        if root_collision_node.base.base.app_culled() {
+        // Some shipped collision roots are app-culled while still carrying valid
+        // collision geometry. Keep app-cull filtering for visible extraction and
+        // for ordinary descendants below; only the RootCollisionNode itself gets
+        // this collision-source exception.
+        if source == MeshSource::Visible && root_collision_node.base.base.app_culled() {
             return;
         }
         let transform = parent_transform * root_collision_node.base.base.transform();
@@ -853,7 +882,11 @@ fn visit_object_parts(
     }
 
     if let Some(root_collision_node) = stream.get_as::<_, RootCollisionNode>(link) {
-        if root_collision_node.base.base.app_culled() {
+        // Some shipped collision roots are app-culled while still carrying valid
+        // collision geometry. Keep app-cull filtering for visible extraction and
+        // for ordinary descendants below; only the RootCollisionNode itself gets
+        // this collision-source exception.
+        if source == MeshSource::Visible && root_collision_node.base.base.app_culled() {
             return Ok(());
         }
         let transform = parent_transform * root_collision_node.base.base.transform();
@@ -1301,6 +1334,7 @@ mod tests {
         let parts = mesh_collider_parts(&stream, mesh_bounds(&stream).unwrap());
 
         assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.source(), MeshColliderSource::Collision);
         assert_eq!(parts.parts.len(), 1);
         assert_obb_close(
             parts.parts[0].obb,
@@ -1317,6 +1351,7 @@ mod tests {
         let parts = mesh_collider_parts(&stream, mesh_bounds(&stream).unwrap());
 
         assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.source(), MeshColliderSource::VisibleFallback);
         assert_eq!(parts.parts.len(), 1);
         assert_obb_close(
             parts.parts[0].obb,
@@ -1443,6 +1478,26 @@ mod tests {
     }
 
     #[test]
+    fn app_culled_root_collision_node_is_included_for_collision_extraction() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root =
+            insert_root_collision_node_with_flags(&mut stream, vec![collision_shape], 1);
+        let root = insert_node(&mut stream, "root", vec![visible, collision_root], None, 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.contact.vertices, expected_contact_vertices());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::Collision);
+    }
+
+    #[test]
     fn occluder_bounds_fall_back_to_visible_geometry_without_collision() {
         let mut stream = NiStream::new();
         let shape = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
@@ -1463,6 +1518,16 @@ mod tests {
 
         assert_eq!(geometry.bounds, expected_bounds());
         assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+    }
+
+    #[test]
+    fn app_culled_visible_geometry_remains_excluded_from_visible_extraction() {
+        let mut stream = NiStream::new();
+        let culled = insert_shape(&mut stream, "culled", &collision_vertices(), 1);
+        push_root(&mut stream, culled);
+
+        assert!(mesh_geometry(&stream).is_none());
+        assert!(mesh_bounds(&stream).is_none());
     }
 
     #[test]
@@ -1647,9 +1712,18 @@ mod tests {
         stream: &mut NiStream,
         children: Vec<NiLink<NiAVObject>>,
     ) -> NiLink<NiAVObject> {
+        insert_root_collision_node_with_flags(stream, children, 0)
+    }
+
+    fn insert_root_collision_node_with_flags(
+        stream: &mut NiStream,
+        children: Vec<NiLink<NiAVObject>>,
+        flags: u16,
+    ) -> NiLink<NiAVObject> {
         let node = RootCollisionNode {
             base: NiNode {
                 base: NiAVObject {
+                    flags,
                     base: NiObjectNET {
                         name: "not-semantically-important".to_owned(),
                         ..NiObjectNET::default()

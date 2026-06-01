@@ -494,6 +494,12 @@ fn write_occluder_summary_text(
     )?;
     writeln!(stdout, "  missing bounds: {}", occluders.missing_bounds)?;
     writeln!(stdout, "  resolved bounds: {}", occluders.resolved_bounds)?;
+    writeln!(stdout, "  collision source: {}", occluders.collision_source)?;
+    writeln!(
+        stdout,
+        "  visible fallback source: {}",
+        occluders.visible_fallback_source
+    )?;
     writeln!(
         stdout,
         "  collider part fallbacks: {}",

@@ -5,7 +5,7 @@ use tes3::esp::{Cell, Plugin};
 use super::{
     args::IdFilter,
     cells::CellCoord,
-    mesh::{MeshCache, StaticMeshIndex, WorldAabb},
+    mesh::{MeshCache, MeshColliderSource, StaticMeshIndex, WorldAabb},
     occlusion::{StaticOccluder, StaticOccluderIndex},
     physics::RapierCollider,
 };
@@ -20,6 +20,8 @@ pub(crate) struct StaticOccluderBuildReport {
     pub(crate) unresolved_static: usize,
     pub(crate) missing_bounds: usize,
     pub(crate) resolved_bounds: usize,
+    pub(crate) collision_source: usize,
+    pub(crate) visible_fallback_source: usize,
     pub(crate) collider_part_fallbacks: usize,
     pub(crate) huge_footprint: usize,
     pub(crate) huge_footprint_side_threshold: f32,
@@ -83,6 +85,10 @@ pub(crate) fn build_static_occluders(
         };
         if collider_parts.fallback().is_some() {
             build_report.collider_part_fallbacks += 1;
+        }
+        match collider_parts.source() {
+            MeshColliderSource::Collision => build_report.collision_source += 1,
+            MeshColliderSource::VisibleFallback => build_report.visible_fallback_source += 1,
         }
         let collider = RapierCollider::from_mesh_collider_parts(
             collider_parts,
@@ -195,10 +201,16 @@ fn effective_static_occluder_refs<'a>(
 mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
-        path::PathBuf,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
     };
 
+    use glam::Vec3;
     use tes3::esp::{Cell, CellData, Plugin, Reference, Static, TES3Object};
+    use tes3::nif::{
+        NiAVObject, NiGeometry, NiGeometryData, NiLink, NiObjectNET, NiStream, NiTriBasedGeom,
+        NiTriBasedGeomData, NiTriShape, NiTriShapeData, NiType, RootCollisionNode,
+    };
     use vfstool_lib::VFS;
 
     use crate::unclip::{args::IdFilter, cells::CellCoord};
@@ -207,6 +219,8 @@ mod tests {
         EffectiveRefState, ExclusionReason, build_static_occluders, effective_static_occluder_refs,
         should_include_occluder,
     };
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn effective_static_occluder_refs_apply_later_deletions() {
@@ -423,6 +437,45 @@ mod tests {
     }
 
     #[test]
+    fn static_occluder_report_counts_collider_sources() {
+        let temp_dir = TempDir::new("collider-sources");
+        write_visible_nif(&temp_dir.path().join("Meshes/Rock.nif"));
+        write_collision_nif(&temp_dir.path().join("Meshes/Tree.nif"));
+        let rock = Static {
+            id: "rock".to_owned(),
+            mesh: "Rock.nif".to_owned(),
+            ..Static::default()
+        };
+        let tree = Static {
+            id: "tree".to_owned(),
+            mesh: "Tree.nif".to_owned(),
+            ..Static::default()
+        };
+        let static_index = crate::unclip::mesh::StaticMeshIndex::from_statics([&rock, &tree]);
+        let plugin = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([
+                ((1, 1), reference_with_id("rock")),
+                ((1, 2), reference_with_id("tree")),
+            ]))],
+        };
+        let vfs = VFS::from_directories(vec![temp_dir.path().to_path_buf()], None);
+        let mut mesh_bounds = crate::unclip::mesh::MeshCache::new(&vfs);
+
+        let (_, report) = build_static_occluders(
+            &[plugin],
+            &BTreeSet::from([(0, 0)]),
+            &static_index,
+            &mut mesh_bounds,
+            &BTreeSet::new(),
+            &IdFilter::new(&[], &[]).unwrap(),
+        );
+
+        assert_eq!(report.resolved_bounds, 2);
+        assert_eq!(report.collision_source, 1);
+        assert_eq!(report.visible_fallback_source, 1);
+    }
+
+    #[test]
     fn overwritten_candidate_by_unresolved_static_does_not_load_missing_mesh_bounds() {
         let first = Plugin {
             objects: vec![TES3Object::Cell(exterior_cell([(
@@ -529,6 +582,97 @@ mod tests {
             ..Static::default()
         };
         crate::unclip::mesh::StaticMeshIndex::from_statics([&rock, &grass])
+    }
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "greenmote-static-occluders-{name}-{}-{}",
+                std::process::id(),
+                NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn write_visible_nif(path: &Path) {
+        let mut stream = NiStream::new();
+        let shape = insert_shape(&mut stream, visible_vertices());
+        stream.roots.push(shape.cast());
+        write_stream(path, stream);
+    }
+
+    fn write_collision_nif(path: &Path) {
+        let mut stream = NiStream::new();
+        let shape = insert_shape(&mut stream, collision_vertices());
+        let root = RootCollisionNode {
+            base: tes3::nif::NiNode {
+                base: NiAVObject::default(),
+                children: vec![shape],
+                ..tes3::nif::NiNode::default()
+            },
+        };
+        let root_key = stream.objects.insert(NiType::from(root));
+        stream
+            .roots
+            .push(NiLink::<NiAVObject>::new(root_key).cast());
+        write_stream(path, stream);
+    }
+
+    fn write_stream(path: &Path, mut stream: NiStream) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, stream.save_bytes().unwrap()).unwrap();
+    }
+
+    fn insert_shape(stream: &mut NiStream, vertices: &[[f32; 3]]) -> NiLink<NiAVObject> {
+        let geometry_data = NiTriShapeData {
+            base: NiTriBasedGeomData {
+                base: NiGeometryData {
+                    vertices: vertices.iter().copied().map(Vec3::from).collect(),
+                    ..NiGeometryData::default()
+                },
+            },
+            triangles: vec![[0, 1, 2]],
+            shared_normals: Vec::new(),
+        };
+        let data_key = stream.objects.insert(NiType::from(geometry_data));
+        let shape = NiTriShape {
+            base: NiTriBasedGeom {
+                base: NiGeometry {
+                    base: NiAVObject {
+                        base: NiObjectNET::default(),
+                        ..NiAVObject::default()
+                    },
+                    geometry_data: NiLink::new(data_key),
+                    ..NiGeometry::default()
+                },
+            },
+        };
+        let shape_key = stream.objects.insert(NiType::from(shape));
+        NiLink::new(shape_key)
+    }
+
+    fn visible_vertices() -> &'static [[f32; 3]] {
+        &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]]
+    }
+
+    fn collision_vertices() -> &'static [[f32; 3]] {
+        &[[0.0, 0.0, -1.0], [2.0, 0.0, -1.0], [0.0, 2.0, 2.0]]
     }
 
     fn effective_occluder_refs<'a>(
