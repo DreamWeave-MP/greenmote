@@ -287,27 +287,34 @@ impl GreenmoteApp {
             .resizable(false)
             .show_separator_line(true)
             .show_inside(ui, |ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(
-                            self.settings.is_dirty(),
-                            egui::Button::new(self.localizer.text(UiText::Save)),
-                        )
-                        .clicked()
-                    {
-                        self.save_settings();
-                    }
+                let settings_error = self.settings.error.clone();
+                let settings_status = self.settings.status.clone();
+                let settings_dirty = self.settings.is_dirty();
+                let save_text = self.localizer.text(UiText::Save).to_owned();
+                let mut save_clicked = false;
 
-                    if ui.button(self.localizer.text(UiText::Back)).clicked() {
-                        self.request_convert();
-                    }
+                egui::Sides::new().shrink_left().truncate().show(
+                    ui,
+                    |ui| {
+                        if let Some(error) = &settings_error {
+                            ui.colored_label(ui.visuals().error_fg_color, error);
+                        } else if !settings_status.is_empty() {
+                            ui.label(&settings_status);
+                        }
+                    },
+                    |ui| {
+                        if ui
+                            .add_enabled(settings_dirty, egui::Button::new(save_text))
+                            .clicked()
+                        {
+                            save_clicked = true;
+                        }
+                    },
+                );
 
-                    if let Some(error) = &self.settings.error {
-                        ui.colored_label(ui.visuals().error_fg_color, error);
-                    } else if !self.settings.status.is_empty() {
-                        ui.label(&self.settings.status);
-                    }
-                });
+                if save_clicked {
+                    self.save_settings();
+                }
             });
 
         let available = ui.available_size();

@@ -14,7 +14,6 @@ macro_rules! route_text {
             | UiText::General
             | UiText::Browse
             | UiText::Save
-            | UiText::Back
             | UiText::Cancel
             | UiText::Add
             | UiText::Discard
@@ -180,7 +179,6 @@ pub(super) enum UiText {
     RunOptionsMatch,
     SaveOrDiscardSettingsBeforeDefaults,
     Save,
-    Back,
     Cancel,
     Add,
     Discard,
