@@ -339,6 +339,47 @@ mod tests {
     }
 
     #[test]
+    fn mesh_collider_parts_leave_gap_clear() {
+        let parts = MeshColliderParts::from_local_obbs([
+            LocalObb {
+                center: [-10.0, 0.0, 0.0],
+                half_extents: [2.0, 2.0, 2.0],
+                orientation: Quat::IDENTITY,
+            },
+            LocalObb {
+                center: [10.0, 0.0, 0.0],
+                half_extents: [2.0, 2.0, 2.0],
+                orientation: Quat::IDENTITY,
+            },
+        ]);
+        let compound = RapierCollider::from_mesh_collider_parts(&parts, [0.0; 3], [0.0; 3], None);
+        let gap_probe = RapierCollider::from_world_aabb(world_bounds([-1.0; 3], [1.0; 3]));
+
+        assert!(compound.bounds().intersection(gap_probe.bounds()).is_some());
+        assert!(!compound.intersects(&gap_probe));
+    }
+
+    #[test]
+    fn mesh_collider_part_orientation_combines_with_reference_rotation() {
+        let parts = MeshColliderParts::from_local_obbs([LocalObb {
+            center: [0.0; 3],
+            half_extents: [5.0, 0.5, 0.5],
+            orientation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        }]);
+        let collider = RapierCollider::from_mesh_collider_parts(
+            &parts,
+            [0.0; 3],
+            [0.0, 0.0, std::f32::consts::FRAC_PI_4],
+            None,
+        );
+        let probe =
+            RapierCollider::from_world_aabb(world_bounds([-0.25, 3.25, -0.25], [0.25, 3.75, 0.25]));
+
+        assert!(collider.bounds().intersection(probe.bounds()).is_some());
+        assert!(!collider.intersects(&probe));
+    }
+
+    #[test]
     fn mesh_bounds_and_single_part_fallback_are_equivalent_for_rotated_scaled_refs() {
         let bounds = mesh_bounds([-3.0, -1.0, -0.5], [5.0, 2.0, 4.0]);
         let translation = [12.0, -8.0, 3.0];

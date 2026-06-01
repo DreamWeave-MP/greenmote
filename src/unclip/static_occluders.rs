@@ -5,7 +5,7 @@ use tes3::esp::{Cell, Plugin};
 use super::{
     args::IdFilter,
     cells::CellCoord,
-    mesh::{MeshCache, MeshColliderParts, StaticMeshIndex, WorldAabb},
+    mesh::{MeshCache, StaticMeshIndex, WorldAabb},
     occlusion::{StaticOccluder, StaticOccluderIndex},
     physics::RapierCollider,
 };
@@ -20,6 +20,7 @@ pub(crate) struct StaticOccluderBuildReport {
     pub(crate) unresolved_static: usize,
     pub(crate) missing_bounds: usize,
     pub(crate) resolved_bounds: usize,
+    pub(crate) collider_part_fallbacks: usize,
     pub(crate) huge_footprint: usize,
     pub(crate) huge_footprint_side_threshold: f32,
 }
@@ -71,29 +72,35 @@ pub(crate) fn build_static_occluders(
         else {
             continue;
         };
-        let Ok(bounds) = mesh_bounds.bounds(static_mesh) else {
+        if mesh_bounds.bounds(static_mesh).is_err() {
+            build_report.missing_bounds += 1;
+            continue;
+        }
+        build_report.resolved_bounds += 1;
+        let Ok(collider_parts) = mesh_bounds.collider_parts(static_mesh) else {
             build_report.missing_bounds += 1;
             continue;
         };
-        let world_bounds =
-            bounds.world_aabb(reference.translation, reference.rotation, reference.scale);
-        build_report.resolved_bounds += 1;
-        if huge_footprint(world_bounds) {
+        if collider_parts.fallback().is_some() {
+            build_report.collider_part_fallbacks += 1;
+        }
+        let collider = RapierCollider::from_mesh_collider_parts(
+            collider_parts,
+            reference.translation,
+            reference.rotation,
+            reference.scale,
+        );
+        let bounds = collider.bounds();
+        if huge_footprint(bounds) {
             build_report.huge_footprint += 1;
         }
-        let collider_parts = MeshColliderParts::from_mesh_aabb(bounds);
 
         occluders.push(StaticOccluder {
             id: reference.id.clone(),
             cell: [key.cell.0, key.cell.1],
             reference_key: [key.reference.0, key.reference.1],
-            bounds: world_bounds,
-            collider: RapierCollider::from_mesh_collider_parts(
-                &collider_parts,
-                reference.translation,
-                reference.rotation,
-                reference.scale,
-            ),
+            bounds,
+            collider,
         });
     }
 

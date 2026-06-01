@@ -23,6 +23,13 @@ pub(crate) struct StaticOccluderIndex {
 
 impl StaticOccluderIndex {
     pub(crate) fn new(occluders: Vec<StaticOccluder>) -> Self {
+        let occluders = occluders
+            .into_iter()
+            .map(|mut occluder| {
+                occluder.bounds = occluder.collider.bounds();
+                occluder
+            })
+            .collect::<Vec<_>>();
         let mut cells = BTreeMap::<CellCoord, Vec<usize>>::new();
         let mut large_occluders = Vec::new();
         for (index, occluder) in occluders.iter().enumerate() {
@@ -326,9 +333,10 @@ mod tests {
         cell_span_for_bounds, decide_static_bounds_action, static_bounds_occlusion_ratio,
     };
     use crate::unclip::{
-        mesh::{MeshAabb, WorldAabb},
+        mesh::{LocalObb, MeshAabb, MeshColliderParts, WorldAabb},
         physics::RapierCollider,
     };
+    use glam::Quat;
 
     #[test]
     fn static_bounds_occlusion_ratio_counts_intersection_volume() {
@@ -514,6 +522,32 @@ mod tests {
 
         assert_eq!(occluders.candidates_for(query).len(), 1);
         assert!(occluders.intersects_volume(query));
+    }
+
+    #[test]
+    fn static_occluder_index_uses_collider_bounds_when_visual_bounds_are_smaller() {
+        let visual_bounds = mesh_aabb([8188.0, -1.0, -1.0], [8191.0, 1.0, 1.0])
+            .world_aabb([0.0; 3], [0.0; 3], None);
+        let collider_parts = MeshColliderParts::from_local_obbs([LocalObb {
+            center: [8193.0, 0.0, 0.0],
+            half_extents: [3.0, 1.0, 1.0],
+            orientation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_4),
+        }]);
+        let collider =
+            RapierCollider::from_mesh_collider_parts(&collider_parts, [0.0; 3], [0.0; 3], None);
+        assert!(collider.bounds().max[0] > visual_bounds.max[0]);
+
+        let occluders = StaticOccluderIndex::new(vec![StaticOccluder {
+            id: "rock".to_owned(),
+            cell: [0, 0],
+            reference_key: [1, 2],
+            bounds: visual_bounds,
+            collider: collider.clone(),
+        }]);
+        let query = RapierCollider::from_world_aabb(aabb([8192.0, -0.5, -0.5], [8192.5, 0.5, 0.5]));
+
+        assert_eq!(occluders.candidates_for(query.bounds()).len(), 1);
+        assert!(occluders.intersects_shape(&query));
     }
 
     #[test]

@@ -101,11 +101,13 @@ pub struct MeshGeometry {
     pub contact: MeshContact,
     pub bounds: MeshAabb,
     pub occluder_bounds: MeshAabb,
+    pub(crate) occluder_parts: MeshColliderParts,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MeshColliderParts {
     parts: Vec<MeshColliderPart>,
+    fallback: Option<ColliderPartsFallback>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -119,6 +121,15 @@ pub(crate) struct LocalObb {
     pub(crate) half_extents: [f32; 3],
     pub(crate) orientation: Quat,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ColliderPartsFallback {
+    Empty,
+    OverBudget,
+    UnsafeTransform,
+}
+
+const MAX_COLLIDER_PARTS: usize = 32;
 
 impl MeshContact {
     #[must_use]
@@ -248,11 +259,35 @@ impl MeshColliderParts {
             parts: vec![MeshColliderPart {
                 obb: LocalObb::from_mesh_aabb(bounds),
             }],
+            fallback: None,
+        }
+    }
+
+    #[must_use]
+    fn aggregate_fallback(bounds: MeshAabb, fallback: ColliderPartsFallback) -> Self {
+        let mut parts = Self::from_mesh_aabb(bounds);
+        parts.fallback = Some(fallback);
+        parts
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_local_obbs(local_obbs: impl IntoIterator<Item = LocalObb>) -> Self {
+        Self {
+            parts: local_obbs
+                .into_iter()
+                .map(|obb| MeshColliderPart { obb })
+                .collect(),
+            fallback: None,
         }
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &MeshColliderPart> {
         self.parts.iter()
+    }
+
+    #[must_use]
+    pub(crate) const fn fallback(&self) -> Option<ColliderPartsFallback> {
+        self.fallback
     }
 }
 
@@ -324,6 +359,7 @@ enum CachedMesh {
     BoundsOnly {
         stream: NiStream,
         bounds: MeshAabb,
+        collider_parts: MeshColliderParts,
         geometry_error: Option<CachedMeshError>,
     },
     Loaded(MeshGeometry),
@@ -407,6 +443,7 @@ impl<'a> MeshCache<'a> {
             let mesh = load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
                 |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
                 |(stream, bounds)| CachedMesh::BoundsOnly {
+                    collider_parts: mesh_collider_parts(&stream, bounds),
                     stream,
                     bounds,
                     geometry_error: None,
@@ -418,6 +455,31 @@ impl<'a> MeshCache<'a> {
         match &self.meshes[key] {
             CachedMesh::BoundsOnly { bounds, .. } => Ok(*bounds),
             CachedMesh::Loaded(geometry) => Ok(geometry.occluder_bounds),
+            CachedMesh::Failed(error) => Err(error.to_io()),
+        }
+    }
+
+    pub(crate) fn collider_parts(
+        &mut self,
+        static_mesh: &StaticMesh,
+    ) -> io::Result<&MeshColliderParts> {
+        let key = &static_mesh.mesh_key;
+        if !self.meshes.contains_key(key) {
+            let mesh = load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
+                |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
+                |(stream, bounds)| CachedMesh::BoundsOnly {
+                    collider_parts: mesh_collider_parts(&stream, bounds),
+                    stream,
+                    bounds,
+                    geometry_error: None,
+                },
+            );
+            self.meshes.insert(key.clone(), mesh);
+        }
+
+        match &self.meshes[key] {
+            CachedMesh::BoundsOnly { collider_parts, .. } => Ok(collider_parts),
+            CachedMesh::Loaded(geometry) => Ok(&geometry.occluder_parts),
             CachedMesh::Failed(error) => Err(error.to_io()),
         }
     }
@@ -515,10 +577,13 @@ fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
         max: accumulated.max.to_array(),
     };
 
+    let occluder_bounds = mesh_bounds(stream).unwrap_or(bounds);
+
     Some(MeshGeometry {
         contact: MeshContact::new(vertices.iter().map(glam::Vec3::to_array).collect()),
         bounds,
-        occluder_bounds: mesh_bounds(stream).unwrap_or(bounds),
+        occluder_bounds,
+        occluder_parts: mesh_collider_parts(stream, occluder_bounds),
     })
 }
 
@@ -530,6 +595,25 @@ fn mesh_bounds(stream: &NiStream) -> Option<MeshAabb> {
         min: accumulated.min.to_array(),
         max: accumulated.max.to_array(),
     })
+}
+
+fn mesh_collider_parts(stream: &NiStream, bounds: MeshAabb) -> MeshColliderParts {
+    match collect_mesh_parts(stream, MeshSource::Collision)
+        .or_else(|| collect_mesh_parts(stream, MeshSource::Visible))
+    {
+        Some(Ok(parts)) if parts.is_empty() => {
+            MeshColliderParts::aggregate_fallback(bounds, ColliderPartsFallback::Empty)
+        }
+        Some(Ok(parts)) if parts.len() > MAX_COLLIDER_PARTS => {
+            MeshColliderParts::aggregate_fallback(bounds, ColliderPartsFallback::OverBudget)
+        }
+        Some(Ok(parts)) => MeshColliderParts {
+            parts,
+            fallback: None,
+        },
+        Some(Err(fallback)) => MeshColliderParts::aggregate_fallback(bounds, fallback),
+        None => MeshColliderParts::aggregate_fallback(bounds, ColliderPartsFallback::Empty),
+    }
 }
 
 fn dedup_vertices_preserving_order(vertices: &mut Vec<Vec3>) {
@@ -616,6 +700,37 @@ fn collect_mesh(
     }
 
     Some(accumulated)
+}
+
+fn collect_mesh_parts(
+    stream: &NiStream,
+    source: MeshSource,
+) -> Option<Result<Vec<MeshColliderPart>, ColliderPartsFallback>> {
+    let mut parts = Vec::new();
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+
+    for root in &stream.roots {
+        queue.push_back(VisitItem {
+            parent: None,
+            link: root.cast(),
+            transform: Affine3A::IDENTITY,
+            collision: false,
+        });
+    }
+
+    while let Some(item) = queue.pop_front() {
+        if let Err(fallback) =
+            visit_object_parts(stream, item, source, &mut visited, &mut queue, &mut parts)
+        {
+            return Some(Err(fallback));
+        }
+        if parts.len() > MAX_COLLIDER_PARTS {
+            return Some(Err(ColliderPartsFallback::OverBudget));
+        }
+    }
+
+    (!parts.is_empty()).then_some(Ok(parts))
 }
 
 #[derive(Clone, Copy)]
@@ -716,6 +831,96 @@ fn visit_object(
     }
 }
 
+fn visit_object_parts(
+    stream: &NiStream,
+    item: VisitItem,
+    source: MeshSource,
+    visited: &mut HashSet<VisitEdge>,
+    queue: &mut VecDeque<VisitItem>,
+    parts: &mut Vec<MeshColliderPart>,
+) -> Result<(), ColliderPartsFallback> {
+    let VisitItem {
+        parent,
+        link,
+        transform: parent_transform,
+        collision: parent_collision,
+    } = item;
+    if link.is_null() {
+        return Ok(());
+    }
+    if !visited.insert((parent, link.key, parent_collision)) {
+        return Ok(());
+    }
+
+    if let Some(root_collision_node) = stream.get_as::<_, RootCollisionNode>(link) {
+        if root_collision_node.base.base.app_culled() {
+            return Ok(());
+        }
+        let transform = parent_transform * root_collision_node.base.base.transform();
+        for child in &root_collision_node.base.children {
+            queue.push_back(VisitItem {
+                parent: Some(link.key),
+                link: *child,
+                transform,
+                collision: true,
+            });
+        }
+    } else if let Some(node) = stream.get_as::<_, NiNode>(link) {
+        if node.base.app_culled() {
+            return Ok(());
+        }
+        let collision = parent_collision || has_rcn_extra(&node.base.base, stream);
+        if source == MeshSource::Visible && collision {
+            return Ok(());
+        }
+        let transform = parent_transform * node.base.transform();
+        for child in &node.children {
+            queue.push_back(VisitItem {
+                parent: Some(link.key),
+                link: *child,
+                transform,
+                collision,
+            });
+        }
+    } else if let Some(shape) = stream.get_as::<_, NiTriShape>(link) {
+        if shape.base.base.base.app_culled() {
+            return Ok(());
+        }
+        let collision = parent_collision || has_rcn_extra(&shape.base.base.base.base, stream);
+        if !source.includes(collision) {
+            return Ok(());
+        }
+        let transform = parent_transform * shape.base.base.base.transform();
+        if let Some(data) = stream.get_as::<_, NiTriShapeData>(shape.base.base.geometry_data) {
+            include_part(
+                &data.base.base,
+                data.triangles.iter().flatten().copied(),
+                transform,
+                parts,
+            )?;
+        }
+    } else if let Some(strips) = stream.get_as::<_, NiTriStrips>(link) {
+        if strips.base.base.base.app_culled() {
+            return Ok(());
+        }
+        let collision = parent_collision || has_rcn_extra(&strips.base.base.base.base, stream);
+        if !source.includes(collision) {
+            return Ok(());
+        }
+        let transform = parent_transform * strips.base.base.base.transform();
+        if let Some(data) = stream.get_as::<_, NiTriStripsData>(strips.base.base.geometry_data) {
+            include_part(
+                &data.base.base,
+                data.strips.iter().copied(),
+                transform,
+                parts,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 fn has_rcn_extra(object: &NiObjectNET, stream: &NiStream) -> bool {
     object
         .extra_datas_of_type::<NiStringExtraData>(stream)
@@ -733,6 +938,98 @@ fn include_vertices(
             mesh.include(transform.transform_point3(*vertex));
         }
     }
+}
+
+fn include_part(
+    data: &NiGeometryData,
+    indices: impl IntoIterator<Item = u16>,
+    transform: Affine3A,
+    parts: &mut Vec<MeshColliderPart>,
+) -> Result<(), ColliderPartsFallback> {
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    let mut has_vertices = false;
+
+    for index in indices {
+        if let Some(vertex) = data.vertices.get(usize::from(index)) {
+            has_vertices = true;
+            min = min.min(*vertex);
+            max = max.max(*vertex);
+        }
+    }
+
+    if !has_vertices {
+        return Ok(());
+    }
+
+    let local_bounds = MeshAabb {
+        min: min.to_array(),
+        max: max.to_array(),
+    };
+    let local = LocalObb::from_mesh_aabb(local_bounds);
+    let obb = transform_local_obb(local, transform)?;
+    parts.push(MeshColliderPart { obb });
+
+    Ok(())
+}
+
+fn transform_local_obb(
+    local: LocalObb,
+    transform: Affine3A,
+) -> Result<LocalObb, ColliderPartsFallback> {
+    let (orientation, scale) = decompose_uniform_transform(transform)?;
+    let center = transform.transform_point3(Vec3::from(local.center));
+    let half_extents = Vec3::from(local.half_extents) * scale.abs();
+
+    Ok(LocalObb {
+        center: center.to_array(),
+        half_extents: half_extents.to_array(),
+        orientation: orientation * local.orientation,
+    })
+}
+
+fn decompose_uniform_transform(transform: Affine3A) -> Result<(Quat, f32), ColliderPartsFallback> {
+    let matrix = Mat3::from(transform.matrix3);
+    let x = matrix.x_axis;
+    let y = matrix.y_axis;
+    let z = matrix.z_axis;
+    let scale = (x.length() + y.length() + z.length()) / 3.0;
+    if !scale.is_finite() || scale <= f32::EPSILON {
+        return Err(ColliderPartsFallback::UnsafeTransform);
+    }
+
+    let tolerance = 0.000_1_f32.max(scale * 0.000_1);
+    if (x.length() - scale).abs() > tolerance
+        || (y.length() - scale).abs() > tolerance
+        || (z.length() - scale).abs() > tolerance
+    {
+        return Err(ColliderPartsFallback::UnsafeTransform);
+    }
+
+    let mut rotation = Mat3::from_cols(x / scale, y / scale, z / scale);
+    if rotation.determinant() < 0.0 {
+        rotation = Mat3::from_cols(-rotation.x_axis, -rotation.y_axis, -rotation.z_axis);
+    }
+    if !is_orthonormal(rotation) {
+        return Err(ColliderPartsFallback::UnsafeTransform);
+    }
+
+    Ok((Quat::from_mat3(&rotation), scale))
+}
+
+fn is_orthonormal(matrix: Mat3) -> bool {
+    const TOLERANCE: f32 = 0.000_1;
+    let x = matrix.x_axis;
+    let y = matrix.y_axis;
+    let z = matrix.z_axis;
+
+    (x.length() - 1.0).abs() <= TOLERANCE
+        && (y.length() - 1.0).abs() <= TOLERANCE
+        && (z.length() - 1.0).abs() <= TOLERANCE
+        && x.dot(y).abs() <= TOLERANCE
+        && x.dot(z).abs() <= TOLERANCE
+        && y.dot(z).abs() <= TOLERANCE
+        && (matrix.determinant() - 1.0).abs() <= TOLERANCE
 }
 
 #[cfg(test)]
@@ -993,6 +1290,94 @@ mod tests {
     }
 
     #[test]
+    fn collider_parts_prefer_collision_geometry() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root = insert_root_collision_node(&mut stream, vec![collision_shape]);
+        let root = insert_node(&mut stream, "root", vec![visible, collision_root], None, 0);
+        push_root(&mut stream, root);
+
+        let parts = mesh_collider_parts(&stream, mesh_bounds(&stream).unwrap());
+
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(collision_bounds()),
+        );
+    }
+
+    #[test]
+    fn collider_parts_fall_back_to_visible_geometry_without_collision() {
+        let mut stream = NiStream::new();
+        let shape = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        push_root(&mut stream, shape);
+
+        let parts = mesh_collider_parts(&stream, mesh_bounds(&stream).unwrap());
+
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(expected_bounds()),
+        );
+    }
+
+    #[test]
+    fn collider_parts_preserve_shape_translation_rotation_and_scale() {
+        let mut stream = NiStream::new();
+        let shape = insert_shape(&mut stream, "rotated", &box_vertices(), 0);
+        set_transform(
+            &mut stream,
+            shape,
+            Vec3::new(10.0, 20.0, 30.0),
+            Mat3::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            2.0,
+        );
+        push_root(&mut stream, shape);
+
+        let parts = mesh_collider_parts(&stream, mesh_bounds(&stream).unwrap());
+
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        let obb = parts.parts[0].obb;
+        assert_position_close(obb.center, [10.0, 20.0, 30.0]);
+        assert_position_close(obb.half_extents, [2.0, 4.0, 6.0]);
+        assert_quat_close(
+            obb.orientation,
+            Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2),
+        );
+    }
+
+    #[test]
+    fn collider_parts_over_budget_falls_back_to_aggregate_aabb() {
+        let mut stream = NiStream::new();
+        let children = (0_u16..=u16::try_from(MAX_COLLIDER_PARTS).unwrap())
+            .map(|index| {
+                let shape = insert_shape(&mut stream, "part", &box_vertices(), 0);
+                set_transform(
+                    &mut stream,
+                    shape,
+                    Vec3::new(f32::from(index) * 10.0, 0.0, 0.0),
+                    Mat3::IDENTITY,
+                    1.0,
+                );
+                shape
+            })
+            .collect::<Vec<_>>();
+        let root = insert_node(&mut stream, "root", children, None, 0);
+        push_root(&mut stream, root);
+        let bounds = mesh_bounds(&stream).unwrap();
+
+        let parts = mesh_collider_parts(&stream, bounds);
+
+        assert_eq!(parts.fallback(), Some(ColliderPartsFallback::OverBudget));
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(parts.parts[0].obb, LocalObb::from_mesh_aabb(bounds));
+    }
+
+    #[test]
     fn rcn_extra_data_marks_subtree_as_collision_geometry() {
         let mut stream = NiStream::new();
         let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
@@ -1127,6 +1512,10 @@ mod tests {
             [80.0, -50.0, -20.0],
             [80.0, 40.0, 30.0],
         ]
+    }
+
+    fn box_vertices() -> Vec<[f32; 3]> {
+        vec![[-1.0, -2.0, -3.0], [1.0, -2.0, -3.0], [1.0, 2.0, 3.0]]
     }
 
     fn collision_bounds() -> MeshAabb {
@@ -1284,6 +1673,33 @@ mod tests {
         NiLink::new(extra_key)
     }
 
+    fn set_transform(
+        stream: &mut NiStream,
+        link: NiLink<NiAVObject>,
+        translation: Vec3,
+        rotation: Mat3,
+        scale: f32,
+    ) {
+        match stream.objects.get_mut(link.key).unwrap() {
+            NiType::NiTriShape(shape) => {
+                shape.base.base.base.translation = translation;
+                shape.base.base.base.rotation = rotation;
+                shape.base.base.base.scale = scale;
+            }
+            NiType::NiNode(node) => {
+                node.base.translation = translation;
+                node.base.rotation = rotation;
+                node.base.scale = scale;
+            }
+            NiType::RootCollisionNode(node) => {
+                node.base.base.translation = translation;
+                node.base.base.rotation = rotation;
+                node.base.base.scale = scale;
+            }
+            _ => panic!("unsupported transform target"),
+        }
+    }
+
     fn push_root(stream: &mut NiStream, link: NiLink<NiAVObject>) {
         stream.roots.push(link.cast());
     }
@@ -1306,5 +1722,15 @@ mod tests {
         for (actual, expected) in actual.into_iter().zip(expected) {
             assert!((actual - expected).abs() < 0.000_01);
         }
+    }
+
+    fn assert_obb_close(actual: LocalObb, expected: LocalObb) {
+        assert_position_close(actual.center, expected.center);
+        assert_position_close(actual.half_extents, expected.half_extents);
+        assert_quat_close(actual.orientation, expected.orientation);
+    }
+
+    fn assert_quat_close(actual: Quat, expected: Quat) {
+        assert!((actual.dot(expected).abs() - 1.0).abs() < 0.000_01);
     }
 }

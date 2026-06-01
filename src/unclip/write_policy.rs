@@ -1329,6 +1329,10 @@ mod tests {
                 min: [0.0; 3],
                 max: [1.0; 3],
             },
+            occluder_parts: crate::unclip::mesh::MeshColliderParts::from_mesh_aabb(MeshAabb {
+                min: [0.0; 3],
+                max: [1.0; 3],
+            }),
         }
     }
 
