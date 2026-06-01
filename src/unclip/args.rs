@@ -7,7 +7,7 @@ use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
-use super::model::{CONTACT_TERRAIN_EPSILON, ORIGIN_TERRAIN_EPSILON};
+use super::model::ORIGIN_TERRAIN_EPSILON;
 
 pub(crate) const DEFAULT_RELOCATION_STEP: f32 = 32.0;
 pub(crate) const DEFAULT_RELOCATION_STEPS: u16 = 8;
@@ -47,10 +47,6 @@ pub struct UnclipArgs {
     /// Comma-separated write actions to plan when --write is set.
     #[arg(long = "write-actions", value_enum, value_delimiter = ',')]
     pub write_actions: Vec<WriteActionArg>,
-
-    /// Maximum mesh contact/terrain Z delta treated as already on terrain.
-    #[arg(long = "contact-epsilon", value_parser = non_negative_f32)]
-    pub contact_epsilon: Option<f32>,
 
     /// Maximum reference origin/terrain Z delta treated as already on terrain.
     #[arg(long = "origin-epsilon", value_parser = non_negative_f32)]
@@ -107,7 +103,6 @@ pub enum WriteActionArg {
 #[derive(Clone, Debug)]
 pub(crate) struct UnclipPolicy {
     pub(crate) write_actions: WriteActions,
-    pub(crate) contact_epsilon: f32,
     pub(crate) origin_epsilon: f32,
     pub(crate) orientation_epsilon_degrees: f32,
     pub(crate) relocation: RelocationPolicy,
@@ -157,7 +152,6 @@ impl UnclipArgs {
             } else {
                 self.write_actions.clone()
             },
-            contact_epsilon: self.contact_epsilon.unwrap_or(CONTACT_TERRAIN_EPSILON),
             origin_epsilon: self.origin_epsilon.unwrap_or(ORIGIN_TERRAIN_EPSILON),
             relocation_step: self.relocation_step.unwrap_or(DEFAULT_RELOCATION_STEP),
             relocation_steps: self.relocation_steps.unwrap_or(DEFAULT_RELOCATION_STEPS),
@@ -187,7 +181,6 @@ impl crate::unclip::config::UnclipConfig {
         let write_actions = WriteActions::from_args(&self.write_actions)?;
         Ok(UnclipPolicy {
             write_actions,
-            contact_epsilon: self.contact_epsilon,
             origin_epsilon: self.origin_epsilon,
             orientation_epsilon_degrees: self.orientation_epsilon,
             relocation: RelocationPolicy {

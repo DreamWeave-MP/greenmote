@@ -129,10 +129,6 @@ const fn settings_text(key: UiText) -> &'static str {
             "Предупреждение: режим записи не создаст действий политики."
         }
         UiText::PolicyNumbers => "Значения политики",
-        UiText::MeshContactTolerance => "Допуск контакта mesh",
-        UiText::MeshContactToleranceTooltip => {
-            "Максимальная дельта контакта mesh/terrain Z, считающаяся уже на terrain. Config key: contact_epsilon."
-        }
         UiText::OriginHeightTolerance => "Допуск высоты origin",
         UiText::OriginHeightToleranceTooltip => {
             "Максимальная дельта origin ссылки/terrain Z, считающаяся уже на terrain. Config key: origin_epsilon."

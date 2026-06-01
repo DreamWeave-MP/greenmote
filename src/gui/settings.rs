@@ -62,7 +62,6 @@ pub(super) struct SettingsDraft {
 #[derive(Clone, Debug)]
 struct UnclipPolicyDraft {
     write_actions: [bool; UNCLIP_WRITE_ACTION_COUNT],
-    contact_epsilon: String,
     origin_epsilon: String,
     orientation_epsilon: String,
     relocation_step: String,
@@ -495,13 +494,6 @@ impl GreenmoteApp {
                 .show(ui, |ui| {
                     setting_text_field(
                         ui,
-                        self.localizer.text(UiText::MeshContactTolerance),
-                        self.localizer.text(UiText::MeshContactToleranceTooltip),
-                        &mut policy.contact_epsilon,
-                        &mut self.settings.dirty,
-                    );
-                    setting_text_field(
-                        ui,
                         self.localizer.text(UiText::OriginHeightTolerance),
                         self.localizer.text(UiText::OriginHeightToleranceTooltip),
                         &mut policy.origin_epsilon,
@@ -892,11 +884,6 @@ impl UnclipPolicyDraft {
                 has_action(WriteActionArg::StaticMove),
                 has_action(WriteActionArg::Orient),
             ],
-            contact_epsilon: config
-                .contact_epsilon
-                .or(defaults.contact_epsilon)
-                .unwrap_or_default()
-                .to_string(),
             origin_epsilon: config
                 .origin_epsilon
                 .or(defaults.origin_epsilon)
@@ -938,10 +925,6 @@ impl UnclipPolicyDraft {
         validate_regex_list("exclude_occluder_ids", &self.exclude_occluder_ids)?;
 
         config.write_actions = Some(self.write_actions());
-        config.contact_epsilon = Some(parse_non_negative_f32(
-            "contact_epsilon",
-            &self.contact_epsilon,
-        )?);
         config.origin_epsilon = Some(parse_non_negative_f32(
             "origin_epsilon",
             &self.origin_epsilon,

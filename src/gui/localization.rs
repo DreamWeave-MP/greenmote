@@ -84,8 +84,6 @@ macro_rules! route_text {
             | UiText::OrientAction
             | UiText::NoWriteActionsWarning
             | UiText::PolicyNumbers
-            | UiText::MeshContactTolerance
-            | UiText::MeshContactToleranceTooltip
             | UiText::OriginHeightTolerance
             | UiText::OriginHeightToleranceTooltip
             | UiText::OrientationTolerance
@@ -231,8 +229,6 @@ pub(super) enum UiText {
     OrientAction,
     NoWriteActionsWarning,
     PolicyNumbers,
-    MeshContactTolerance,
-    MeshContactToleranceTooltip,
     OriginHeightTolerance,
     OriginHeightToleranceTooltip,
     OrientationTolerance,

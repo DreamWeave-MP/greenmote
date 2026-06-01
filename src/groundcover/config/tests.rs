@@ -178,22 +178,28 @@ fn validate_config_is_cli_only() {
 }
 
 #[test]
-fn persisted_validate_config_is_rejected() {
+fn stale_unknown_convert_fields_are_ignored() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
         &config_path,
-        r"
+        r#"
 [convert]
 validate_config = true
-",
+old_option = "unused"
+dry_run = true
+
+[unclip]
+contact_epsilon = 99.0
+old_option = "unused"
+"#,
     )
     .unwrap();
     let args = GroundcoverArgs::parse_from(["convert"]);
 
-    let result = get_config(args, &dir, dir.path.join("data-local"));
+    let config = get_config(args, &dir, dir.path.join("data-local")).unwrap();
 
-    assert!(result.is_err());
+    assert!(config.dry_run);
 }
 
 #[test]
@@ -260,7 +266,7 @@ ignored_plugins = ["Generated"]
 }
 
 #[test]
-fn convert_output_names_are_rejected() {
+fn stale_convert_output_names_are_ignored() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
@@ -273,14 +279,15 @@ deleted_output = "deleted_gc.omwaddon"
     )
     .unwrap();
 
-    let result = GroundcoverConfig::get(
+    let config = GroundcoverConfig::get(
         GroundcoverArgs::parse_from(["convert"]),
         &default_config_path(&dir),
         resolved_output_directory(dir.path.join("data-local")),
         None,
-    );
+    )
+    .unwrap();
 
-    assert!(result.is_err());
+    assert_eq!(config.output_directory, dir.path.join("data-local"));
 }
 
 #[test]
@@ -317,7 +324,7 @@ fn generated_outputs_are_not_name_ignored_by_default() {
 }
 
 #[test]
-fn root_convert_keys_are_rejected() {
+fn stale_root_convert_keys_are_ignored() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
@@ -331,9 +338,10 @@ dry_run = true
     .unwrap();
     let args = GroundcoverArgs::parse_from(["convert"]);
 
-    let result = get_config(args, &dir, dir.path.join("data-local"));
+    let config = get_config(args, &dir, dir.path.join("data-local")).unwrap();
 
-    assert!(result.is_err());
+    assert!(!config.dry_run);
+    assert!(!config.is_ignored_plugin_name("LegacyGenerated.omwaddon"));
 }
 
 #[test]

@@ -206,7 +206,6 @@ mod tests {
     fn test_policy_with_filter(include_ids: &[&str], exclude_ids: &[&str]) -> UnclipPolicy {
         UnclipPolicy {
             write_actions: WriteActions::all(),
-            contact_epsilon: 0.5,
             origin_epsilon: 0.5,
             orientation_epsilon_degrees: 1.0,
             relocation: RelocationPolicy {

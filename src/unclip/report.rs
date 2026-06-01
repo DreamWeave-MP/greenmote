@@ -414,11 +414,6 @@ fn write_policy_summary_text(
     )?;
     writeln!(
         stdout,
-        "  mesh contact terrain epsilon: {:.3}",
-        policy.mesh_contact_terrain_epsilon
-    )?;
-    writeln!(
-        stdout,
         "  orientation epsilon: {:.3} degrees",
         policy.orientation_epsilon_degrees
     )?;

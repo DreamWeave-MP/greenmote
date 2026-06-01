@@ -131,7 +131,6 @@ mod tests {
         assert_eq!(args.verbose, None);
         assert_eq!(args.structured, None);
         assert_eq!(args.write, None);
-        assert_eq!(args.contact_epsilon, None);
         assert_eq!(args.origin_epsilon, None);
         assert_eq!(args.relocation_step, None);
         assert_eq!(args.relocation_steps, None);
@@ -188,6 +187,20 @@ mod tests {
     }
 
     #[test]
+    fn parser_rejects_removed_unclip_contact_epsilon() {
+        let error = Cli::try_parse_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--contact-epsilon",
+            "1.25",
+        ]);
+
+        assert!(error.is_err());
+    }
+
+    #[test]
     fn parser_accepts_openmw_cfg_only_as_top_level_option() {
         for args in [
             ["greenmote", "--openmw-cfg", "profile/openmw.cfg", "convert"],
@@ -233,8 +246,6 @@ mod tests {
             "groundcover.omwaddon",
             "--write-actions",
             "terrain-z,static-move,orient",
-            "--contact-epsilon",
-            "1.25",
             "--origin-epsilon",
             "2.5",
             "--relocation-step",
@@ -262,7 +273,6 @@ mod tests {
         assert!(!policy.write_actions.static_delete());
         assert!(policy.write_actions.static_move());
         assert!(policy.write_actions.orient());
-        assert_close(policy.contact_epsilon, 1.25);
         assert_close(policy.origin_epsilon, 2.5);
         assert_close(policy.relocation.step, 64.0);
         assert_eq!(policy.relocation.steps, 12);
@@ -276,7 +286,6 @@ mod tests {
     #[test]
     fn parser_rejects_invalid_unclip_policy_knobs() {
         for flag in [
-            ["--contact-epsilon", "-1"],
             ["--origin-epsilon", "nan"],
             ["--relocation-step", "0"],
             ["--relocation-steps", "0"],

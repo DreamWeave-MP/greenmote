@@ -178,7 +178,6 @@ Write actions:
 
 Policy knobs:
 
-- `--contact-epsilon` controls mesh contact/terrain Z tolerance.
 - `--origin-epsilon` controls reference origin/terrain Z tolerance.
 - `--relocation-step` controls horizontal spacing for static-bounds relocation probes.
 - `--relocation-steps` controls how many relocation probe rings are attempted.
@@ -232,7 +231,6 @@ verbose = false
 structured = false
 write = false
 write_actions = ["terrain-z", "static-delete", "static-move", "orient"]
-contact_epsilon = 0.5
 origin_epsilon = 2.0
 relocation_step = 32.0
 relocation_steps = 8

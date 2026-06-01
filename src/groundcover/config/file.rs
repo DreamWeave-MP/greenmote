@@ -11,7 +11,6 @@ use crate::{
 use super::to_io_error;
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 // Mirrors the public TOML schema. Convert-specific knobs live under `[convert]`; root-level command
 // knobs are not supported because this tool is still wet paint, not a museum.
 pub(super) struct GroundcoverConfigFile {
@@ -26,7 +25,6 @@ pub(super) struct GroundcoverConfigFile {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 // Mirrors persisted convert options. CLI-only switches do not belong here; writing transient
 // command mode into TOML is how a config file starts lying to its owner.
 #[allow(clippy::struct_excessive_bools)]
@@ -111,7 +109,6 @@ fn is_empty_unclip_config(config: &PersistedUnclipConfig) -> bool {
         && config.structured.is_none()
         && config.write.is_none()
         && config.write_actions.is_none()
-        && config.contact_epsilon.is_none()
         && config.origin_epsilon.is_none()
         && config.relocation_step.is_none()
         && config.relocation_steps.is_none()

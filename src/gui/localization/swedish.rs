@@ -125,10 +125,6 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::OrientAction => "Rikta refs mot terräng (orient)",
         UiText::NoWriteActionsWarning => "Varning: skrivläge ger inga policyåtgärder.",
         UiText::PolicyNumbers => "Policyvärden",
-        UiText::MeshContactTolerance => "Tolerans för meshkontakt",
-        UiText::MeshContactToleranceTooltip => {
-            "Största meshkontakt/terräng-Z-delta som behandlas som redan på terrängen. Config key: contact_epsilon."
-        }
         UiText::OriginHeightTolerance => "Tolerans för origo-höjd",
         UiText::OriginHeightToleranceTooltip => {
             "Största referensorigo/terräng-Z-delta som behandlas som redan på terrängen. Config key: origin_epsilon."

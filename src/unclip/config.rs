@@ -14,7 +14,7 @@ use super::{
         DEFAULT_ORIENTATION_EPSILON_DEGREES, DEFAULT_RELOCATION_STEP, DEFAULT_RELOCATION_STEPS,
         WriteActionArg, default_write_actions,
     },
-    model::{CONTACT_TERRAIN_EPSILON, ORIGIN_TERRAIN_EPSILON},
+    model::ORIGIN_TERRAIN_EPSILON,
 };
 
 #[derive(Clone, Debug)]
@@ -26,7 +26,6 @@ pub(crate) struct UnclipConfig {
     pub(crate) structured: bool,
     pub(crate) write: bool,
     pub(crate) write_actions: Vec<WriteActionArg>,
-    pub(crate) contact_epsilon: f32,
     pub(crate) origin_epsilon: f32,
     pub(crate) relocation_step: f32,
     pub(crate) relocation_steps: u16,
@@ -38,7 +37,6 @@ pub(crate) struct UnclipConfig {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct PersistedUnclipConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) plugin: Option<PathBuf>,
@@ -60,9 +58,6 @@ pub(crate) struct PersistedUnclipConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) write_actions: Option<Vec<WriteActionArg>>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) contact_epsilon: Option<f32>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) origin_epsilon: Option<f32>,
@@ -155,10 +150,6 @@ impl UnclipConfig {
             } else {
                 args.write_actions.clone()
             },
-            contact_epsilon: args
-                .contact_epsilon
-                .or(persisted.contact_epsilon)
-                .unwrap_or(CONTACT_TERRAIN_EPSILON),
             origin_epsilon: args
                 .origin_epsilon
                 .or(persisted.origin_epsilon)
@@ -190,7 +181,6 @@ impl UnclipConfig {
     }
 
     fn validate(&self) -> io::Result<()> {
-        validate_non_negative_f32("contact_epsilon", self.contact_epsilon)?;
         validate_non_negative_f32("origin_epsilon", self.origin_epsilon)?;
         validate_non_negative_f32("orientation_epsilon", self.orientation_epsilon)?;
         validate_positive_f32("relocation_step", self.relocation_step)?;
@@ -210,7 +200,6 @@ impl PersistedUnclipConfig {
             structured: Some(false),
             write: Some(false),
             write_actions: Some(default_write_actions()),
-            contact_epsilon: Some(CONTACT_TERRAIN_EPSILON),
             origin_epsilon: Some(ORIGIN_TERRAIN_EPSILON),
             relocation_step: Some(DEFAULT_RELOCATION_STEP),
             relocation_steps: Some(DEFAULT_RELOCATION_STEPS),
@@ -374,15 +363,18 @@ mod tests {
     }
 
     #[test]
-    fn persisted_placement_model_key_fails_toml_parse() {
+    fn stale_unknown_keys_are_ignored() {
         let result = PersistedUnclipConfig::from_toml(
             r#"
 [unclip]
 placement_model = "contact"
+contact_epsilon = 99.0
+origin_epsilon = 2.5
 "#,
-        );
+        )
+        .unwrap();
 
-        assert!(result.is_err());
+        assert_close(result.origin_epsilon.unwrap(), 2.5);
     }
 
     #[test]
@@ -466,7 +458,6 @@ placement_model = "contact"
         let config = UnclipConfig::merge(
             &args,
             PersistedUnclipConfig {
-                contact_epsilon: Some(1.25),
                 origin_epsilon: Some(2.5),
                 relocation_step: Some(64.0),
                 relocation_steps: Some(12),
@@ -477,7 +468,6 @@ placement_model = "contact"
         )
         .unwrap();
 
-        assert_close(config.contact_epsilon, 1.25);
         assert_close(config.origin_epsilon, 2.5);
         assert_close(config.relocation_step, 64.0);
         assert_eq!(config.relocation_steps, 12);
@@ -491,20 +481,20 @@ placement_model = "contact"
             "unclip",
             "--plugin",
             "cli.omwaddon",
-            "--contact-epsilon",
+            "--origin-epsilon",
             "1.25",
         ]);
         let config = UnclipConfig::merge(
             &args,
             PersistedUnclipConfig {
-                contact_epsilon: Some(4.0),
+                origin_epsilon: Some(4.0),
                 ..PersistedUnclipConfig::default()
             },
             None,
         )
         .unwrap();
 
-        assert_close(config.contact_epsilon, 1.25);
+        assert_close(config.origin_epsilon, 1.25);
     }
 
     #[test]
@@ -595,15 +585,17 @@ placement_model = "contact"
     }
 
     #[test]
-    fn unknown_unclip_key_fails_toml_parse() {
+    fn unknown_unclip_key_is_ignored() {
         let result = PersistedUnclipConfig::from_toml(
             r"
 [unclip]
 definitely_not_real = true
+origin_epsilon = 1.25
 ",
-        );
+        )
+        .unwrap();
 
-        assert!(result.is_err());
+        assert_close(result.origin_epsilon.unwrap(), 1.25);
     }
 
     fn assert_close(actual: f32, expected: f32) {

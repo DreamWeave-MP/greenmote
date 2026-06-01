@@ -107,7 +107,6 @@ impl UnclipRunOptions {
             structured: Some(false),
             write: Some(self.write),
             write_actions: Vec::new(),
-            contact_epsilon: None,
             origin_epsilon: None,
             relocation_step: None,
             relocation_steps: None,

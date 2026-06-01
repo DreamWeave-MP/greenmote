@@ -127,10 +127,6 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::OrientAction => "Orient refs to terrain (orient)",
         UiText::NoWriteActionsWarning => "Warning: write mode will produce no policy actions.",
         UiText::PolicyNumbers => "Policy numbers",
-        UiText::MeshContactTolerance => "Mesh contact tolerance",
-        UiText::MeshContactToleranceTooltip => {
-            "Maximum mesh contact/terrain Z delta treated as already on terrain. Config key: contact_epsilon."
-        }
         UiText::OriginHeightTolerance => "Origin height tolerance",
         UiText::OriginHeightToleranceTooltip => {
             "Maximum reference origin/terrain Z delta treated as already on terrain. Config key: origin_epsilon."

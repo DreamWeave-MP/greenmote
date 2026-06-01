@@ -9,8 +9,9 @@ use super::{
     generated_placement::{GeneratedPlacement, GeneratedPlacementIndex},
     mesh::{MeshAabb, MeshCache, MeshContact, StaticMesh, StaticMeshIndex, WorldAabb},
     model::{
-        BoundsInspection, MeshContactInspection, OriginInspection, ReferenceInspection,
-        StaticBoundsOcclusionInspection, StaticMeshInspection, TerrainInspectionReport,
+        BoundsInspection, CONTACT_TERRAIN_EPSILON, MeshContactInspection, OriginInspection,
+        ReferenceInspection, StaticBoundsOcclusionInspection, StaticMeshInspection,
+        TerrainInspectionReport,
     },
     occlusion::{
         StaticBoundsAction, StaticBoundsBlockReason, StaticOccluder, StaticOccluderIndex,
@@ -96,7 +97,7 @@ fn count_reference(
             context.terrain,
             reference,
             contact,
-            context.policy.contact_epsilon,
+            CONTACT_TERRAIN_EPSILON,
             context.contact_baselines.get(&reference.id),
         );
     }
@@ -181,7 +182,7 @@ fn inspect_reference(
             context.terrain,
             reference,
             contact,
-            context.policy.contact_epsilon,
+            CONTACT_TERRAIN_EPSILON,
             context.contact_baselines.get(&reference.id),
         )),
         MeshContactResolution::UnresolvedStatic | MeshContactResolution::MissingContact { .. } => {
@@ -216,7 +217,7 @@ fn inspect_reference(
             plan: write_plan_evidence(context.write, cell, key),
             actions: context.policy.write_actions,
         },
-        contact_epsilon: context.policy.contact_epsilon,
+        contact_epsilon: CONTACT_TERRAIN_EPSILON,
         orientation_epsilon_degrees: context.policy.orientation_epsilon_degrees,
     });
     reference_sink(&inspection)
@@ -1031,7 +1032,6 @@ mod tests {
     fn test_policy() -> UnclipPolicy {
         UnclipPolicy {
             write_actions: WriteActions::all(),
-            contact_epsilon: 0.5,
             origin_epsilon: 0.5,
             orientation_epsilon_degrees: 1.0,
             relocation: RelocationPolicy {

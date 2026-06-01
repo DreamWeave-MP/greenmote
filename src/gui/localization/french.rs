@@ -135,10 +135,6 @@ const fn settings_text(key: UiText) -> &'static str {
             "Avertissement : le mode écriture ne produira aucune action de politique."
         }
         UiText::PolicyNumbers => "Valeurs de politique",
-        UiText::MeshContactTolerance => "Tolérance de contact mesh",
-        UiText::MeshContactToleranceTooltip => {
-            "Delta maximal contact mesh/terrain Z traité comme déjà sur le terrain. Config key: contact_epsilon."
-        }
         UiText::OriginHeightTolerance => "Tolérance de hauteur d’origine",
         UiText::OriginHeightToleranceTooltip => {
             "Delta maximal origine de référence/terrain Z traité comme déjà sur le terrain. Config key: origin_epsilon."

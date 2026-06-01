@@ -100,7 +100,6 @@ pub(crate) struct UnclipReportContextInput<'a> {
 pub(crate) struct UnclipPolicySummary {
     pub(crate) write_actions: Vec<&'static str>,
     pub(crate) origin_terrain_epsilon: f32,
-    pub(crate) mesh_contact_terrain_epsilon: f32,
     pub(crate) orientation_epsilon_degrees: f32,
     pub(crate) relocation_step: f32,
     pub(crate) relocation_steps: u16,
@@ -115,7 +114,6 @@ impl UnclipPolicySummary {
         Self {
             write_actions: policy.write_actions.enabled_names(),
             origin_terrain_epsilon: policy.origin_epsilon,
-            mesh_contact_terrain_epsilon: policy.contact_epsilon,
             orientation_epsilon_degrees: policy.orientation_epsilon_degrees,
             relocation_step: policy.relocation.step,
             relocation_steps: policy.relocation.steps,
@@ -149,7 +147,6 @@ impl UnclipReportContext {
             policy: UnclipPolicySummary {
                 write_actions: vec!["terrain-z", "static-delete", "static-move", "orient"],
                 origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
-                mesh_contact_terrain_epsilon: CONTACT_TERRAIN_EPSILON,
                 orientation_epsilon_degrees: 1.0,
                 relocation_step: 32.0,
                 relocation_steps: 8,
