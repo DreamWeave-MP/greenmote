@@ -48,6 +48,22 @@ pub fn run(
     let target_plugin = resolve_target_plugin(&config.plugin, &openmw_config, &vfs)?;
     super::check_cancellation(cancellation)?;
     let mut target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
+    let target_refs = TargetRefIndex::build(&target_plugin_data, &policy, cancellation)?;
+    if target_refs.target_cells.is_empty() {
+        return write_no_target_report(
+            stdout,
+            NoTargetReportInput {
+                config,
+                openmw_config: &openmw_config,
+                target_plugin: &target_plugin,
+                target_plugin_data: &mut target_plugin_data,
+                target_refs: &target_refs,
+                policy: &policy,
+                cancellation,
+            },
+        );
+    }
+    super::check_cancellation(cancellation)?;
     let context_plugin_paths = context_plugin_paths(&openmw_config, &vfs)?;
     super::check_cancellation(cancellation)?;
     let context_plugins = load_context_plugins(&context_plugin_paths, cancellation)?;
@@ -61,7 +77,6 @@ pub fn run(
         target_is_active,
         &target_plugin_data,
     );
-    let target_refs = TargetRefIndex::build(&target_plugin_data, &policy, cancellation)?;
     let active_cells = active_cells(&target_refs.target_cells)?;
     super::check_cancellation(cancellation)?;
     let terrain = terrain_from_context_plugins(&context_plugins, &active_cells);
@@ -161,6 +176,66 @@ pub fn run(
         &contact_baselines,
     )?;
     Ok(())
+}
+
+struct NoTargetReportInput<'a> {
+    config: &'a UnclipConfig,
+    openmw_config: &'a openmw_config::OpenMWConfiguration,
+    target_plugin: &'a super::setup::TargetPluginPath,
+    target_plugin_data: &'a mut Plugin,
+    target_refs: &'a TargetRefIndex,
+    policy: &'a UnclipPolicy,
+    cancellation: &'a CancellationToken,
+}
+
+fn write_no_target_report(
+    stdout: &mut dyn Write,
+    input: NoTargetReportInput<'_>,
+) -> io::Result<()> {
+    let NoTargetReportInput {
+        config,
+        openmw_config,
+        target_plugin,
+        target_plugin_data,
+        target_refs,
+        policy,
+        cancellation,
+    } = input;
+    super::check_cancellation(cancellation)?;
+    let terrain = TerrainIndex::from_landscapes(std::iter::empty());
+    let mut report_context = build_report_context(ReportContextBuildInput {
+        target_plugin_path: &target_plugin.source_path,
+        target_refs,
+        active_cells: 0,
+        terrain: &terrain,
+        missing_active_terrain_cells: Vec::new(),
+        static_occluder_report: StaticOccluderBuildReport::default(),
+        write_requested: config.write,
+        policy,
+    });
+    let write_actions_enabled = policy.write_actions.any_enabled();
+    report_context.write = save_write_plan(
+        target_plugin_data,
+        &target_plugin.source_path,
+        &target_plugin.destination_path,
+        Some(WritePlan::default()),
+        config.write,
+        (!write_actions_enabled).then_some("all_write_actions_disabled"),
+    )?;
+    let log_path = openmw_config.user_config_path().join(LOG_NAME);
+    let mut log = BufWriter::new(File::create(log_path)?);
+    super::check_cancellation(cancellation)?;
+    if config.verbose {
+        report::write_instance_header(&mut log, &report_context)?;
+    }
+    write_reports(
+        stdout,
+        config,
+        &mut log,
+        &report_context,
+        &TerrainInspectionReport::default(),
+        &ContactBaselineIndex::default(),
+    )
 }
 
 fn context_plugin_paths(
