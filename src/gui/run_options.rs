@@ -16,7 +16,7 @@ pub(super) struct ConvertRunOptions {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct UnclipRunOptions {
-    pub(super) plugin: String,
+    pub(super) target_plugins: Vec<String>,
     pub(super) verbose: bool,
     pub(super) write: bool,
 }
@@ -71,42 +71,86 @@ impl ConvertRunOptions {
 impl UnclipRunOptions {
     #[must_use]
     pub(super) fn from_config(config: &GroundcoverConfig) -> Self {
+        let target_plugins = config
+            .unclip
+            .plugin
+            .as_ref()
+            .map(|path| vec![path.display().to_string()])
+            .unwrap_or_default();
+
         Self {
-            plugin: config
-                .unclip
-                .plugin
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
+            target_plugins,
             verbose: config.unclip.verbose.unwrap_or(false),
             write: false,
         }
     }
 
-    pub(super) fn to_args(&self) -> Result<UnclipArgs, String> {
-        let plugin = self.plugin.trim();
-        if plugin.is_empty() {
+    pub(super) fn first_target_mut(&mut self) -> &mut String {
+        if self.target_plugins.is_empty() {
+            self.target_plugins.push(String::new());
+        }
+
+        &mut self.target_plugins[0]
+    }
+
+    pub(super) fn first_target(&self) -> &str {
+        self.target_plugins.first().map_or("", String::as_str)
+    }
+
+    pub(super) fn to_args_list(&self) -> Result<Vec<UnclipArgs>, String> {
+        let plugins = self
+            .target_plugins
+            .iter()
+            .map(|plugin| plugin.trim())
+            .filter(|plugin| !plugin.is_empty());
+        let args = plugins
+            .map(|plugin| UnclipArgs {
+                plugin: Some(PathBuf::from(plugin)),
+                meshgenerator_ini: None,
+                ignore_meshgenerator_ini: true,
+                instances: None,
+                verbose: Some(self.verbose),
+                structured: Some(false),
+                write: Some(self.write),
+                write_actions: Vec::new(),
+                origin_epsilon: None,
+                relocation_step: None,
+                relocation_steps: None,
+                orientation_epsilon: None,
+                include_grass_ids: Vec::new(),
+                exclude_grass_ids: Vec::new(),
+                include_occluder_ids: Vec::new(),
+                exclude_occluder_ids: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        if args.is_empty() {
             return Err("Choose a target plugin before running Unclip.".to_owned());
         }
 
-        Ok(UnclipArgs {
-            plugin: Some(PathBuf::from(plugin)),
-            meshgenerator_ini: None,
-            ignore_meshgenerator_ini: true,
-            instances: None,
-            verbose: Some(self.verbose),
-            structured: Some(false),
-            write: Some(self.write),
-            write_actions: Vec::new(),
-            origin_epsilon: None,
-            relocation_step: None,
-            relocation_steps: None,
-            orientation_epsilon: None,
-            include_grass_ids: Vec::new(),
-            exclude_grass_ids: Vec::new(),
-            include_occluder_ids: Vec::new(),
-            exclude_occluder_ids: Vec::new(),
-        })
+        Ok(args)
+    }
+
+    pub(super) fn to_single_visible_args(&self) -> Result<UnclipArgs, String> {
+        let first_target = self.first_target().trim();
+        if first_target.is_empty() {
+            return Err("Choose a target plugin before running Unclip.".to_owned());
+        }
+
+        let usable_targets = self
+            .target_plugins
+            .iter()
+            .map(|plugin| plugin.trim())
+            .filter(|plugin| !plugin.is_empty())
+            .count();
+        if usable_targets > 1 {
+            return Err("Batch Unclip execution is not enabled yet.".to_owned());
+        }
+
+        self.to_args_list()?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "Choose a target plugin before running Unclip.".to_owned())
     }
 }
 
@@ -248,20 +292,31 @@ mod tests {
 
         let options = UnclipRunOptions::from_config(&config);
 
-        assert_eq!(options.plugin, "groundcover.omwaddon");
+        assert_eq!(options.target_plugins, ["groundcover.omwaddon"]);
         assert!(options.verbose);
         assert!(!options.write);
     }
 
     #[test]
+    fn unclip_run_options_config_prefill_creates_one_target() {
+        let mut config = GroundcoverConfig::default();
+        config.unclip.plugin = Some("groundcover.omwaddon".into());
+
+        let options = UnclipRunOptions::from_config(&config);
+
+        assert_eq!(options.target_plugins, vec!["groundcover.omwaddon"]);
+    }
+
+    #[test]
     fn unclip_run_options_build_explicit_safe_args() {
         let options = UnclipRunOptions {
-            plugin: " groundcover.omwaddon ".to_owned(),
+            target_plugins: vec![" groundcover.omwaddon ".to_owned()],
             verbose: true,
             write: false,
         };
 
-        let args = options.to_args().unwrap();
+        let args = options.to_args_list().unwrap();
+        let args = args.first().unwrap();
 
         assert_eq!(args.plugin, Some("groundcover.omwaddon".into()));
         assert_eq!(args.meshgenerator_ini, None);
@@ -275,6 +330,77 @@ mod tests {
 
     #[test]
     fn unclip_run_options_reject_empty_plugin() {
-        assert!(UnclipRunOptions::default().to_args().is_err());
+        assert!(UnclipRunOptions::default().to_args_list().is_err());
+    }
+
+    #[test]
+    fn unclip_run_options_builds_multiple_args() {
+        let options = UnclipRunOptions {
+            target_plugins: vec![" first.omwaddon ".to_owned(), "second.omwaddon".to_owned()],
+            verbose: false,
+            write: true,
+        };
+
+        let args = options.to_args_list().unwrap();
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0].plugin, Some("first.omwaddon".into()));
+        assert_eq!(args[1].plugin, Some("second.omwaddon".into()));
+    }
+
+    #[test]
+    fn unclip_run_options_all_args_ignore_meshgenerator_ini() {
+        let options = UnclipRunOptions {
+            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        let args = options.to_args_list().unwrap();
+
+        assert!(args.iter().all(|args| args.meshgenerator_ini.is_none()));
+        assert!(args.iter().all(|args| args.ignore_meshgenerator_ini));
+    }
+
+    #[test]
+    fn unclip_run_options_single_visible_rejects_multiple_usable_targets() {
+        let options = UnclipRunOptions {
+            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        let error = options.to_single_visible_args().unwrap_err();
+
+        assert_eq!(error, "Batch Unclip execution is not enabled yet.");
+    }
+
+    #[test]
+    fn unclip_run_options_single_visible_rejects_blank_first_target() {
+        let options = UnclipRunOptions {
+            target_plugins: vec![" ".to_owned(), "hidden.omwaddon".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        let error = options.to_single_visible_args().unwrap_err();
+
+        assert_eq!(error, "Choose a target plugin before running Unclip.");
+    }
+
+    #[test]
+    fn unclip_run_options_single_visible_builds_safe_args() {
+        let options = UnclipRunOptions {
+            target_plugins: vec![" target.omwaddon ".to_owned()],
+            verbose: false,
+            write: true,
+        };
+
+        let args = options.to_single_visible_args().unwrap();
+
+        assert_eq!(args.plugin, Some("target.omwaddon".into()));
+        assert_eq!(args.meshgenerator_ini, None);
+        assert!(args.ignore_meshgenerator_ini);
+        assert_eq!(args.write, Some(true));
     }
 }

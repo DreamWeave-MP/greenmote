@@ -238,13 +238,16 @@ impl GreenmoteApp {
                 ui.label(self.localizer.text(UiText::TargetPlugin));
                 ui.horizontal_wrapped(|ui| {
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
-                            .desired_width(finite_widget_extent(ui.available_width() - 84.0)),
+                        egui::TextEdit::singleline(
+                            self.convert.unclip.run_options.first_target_mut(),
+                        )
+                        .desired_width(finite_widget_extent(ui.available_width() - 84.0)),
                     );
                     if ui.button(self.localizer.text(UiText::Browse)).clicked()
                         && let Some(path) = select_plugin_file(self.localizer)
                     {
-                        self.convert.unclip.run_options.plugin = path.display().to_string();
+                        *self.convert.unclip.run_options.first_target_mut() =
+                            path.display().to_string();
                     }
                 });
 
@@ -446,7 +449,7 @@ impl GreenmoteApp {
 
     fn validate_unclip_run(&self) -> Result<(), String> {
         self.validate_worker_start()?;
-        self.convert.unclip.run_options.to_args()?;
+        self.convert.unclip.run_options.to_single_visible_args()?;
         if self.convert.unclip.run_options.write
             && self.settings.unclip_write_action_names().is_empty()
         {
@@ -479,7 +482,13 @@ impl GreenmoteApp {
             return;
         }
 
-        let target = self.convert.unclip.run_options.plugin.trim().to_owned();
+        let target = self
+            .convert
+            .unclip
+            .run_options
+            .first_target()
+            .trim()
+            .to_owned();
         let actions = self.settings.unclip_write_action_names().join(", ");
         let mut confirm = false;
         let mut cancel = false;
@@ -653,7 +662,7 @@ impl GreenmoteApp {
             return;
         }
 
-        let args = match self.convert.unclip.run_options.to_args() {
+        let args = match self.convert.unclip.run_options.to_single_visible_args() {
             Ok(args) => args,
             Err(error) => {
                 self.set_status(error);
@@ -1260,7 +1269,7 @@ mod tests {
     fn pending_unclip_write_confirmation_cannot_start_after_worker_becomes_active() {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
-            plugin: "target.omwaddon".to_owned(),
+            target_plugins: vec!["target.omwaddon".to_owned()],
             verbose: false,
             write: true,
         };
@@ -1284,7 +1293,7 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.settings.clear_unclip_write_actions_for_test();
         app.convert.unclip.run_options = UnclipRunOptions {
-            plugin: "target.omwaddon".to_owned(),
+            target_plugins: vec!["target.omwaddon".to_owned()],
             verbose: false,
             write: true,
         };
@@ -1295,6 +1304,34 @@ mod tests {
             error,
             "Unclip write mode is blocked because no write actions are enabled in Settings."
         );
+    }
+
+    #[test]
+    fn unclip_validation_rejects_multiple_usable_targets_until_batch_runs() {
+        let mut app = GreenmoteApp::default();
+        app.convert.unclip.run_options = UnclipRunOptions {
+            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        let error = app.validate_unclip_run().unwrap_err();
+
+        assert_eq!(error, "Batch Unclip execution is not enabled yet.");
+    }
+
+    #[test]
+    fn unclip_validation_rejects_blank_visible_target_even_with_hidden_target() {
+        let mut app = GreenmoteApp::default();
+        app.convert.unclip.run_options = UnclipRunOptions {
+            target_plugins: vec![" ".to_owned(), "hidden.omwaddon".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        let error = app.validate_unclip_run().unwrap_err();
+
+        assert_eq!(error, "Choose a target plugin before running Unclip.");
     }
 
     #[test]
