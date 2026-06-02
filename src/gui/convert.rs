@@ -278,7 +278,7 @@ impl GreenmoteApp {
     }
 
     fn show_run_output(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("convert_output_actions")
+        egui::Panel::bottom("convert_output_actions")
             .resizable(false)
             .show_separator_line(true)
             .show_inside(ui, |ui| {

@@ -283,7 +283,7 @@ impl GreenmoteApp {
         ui.heading(self.localizer.text(UiText::Settings));
         ui.separator();
 
-        egui::TopBottomPanel::bottom("settings_footer")
+        egui::Panel::bottom("settings_footer")
             .resizable(false)
             .show_separator_line(true)
             .show_inside(ui, |ui| {

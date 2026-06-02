@@ -56,19 +56,20 @@ impl Default for GreenmoteApp {
 }
 
 impl eframe::App for GreenmoteApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.receive_conversion_events(ctx);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.receive_conversion_events(&ctx);
         self.check_initial_config();
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             self.show_tab_bar(ui);
             ui.separator();
-            self.show_active_screen(ui, ctx);
+            self.show_active_screen(ui, &ctx);
         });
 
-        self.show_pending_navigation_prompt(ctx);
-        self.show_openmw_config_prompt(ctx);
-        self.show_config_recovery_prompt(ctx);
+        self.show_pending_navigation_prompt(&ctx);
+        self.show_openmw_config_prompt(&ctx);
+        self.show_config_recovery_prompt(&ctx);
     }
 }
 

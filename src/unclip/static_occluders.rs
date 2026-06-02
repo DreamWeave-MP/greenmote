@@ -205,7 +205,6 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use glam::Vec3;
     use tes3::esp::{Cell, CellData, Plugin, Reference, Static, TES3Object};
     use tes3::nif::{
         NiAVObject, NiGeometry, NiGeometryData, NiLink, NiObjectNET, NiStream, NiTriBasedGeom,
@@ -214,6 +213,8 @@ mod tests {
     use vfstool_lib::VFS;
 
     use crate::unclip::{args::IdFilter, cells::CellCoord};
+
+    type NifVec3 = rapier3d::math::Vec3;
 
     use super::{
         EffectiveRefState, ExclusionReason, build_static_occluders, effective_static_occluder_refs,
@@ -643,7 +644,11 @@ mod tests {
         let geometry_data = NiTriShapeData {
             base: NiTriBasedGeomData {
                 base: NiGeometryData {
-                    vertices: vertices.iter().copied().map(Vec3::from).collect(),
+                    vertices: vertices
+                        .iter()
+                        .copied()
+                        .map(|vertex| NifVec3::new(vertex[0], vertex[1], vertex[2]))
+                        .collect(),
                     ..NiGeometryData::default()
                 },
             },
