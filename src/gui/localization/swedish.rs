@@ -4,6 +4,18 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
+pub(super) fn unclip_target_count(count: usize) -> String {
+    if count == 1 {
+        "Mål: 1 plugin".to_owned()
+    } else {
+        format!("Mål: {count} plugin")
+    }
+}
+
+pub(super) fn unclip_target_overflow(count: usize) -> String {
+    format!("... och {count} till")
+}
+
 const fn language_text(key: UiText) -> &'static str {
     match key {
         UiText::Language => "Språk",
@@ -72,7 +84,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         UiText::ConfirmUnclipWriteMessage => {
             "Unclip kommer att ändra valda målplugin och skapa säkerhetskopior."
         }
-        UiText::Target => "Mål:",
         UiText::EnabledWriteActions => "Aktiverade skrivåtgärder:",
         UiText::UnsavedSettingsTitle => "Osparade inställningar",
         UiText::UnsavedSettingsMessage => "Inställningarna har osparade ändringar.",

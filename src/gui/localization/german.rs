@@ -4,6 +4,22 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
+pub(super) fn unclip_target_count(count: usize) -> String {
+    if count == 1 {
+        "Ziel: 1 Plugin".to_owned()
+    } else {
+        format!("Ziele: {count} Plugins")
+    }
+}
+
+pub(super) fn unclip_target_overflow(count: usize) -> String {
+    if count == 1 {
+        "... und 1 weiteres".to_owned()
+    } else {
+        format!("... und {count} weitere")
+    }
+}
+
 const fn language_text(key: UiText) -> &'static str {
     match key {
         UiText::Language => "Sprache",
@@ -74,7 +90,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         UiText::ConfirmUnclipWriteMessage => {
             "Unclip wird die ausgewählten Ziel-Plugins ändern und Sicherungsdateien erstellen."
         }
-        UiText::Target => "Ziel:",
         UiText::EnabledWriteActions => "Aktivierte Schreibaktionen:",
         UiText::UnsavedSettingsTitle => "Ungespeicherte Einstellungen",
         UiText::UnsavedSettingsMessage => "Einstellungen haben ungespeicherte Änderungen.",

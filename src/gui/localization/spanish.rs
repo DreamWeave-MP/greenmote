@@ -4,6 +4,18 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
+pub(super) fn unclip_target_count(count: usize) -> String {
+    if count == 1 {
+        "Objetivo: 1 plugin".to_owned()
+    } else {
+        format!("Objetivos: {count} plugins")
+    }
+}
+
+pub(super) fn unclip_target_overflow(count: usize) -> String {
+    format!("... y {count} más")
+}
+
 const fn language_text(key: UiText) -> &'static str {
     match key {
         UiText::Language => "Idioma",
@@ -72,7 +84,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         UiText::ConfirmUnclipWriteMessage => {
             "Unclip modificará los plugins objetivo seleccionados y creará archivos de copia de seguridad."
         }
-        UiText::Target => "Objetivo:",
         UiText::EnabledWriteActions => "Acciones de escritura activadas:",
         UiText::UnsavedSettingsTitle => "Ajustes sin guardar",
         UiText::UnsavedSettingsMessage => "Los ajustes tienen cambios sin guardar.",

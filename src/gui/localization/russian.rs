@@ -4,6 +4,32 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
+pub(super) fn unclip_target_count(count: usize) -> String {
+    if count == 1 {
+        "Цель: 1 плагин".to_owned()
+    } else {
+        format!("Цели: {count} {}", plugin_plural(count))
+    }
+}
+
+pub(super) fn unclip_target_overflow(count: usize) -> String {
+    format!("... и еще {count} {}", plugin_plural(count))
+}
+
+const fn plugin_plural(count: usize) -> &'static str {
+    let last_two = count % 100;
+    let last_one = count % 10;
+    if last_two >= 11 && last_two <= 14 {
+        "плагинов"
+    } else if last_one == 1 {
+        "плагин"
+    } else if last_one >= 2 && last_one <= 4 {
+        "плагина"
+    } else {
+        "плагинов"
+    }
+}
+
 const fn language_text(key: UiText) -> &'static str {
     match key {
         UiText::Language => "Язык",
@@ -74,9 +100,8 @@ const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Подтвердить запись Unclip",
         UiText::ConfirmUnclipWriteMessage => {
-            "Unclip изменит выбранные целевые plugins и создаст резервные копии."
+            "Unclip изменит выбранные целевые плагины и создаст резервные копии."
         }
-        UiText::Target => "Цель:",
         UiText::EnabledWriteActions => "Включенные действия записи:",
         UiText::UnsavedSettingsTitle => "Несохраненные настройки",
         UiText::UnsavedSettingsMessage => "В настройках есть несохраненные изменения.",

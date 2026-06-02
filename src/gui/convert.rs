@@ -663,16 +663,15 @@ impl GreenmoteApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.label(self.localizer.text(UiText::ConfirmUnclipWriteMessage));
-                ui.label(format!(
-                    "{} {} plugin(s)",
-                    self.localizer.text(UiText::Target),
-                    targets.len()
-                ));
+                ui.label(self.localizer.unclip_target_count(targets.len()));
                 for target in targets.iter().take(5) {
                     ui.label(format!("- {target}"));
                 }
                 if targets.len() > 5 {
-                    ui.label(format!("- ... and {} more", targets.len() - 5));
+                    ui.label(format!(
+                        "- {}",
+                        self.localizer.unclip_target_overflow(targets.len() - 5)
+                    ));
                 }
                 ui.label(format!(
                     "{} {actions}",

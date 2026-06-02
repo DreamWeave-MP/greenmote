@@ -49,7 +49,6 @@ macro_rules! route_text {
             | UiText::OpenLog => $convert($key),
             UiText::ConfirmUnclipWriteTitle
             | UiText::ConfirmUnclipWriteMessage
-            | UiText::Target
             | UiText::EnabledWriteActions
             | UiText::UnsavedSettingsTitle
             | UiText::UnsavedSettingsMessage
@@ -196,7 +195,6 @@ pub(super) enum UiText {
     OpenLog,
     ConfirmUnclipWriteTitle,
     ConfirmUnclipWriteMessage,
-    Target,
     EnabledWriteActions,
     UnsavedSettingsTitle,
     UnsavedSettingsMessage,
@@ -305,6 +303,28 @@ impl Localizer {
             UiLanguage::Swedish => format!("Visar {start}-{end} av {total}"),
         }
     }
+
+    pub(super) fn unclip_target_count(self, count: usize) -> String {
+        match self.language {
+            UiLanguage::English => english::unclip_target_count(count),
+            UiLanguage::French => french::unclip_target_count(count),
+            UiLanguage::German => german::unclip_target_count(count),
+            UiLanguage::Russian => russian::unclip_target_count(count),
+            UiLanguage::Spanish => spanish::unclip_target_count(count),
+            UiLanguage::Swedish => swedish::unclip_target_count(count),
+        }
+    }
+
+    pub(super) fn unclip_target_overflow(self, count: usize) -> String {
+        match self.language {
+            UiLanguage::English => english::unclip_target_overflow(count),
+            UiLanguage::French => french::unclip_target_overflow(count),
+            UiLanguage::German => german::unclip_target_overflow(count),
+            UiLanguage::Russian => russian::unclip_target_overflow(count),
+            UiLanguage::Spanish => spanish::unclip_target_overflow(count),
+            UiLanguage::Swedish => swedish::unclip_target_overflow(count),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -323,26 +343,53 @@ mod tests {
             "Unclip will modify the selected target plugin(s) and create backup files."
         );
         assert_eq!(localizer.showing_items(1, 6, 9), "Showing 1-6 of 9");
+        assert_eq!(localizer.unclip_target_count(1), "Target: 1 plugin");
+        assert_eq!(localizer.unclip_target_count(6), "Targets: 6 plugins");
+        assert_eq!(localizer.unclip_target_overflow(2), "... and 2 more");
 
         let mut french = Localizer::default();
         french.set_language(UiLanguage::French);
         assert_eq!(french.text(UiText::Settings), "Paramètres");
         assert_eq!(french.showing_items(1, 6, 9), "Affichage de 1 à 6 sur 9");
+        assert_eq!(french.unclip_target_count(6), "Cibles : 6 plugins");
+        assert_eq!(french.unclip_target_overflow(1), "... et 1 autre");
+        assert_eq!(french.unclip_target_overflow(2), "... et 2 autres");
 
         let mut german = Localizer::default();
         german.set_language(UiLanguage::German);
         assert_eq!(german.text(UiText::Settings), "Einstellungen");
+        assert_eq!(german.unclip_target_count(6), "Ziele: 6 Plugins");
+        assert_eq!(german.unclip_target_overflow(1), "... und 1 weiteres");
+        assert_eq!(german.unclip_target_overflow(2), "... und 2 weitere");
 
         let mut russian = Localizer::default();
         russian.set_language(UiLanguage::Russian);
         assert_eq!(russian.text(UiText::Settings), "Настройки");
+        assert_eq!(
+            russian.text(UiText::ConfirmUnclipWriteMessage),
+            "Unclip изменит выбранные целевые плагины и создаст резервные копии."
+        );
+        assert!(
+            !russian
+                .text(UiText::ConfirmUnclipWriteMessage)
+                .contains("plugins")
+        );
+        assert_eq!(russian.unclip_target_count(1), "Цель: 1 плагин");
+        assert_eq!(russian.unclip_target_count(2), "Цели: 2 плагина");
+        assert_eq!(russian.unclip_target_count(5), "Цели: 5 плагинов");
+        assert_eq!(russian.unclip_target_count(21), "Цели: 21 плагин");
+        assert_eq!(russian.unclip_target_overflow(12), "... и еще 12 плагинов");
 
         let mut spanish = Localizer::default();
         spanish.set_language(UiLanguage::Spanish);
         assert_eq!(spanish.text(UiText::Settings), "Ajustes");
+        assert_eq!(spanish.unclip_target_count(6), "Objetivos: 6 plugins");
+        assert_eq!(spanish.unclip_target_overflow(2), "... y 2 más");
 
         let mut swedish = Localizer::default();
         swedish.set_language(UiLanguage::Swedish);
         assert_eq!(swedish.text(UiText::Settings), "Inställningar");
+        assert_eq!(swedish.unclip_target_count(6), "Mål: 6 plugin");
+        assert_eq!(swedish.unclip_target_overflow(2), "... och 2 till");
     }
 }
