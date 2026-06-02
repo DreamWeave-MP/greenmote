@@ -56,10 +56,13 @@ impl Default for GreenmoteApp {
 }
 
 impl eframe::App for GreenmoteApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.receive_conversion_events(ctx);
+        self.check_initial_config();
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.receive_conversion_events(&ctx);
-        self.check_initial_config();
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             self.show_tab_bar(ui);
