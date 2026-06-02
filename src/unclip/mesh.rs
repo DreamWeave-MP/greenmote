@@ -713,6 +713,8 @@ fn collect_mesh(
             link: root.cast(),
             transform: Affine3A::IDENTITY,
             collision: false,
+            depth_from_root: 0,
+            deep_collision_search: root_has_rcn_extra(root.cast(), stream),
         });
     }
 
@@ -748,6 +750,8 @@ fn collect_mesh_parts(
             link: root.cast(),
             transform: Affine3A::IDENTITY,
             collision: false,
+            depth_from_root: 0,
+            deep_collision_search: root_has_rcn_extra(root.cast(), stream),
         });
     }
 
@@ -771,9 +775,11 @@ struct VisitItem {
     link: NiLink<NiAVObject>,
     transform: Affine3A,
     collision: bool,
+    depth_from_root: usize,
+    deep_collision_search: bool,
 }
 
-type VisitEdge = (Option<tes3::nif::NiKey>, tes3::nif::NiKey, bool);
+type VisitEdge = (Option<tes3::nif::NiKey>, tes3::nif::NiKey, bool, bool);
 
 fn visit_object(
     stream: &NiStream,
@@ -788,82 +794,82 @@ fn visit_object(
         link,
         transform: parent_transform,
         collision: parent_collision,
+        depth_from_root,
+        deep_collision_search,
     } = item;
     if link.is_null() {
         return;
     }
-    if !visited.insert((parent, link.key, parent_collision)) {
+    if !visited.insert((parent, link.key, parent_collision, deep_collision_search)) {
         return;
     }
 
     if let Some(root_collision_node) = stream.get_as::<_, RootCollisionNode>(link) {
+        let collision =
+            parent_collision || parent.is_none() || depth_from_root == 1 || deep_collision_search;
+        if !collision {
+            return;
+        }
         // Some shipped collision roots are app-culled while still carrying valid
-        // collision geometry. Keep app-cull filtering for visible extraction and
-        // for ordinary descendants below; only the RootCollisionNode itself gets
-        // this collision-source exception.
-        if source == MeshSource::Visible && root_collision_node.base.base.app_culled() {
+        // collision geometry. Visible extraction still honors app-cull flags.
+        if source == MeshSource::Visible && root_collision_node.app_culled() {
             return;
         }
-        let transform =
-            parent_transform * affine3a_from_nif(root_collision_node.base.base.transform());
-        for child in &root_collision_node.base.children {
-            queue.push_back(VisitItem {
-                parent: Some(link.key),
-                link: *child,
-                transform,
-                collision: true,
-            });
-        }
-    } else if let Some(node) = stream.get_as::<_, NiNode>(link) {
-        if node.base.app_culled() {
-            return;
-        }
-        let collision = parent_collision || has_rcn_extra(&node.base.base, stream);
-        if source == MeshSource::Visible && collision {
-            return;
-        }
-        let transform = parent_transform * affine3a_from_nif(node.base.transform());
-        for child in &node.children {
+        let transform = parent_transform * affine3a_from_nif(root_collision_node.transform());
+        for child in &root_collision_node.children {
             queue.push_back(VisitItem {
                 parent: Some(link.key),
                 link: *child,
                 transform,
                 collision,
+                depth_from_root: depth_from_root + 1,
+                deep_collision_search,
+            });
+        }
+    } else if let Some(node) = stream.get_as::<_, NiNode>(link) {
+        if node.app_culled() && (source == MeshSource::Visible || !parent_collision) {
+            return;
+        }
+        if source == MeshSource::Visible && parent_collision {
+            return;
+        }
+        let transform = parent_transform * affine3a_from_nif(node.transform());
+        for child in &node.children {
+            queue.push_back(VisitItem {
+                parent: Some(link.key),
+                link: *child,
+                transform,
+                collision: parent_collision,
+                depth_from_root: depth_from_root + 1,
+                deep_collision_search,
             });
         }
     } else if let Some(shape) = stream.get_as::<_, NiTriShape>(link) {
-        if shape.base.base.base.app_culled() {
+        if shape.app_culled() && (source == MeshSource::Visible || !parent_collision) {
             return;
         }
-        let collision = parent_collision || has_rcn_extra(&shape.base.base.base.base, stream);
-        if !source.includes(collision) {
+        if !source.includes(parent_collision) {
             return;
         }
-        let transform = parent_transform * affine3a_from_nif(shape.base.base.base.transform());
-        if let Some(data) = stream.get_as::<_, NiTriShapeData>(shape.base.base.geometry_data) {
+        let transform = parent_transform * affine3a_from_nif(shape.transform());
+        if let Some(data) = stream.get_as::<_, NiTriShapeData>(shape.geometry_data) {
             include_vertices(
-                &data.base.base,
+                data,
                 data.triangles.iter().flatten().copied(),
                 transform,
                 mesh,
             );
         }
     } else if let Some(strips) = stream.get_as::<_, NiTriStrips>(link) {
-        if strips.base.base.base.app_culled() {
+        if strips.app_culled() && (source == MeshSource::Visible || !parent_collision) {
             return;
         }
-        let collision = parent_collision || has_rcn_extra(&strips.base.base.base.base, stream);
-        if !source.includes(collision) {
+        if !source.includes(parent_collision) {
             return;
         }
-        let transform = parent_transform * affine3a_from_nif(strips.base.base.base.transform());
-        if let Some(data) = stream.get_as::<_, NiTriStripsData>(strips.base.base.geometry_data) {
-            include_vertices(
-                &data.base.base,
-                data.strips.iter().copied(),
-                transform,
-                mesh,
-            );
+        let transform = parent_transform * affine3a_from_nif(strips.transform());
+        if let Some(data) = stream.get_as::<_, NiTriStripsData>(strips.geometry_data) {
+            include_vertices(data, data.strips.iter().copied(), transform, mesh);
         }
     }
 }
@@ -881,86 +887,100 @@ fn visit_object_parts(
         link,
         transform: parent_transform,
         collision: parent_collision,
+        depth_from_root,
+        deep_collision_search,
     } = item;
     if link.is_null() {
         return Ok(());
     }
-    if !visited.insert((parent, link.key, parent_collision)) {
+    if !visited.insert((parent, link.key, parent_collision, deep_collision_search)) {
         return Ok(());
     }
 
     if let Some(root_collision_node) = stream.get_as::<_, RootCollisionNode>(link) {
+        let collision =
+            parent_collision || parent.is_none() || depth_from_root == 1 || deep_collision_search;
+        if !collision {
+            return Ok(());
+        }
         // Some shipped collision roots are app-culled while still carrying valid
-        // collision geometry. Keep app-cull filtering for visible extraction and
-        // for ordinary descendants below; only the RootCollisionNode itself gets
-        // this collision-source exception.
-        if source == MeshSource::Visible && root_collision_node.base.base.app_culled() {
+        // collision geometry. Visible extraction still honors app-cull flags.
+        if source == MeshSource::Visible && root_collision_node.app_culled() {
             return Ok(());
         }
-        let transform =
-            parent_transform * affine3a_from_nif(root_collision_node.base.base.transform());
-        for child in &root_collision_node.base.children {
-            queue.push_back(VisitItem {
-                parent: Some(link.key),
-                link: *child,
-                transform,
-                collision: true,
-            });
-        }
-    } else if let Some(node) = stream.get_as::<_, NiNode>(link) {
-        if node.base.app_culled() {
-            return Ok(());
-        }
-        let collision = parent_collision || has_rcn_extra(&node.base.base, stream);
-        if source == MeshSource::Visible && collision {
-            return Ok(());
-        }
-        let transform = parent_transform * affine3a_from_nif(node.base.transform());
-        for child in &node.children {
+        let transform = parent_transform * affine3a_from_nif(root_collision_node.transform());
+        for child in &root_collision_node.children {
             queue.push_back(VisitItem {
                 parent: Some(link.key),
                 link: *child,
                 transform,
                 collision,
+                depth_from_root: depth_from_root + 1,
+                deep_collision_search,
+            });
+        }
+    } else if let Some(node) = stream.get_as::<_, NiNode>(link) {
+        if node.app_culled() && (source == MeshSource::Visible || !parent_collision) {
+            return Ok(());
+        }
+        if source == MeshSource::Visible && parent_collision {
+            return Ok(());
+        }
+        let transform = parent_transform * affine3a_from_nif(node.transform());
+        for child in &node.children {
+            queue.push_back(VisitItem {
+                parent: Some(link.key),
+                link: *child,
+                transform,
+                collision: parent_collision,
+                depth_from_root: depth_from_root + 1,
+                deep_collision_search,
             });
         }
     } else if let Some(shape) = stream.get_as::<_, NiTriShape>(link) {
-        if shape.base.base.base.app_culled() {
+        if shape.app_culled() && (source == MeshSource::Visible || !parent_collision) {
             return Ok(());
         }
-        let collision = parent_collision || has_rcn_extra(&shape.base.base.base.base, stream);
-        if !source.includes(collision) {
+        if !source.includes(parent_collision) {
             return Ok(());
         }
-        let transform = parent_transform * affine3a_from_nif(shape.base.base.base.transform());
-        if let Some(data) = stream.get_as::<_, NiTriShapeData>(shape.base.base.geometry_data) {
+        let transform = parent_transform * affine3a_from_nif(shape.transform());
+        if let Some(data) = stream.get_as::<_, NiTriShapeData>(shape.geometry_data) {
             include_part(
-                &data.base.base,
+                data,
                 data.triangles.iter().flatten().copied(),
                 transform,
                 parts,
             )?;
         }
     } else if let Some(strips) = stream.get_as::<_, NiTriStrips>(link) {
-        if strips.base.base.base.app_culled() {
+        if strips.app_culled() && (source == MeshSource::Visible || !parent_collision) {
             return Ok(());
         }
-        let collision = parent_collision || has_rcn_extra(&strips.base.base.base.base, stream);
-        if !source.includes(collision) {
+        if !source.includes(parent_collision) {
             return Ok(());
         }
-        let transform = parent_transform * affine3a_from_nif(strips.base.base.base.transform());
-        if let Some(data) = stream.get_as::<_, NiTriStripsData>(strips.base.base.geometry_data) {
-            include_part(
-                &data.base.base,
-                data.strips.iter().copied(),
-                transform,
-                parts,
-            )?;
+        let transform = parent_transform * affine3a_from_nif(strips.transform());
+        if let Some(data) = stream.get_as::<_, NiTriStripsData>(strips.geometry_data) {
+            include_part(data, data.strips.iter().copied(), transform, parts)?;
         }
     }
 
     Ok(())
+}
+
+fn root_has_rcn_extra(link: NiLink<NiAVObject>, stream: &NiStream) -> bool {
+    if let Some(root_collision_node) = stream.get_as::<_, RootCollisionNode>(link) {
+        has_rcn_extra(&root_collision_node.base, stream)
+    } else if let Some(node) = stream.get_as::<_, NiNode>(link) {
+        has_rcn_extra(node, stream)
+    } else if let Some(shape) = stream.get_as::<_, NiTriShape>(link) {
+        has_rcn_extra(shape, stream)
+    } else if let Some(strips) = stream.get_as::<_, NiTriStrips>(link) {
+        has_rcn_extra(strips, stream)
+    } else {
+        false
+    }
 }
 
 fn has_rcn_extra(object: &NiObjectNET, stream: &NiStream) -> bool {
@@ -1441,25 +1461,137 @@ mod tests {
     }
 
     #[test]
-    fn rcn_extra_data_marks_subtree_as_collision_geometry() {
+    fn root_rcn_extra_without_actual_root_collision_node_uses_visible_fallback() {
         let mut stream = NiStream::new();
         let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
-        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
-        let collision_root = insert_node(
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 1);
+        let not_collision_root = insert_node(
             &mut stream,
             "whatever-blender-called-it",
             vec![collision_shape],
+            None,
+            0,
+        );
+        let root = insert_node(
+            &mut stream,
+            "root",
+            vec![visible, not_collision_root],
             Some("RCN"),
             0,
         );
-        let root = insert_node(&mut stream, "root", vec![visible, collision_root], None, 0);
         push_root(&mut stream, root);
 
         let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.occluder_bounds, expected_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::VisibleFallback);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(expected_bounds()),
+        );
+    }
+
+    #[test]
+    fn non_root_shape_rcn_extra_does_not_mark_shape_as_collision_geometry() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        set_extra_data(&mut stream, visible, "RCN");
+        let root = insert_node(&mut stream, "root", vec![visible], None, 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.occluder_bounds, expected_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::VisibleFallback);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(expected_bounds()),
+        );
+    }
+
+    #[test]
+    fn root_rcn_extra_enables_nested_actual_root_collision_node_discovery() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root = insert_root_collision_node(&mut stream, vec![collision_shape]);
+        let wrapper = insert_node(&mut stream, "wrapper", vec![collision_root], None, 0);
+        let root = insert_node(&mut stream, "root", vec![visible, wrapper], Some("RCN"), 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
 
         assert_eq!(geometry.bounds, expected_bounds());
         assert_eq!(geometry.occluder_bounds, collision_bounds());
         assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::Collision);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(collision_bounds()),
+        );
+    }
+
+    #[test]
+    fn nested_root_collision_node_without_root_rcn_extra_uses_visible_fallback() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root = insert_root_collision_node(&mut stream, vec![collision_shape]);
+        let wrapper = insert_node(&mut stream, "wrapper", vec![collision_root], None, 0);
+        let root = insert_node(&mut stream, "root", vec![visible, wrapper], None, 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.occluder_bounds, expected_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::VisibleFallback);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(expected_bounds()),
+        );
+    }
+
+    #[test]
+    fn non_root_rcn_extra_does_not_enable_nested_root_collision_node_discovery() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root = insert_root_collision_node(&mut stream, vec![collision_shape]);
+        let wrapper = insert_node(&mut stream, "wrapper", vec![collision_root], Some("RCN"), 0);
+        let root = insert_node(&mut stream, "root", vec![visible, wrapper], None, 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.occluder_bounds, expected_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::VisibleFallback);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(expected_bounds()),
+        );
     }
 
     #[test]
@@ -1484,18 +1616,24 @@ mod tests {
     }
 
     #[test]
-    fn culled_collision_subtree_does_not_replace_visible_occluder_bounds() {
+    fn app_culled_non_root_rcn_extra_subtree_does_not_replace_visible_occluder_bounds() {
         let mut stream = NiStream::new();
         let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
         let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
-        let collision_root = insert_node(
+        let not_collision_root = insert_node(
             &mut stream,
             "collision",
             vec![collision_shape],
             Some("RCN"),
             1,
         );
-        let root = insert_node(&mut stream, "root", vec![visible, collision_root], None, 0);
+        let root = insert_node(
+            &mut stream,
+            "root",
+            vec![visible, not_collision_root],
+            None,
+            0,
+        );
         push_root(&mut stream, root);
 
         let geometry = mesh_geometry(&stream).unwrap();
@@ -1523,6 +1661,37 @@ mod tests {
         assert_eq!(geometry.occluder_bounds, collision_bounds());
         assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
         assert_eq!(parts.source(), MeshColliderSource::Collision);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(collision_bounds()),
+        );
+    }
+
+    #[test]
+    fn app_culled_root_collision_node_descendant_shape_is_included_for_collision_extraction() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 1);
+        let collision_root = insert_root_collision_node(&mut stream, vec![collision_shape]);
+        let root = insert_node(&mut stream, "root", vec![visible, collision_root], None, 0);
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.contact.vertices, expected_contact_vertices());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::Collision);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(collision_bounds()),
+        );
     }
 
     #[test]
@@ -1799,6 +1968,16 @@ mod tests {
                 node.base.base.scale = scale;
             }
             _ => panic!("unsupported transform target"),
+        }
+    }
+
+    fn set_extra_data(stream: &mut NiStream, link: NiLink<NiAVObject>, value: &str) {
+        let extra_data = insert_string_extra(stream, value);
+        match stream.objects.get_mut(link.key).unwrap() {
+            NiType::NiTriShape(shape) => shape.base.base.base.base.extra_data = extra_data,
+            NiType::NiNode(node) => node.base.base.extra_data = extra_data,
+            NiType::RootCollisionNode(node) => node.base.base.base.extra_data = extra_data,
+            _ => panic!("unsupported extra data target"),
         }
     }
 
