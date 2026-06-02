@@ -72,7 +72,7 @@ const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Unclip-Schreiben bestätigen",
         UiText::ConfirmUnclipWriteMessage => {
-            "Unclip wird das Ziel-Plugin ändern und eine Sicherung erstellen."
+            "Unclip wird die ausgewählten Ziel-Plugins ändern und Sicherungsdateien erstellen."
         }
         UiText::Target => "Ziel:",
         UiText::EnabledWriteActions => "Aktivierte Schreibaktionen:",

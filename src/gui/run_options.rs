@@ -85,10 +85,6 @@ impl UnclipRunOptions {
         }
     }
 
-    pub(super) fn first_target(&self) -> &str {
-        self.target_plugins.first().map_or("", String::as_str)
-    }
-
     pub(super) fn add_target(&mut self, target: impl Into<String>) -> bool {
         let target = target.into();
         let target = target.trim();
@@ -150,28 +146,6 @@ impl UnclipRunOptions {
         }
 
         Ok(args)
-    }
-
-    pub(super) fn to_single_visible_args(&self) -> Result<UnclipArgs, String> {
-        let first_target = self.first_target().trim();
-        if first_target.is_empty() {
-            return Err("Choose a target plugin before running Unclip.".to_owned());
-        }
-
-        let usable_targets = self
-            .target_plugins
-            .iter()
-            .map(|plugin| plugin.trim())
-            .filter(|plugin| !plugin.is_empty())
-            .count();
-        if usable_targets > 1 {
-            return Err("Batch Unclip execution is not enabled yet.".to_owned());
-        }
-
-        self.to_args_list()?
-            .into_iter()
-            .next()
-            .ok_or_else(|| "Choose a target plugin before running Unclip.".to_owned())
     }
 }
 
@@ -412,47 +386,5 @@ mod tests {
 
         assert!(args.iter().all(|args| args.meshgenerator_ini.is_none()));
         assert!(args.iter().all(|args| args.ignore_meshgenerator_ini));
-    }
-
-    #[test]
-    fn unclip_run_options_single_visible_rejects_multiple_usable_targets() {
-        let options = UnclipRunOptions {
-            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
-            verbose: false,
-            write: false,
-        };
-
-        let error = options.to_single_visible_args().unwrap_err();
-
-        assert_eq!(error, "Batch Unclip execution is not enabled yet.");
-    }
-
-    #[test]
-    fn unclip_run_options_single_visible_rejects_blank_first_target() {
-        let options = UnclipRunOptions {
-            target_plugins: vec![" ".to_owned(), "hidden.omwaddon".to_owned()],
-            verbose: false,
-            write: false,
-        };
-
-        let error = options.to_single_visible_args().unwrap_err();
-
-        assert_eq!(error, "Choose a target plugin before running Unclip.");
-    }
-
-    #[test]
-    fn unclip_run_options_single_visible_builds_safe_args() {
-        let options = UnclipRunOptions {
-            target_plugins: vec![" target.omwaddon ".to_owned()],
-            verbose: false,
-            write: true,
-        };
-
-        let args = options.to_single_visible_args().unwrap();
-
-        assert_eq!(args.plugin, Some("target.omwaddon".into()));
-        assert_eq!(args.meshgenerator_ini, None);
-        assert!(args.ignore_meshgenerator_ini);
-        assert_eq!(args.write, Some(true));
     }
 }

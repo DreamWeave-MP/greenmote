@@ -70,7 +70,7 @@ const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Confirm Unclip write",
         UiText::ConfirmUnclipWriteMessage => {
-            "Unclip will modify the target plugin and create a backup."
+            "Unclip will modify the selected target plugin(s) and create backup files."
         }
         UiText::Target => "Target:",
         UiText::EnabledWriteActions => "Enabled write actions:",

@@ -318,6 +318,10 @@ mod tests {
         assert_eq!(localizer.language(), UiLanguage::English);
         assert_eq!(localizer.text(UiText::Language), "Language");
         assert_eq!(localizer.text(UiText::StartConversion), "Start conversion");
+        assert_eq!(
+            localizer.text(UiText::ConfirmUnclipWriteMessage),
+            "Unclip will modify the selected target plugin(s) and create backup files."
+        );
         assert_eq!(localizer.showing_items(1, 6, 9), "Showing 1-6 of 9");
 
         let mut french = Localizer::default();
