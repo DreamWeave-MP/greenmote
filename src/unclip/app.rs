@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
     fs::File,
     io::{self, BufWriter, Write},
@@ -273,16 +274,19 @@ fn build_report_context(input: ReportContextBuildInput<'_>) -> UnclipReportConte
     )
 }
 
-fn target_static_index(
+fn target_static_index<'a>(
     context_plugins: &[Plugin],
-    active_static_index: &StaticMeshIndex,
+    active_static_index: &'a StaticMeshIndex,
     target_is_active: bool,
     target_plugin_data: &Plugin,
-) -> StaticMeshIndex {
+) -> Cow<'a, StaticMeshIndex> {
     if target_is_active {
-        active_static_index.clone()
+        Cow::Borrowed(active_static_index)
     } else {
-        build_static_index(context_plugins, Some(target_plugin_data))
+        Cow::Owned(build_static_index(
+            context_plugins,
+            Some(target_plugin_data),
+        ))
     }
 }
 
@@ -465,6 +469,8 @@ fn write_log_footer(
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use crate::unclip::{
         args::WriteActionArg,
         config::UnclipConfig,
@@ -493,6 +499,7 @@ mod tests {
         let index =
             target_static_index(&context_plugins, &active_static_index, true, &target_plugin);
 
+        assert!(matches!(index, Cow::Borrowed(_)));
         assert_eq!(
             index
                 .get("grass_shared")
@@ -521,6 +528,7 @@ mod tests {
             &target_plugin,
         );
 
+        assert!(matches!(index, Cow::Owned(_)));
         assert_eq!(
             index
                 .get("grass_context")
