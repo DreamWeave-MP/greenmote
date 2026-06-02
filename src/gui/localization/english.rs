@@ -35,7 +35,6 @@ const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Run options",
         UiText::TargetPlugin => "Target plugin",
-        UiText::MeshGeneratorIni => "MeshGenerator INI",
         UiText::WriteChangesToPlugin => "Write changes to plugin",
         UiText::DetailedRefDiagnostics => "Detailed log",
         UiText::DetailedRefDiagnosticsTooltip => {
@@ -89,7 +88,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         }
         UiText::SelectOpenMwConfig => "Select OpenMW Config",
         UiText::SelectUnclipTargetPlugin => "Select Unclip Target Plugin",
-        UiText::SelectMeshGeneratorIni => "Select MeshGenerator INI",
         _ => unreachable!(),
     }
 }

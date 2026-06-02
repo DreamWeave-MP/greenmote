@@ -24,7 +24,6 @@ macro_rules! route_text {
             | UiText::ShowNextItems => $language($key),
             UiText::RunOptions
             | UiText::TargetPlugin
-            | UiText::MeshGeneratorIni
             | UiText::WriteChangesToPlugin
             | UiText::DetailedRefDiagnostics
             | UiText::DetailedRefDiagnosticsTooltip
@@ -59,8 +58,7 @@ macro_rules! route_text {
             | UiText::OpenMwConfigNotFoundMessage
             | UiText::ChooseOpenMwConfigBeforeContinuing
             | UiText::SelectOpenMwConfig
-            | UiText::SelectUnclipTargetPlugin
-            | UiText::SelectMeshGeneratorIni => $dialogs($key),
+            | UiText::SelectUnclipTargetPlugin => $dialogs($key),
             UiText::OpenMwConfig
             | UiText::OpenMwPlugins
             | UiText::UsingOpenMwAutodetection
@@ -162,7 +160,6 @@ pub(super) enum UiText {
     General,
     RunOptions,
     TargetPlugin,
-    MeshGeneratorIni,
     Browse,
     WriteChangesToPlugin,
     DetailedRefDiagnostics,
@@ -204,7 +201,6 @@ pub(super) enum UiText {
     ChooseOpenMwConfigBeforeContinuing,
     SelectOpenMwConfig,
     SelectUnclipTargetPlugin,
-    SelectMeshGeneratorIni,
     OpenMwConfig,
     OpenMwPlugins,
     UsingOpenMwAutodetection,

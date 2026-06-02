@@ -17,7 +17,6 @@ pub(super) struct ConvertRunOptions {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct UnclipRunOptions {
     pub(super) plugin: String,
-    pub(super) meshgenerator_ini: String,
     pub(super) verbose: bool,
     pub(super) write: bool,
 }
@@ -79,12 +78,6 @@ impl UnclipRunOptions {
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_default(),
-            meshgenerator_ini: config
-                .unclip
-                .meshgenerator_ini
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
             verbose: config.unclip.verbose.unwrap_or(false),
             write: false,
         }
@@ -96,12 +89,10 @@ impl UnclipRunOptions {
             return Err("Choose a target plugin before running Unclip.".to_owned());
         }
 
-        let meshgenerator_ini = self.meshgenerator_ini.trim();
-
         Ok(UnclipArgs {
             plugin: Some(PathBuf::from(plugin)),
-            meshgenerator_ini: (!meshgenerator_ini.is_empty())
-                .then(|| PathBuf::from(meshgenerator_ini)),
+            meshgenerator_ini: None,
+            ignore_meshgenerator_ini: true,
             instances: None,
             verbose: Some(self.verbose),
             structured: Some(false),
@@ -258,7 +249,6 @@ mod tests {
         let options = UnclipRunOptions::from_config(&config);
 
         assert_eq!(options.plugin, "groundcover.omwaddon");
-        assert_eq!(options.meshgenerator_ini, "groundcover.ini");
         assert!(options.verbose);
         assert!(!options.write);
     }
@@ -267,7 +257,6 @@ mod tests {
     fn unclip_run_options_build_explicit_safe_args() {
         let options = UnclipRunOptions {
             plugin: " groundcover.omwaddon ".to_owned(),
-            meshgenerator_ini: " groundcover.ini ".to_owned(),
             verbose: true,
             write: false,
         };
@@ -275,7 +264,8 @@ mod tests {
         let args = options.to_args().unwrap();
 
         assert_eq!(args.plugin, Some("groundcover.omwaddon".into()));
-        assert_eq!(args.meshgenerator_ini, Some("groundcover.ini".into()));
+        assert_eq!(args.meshgenerator_ini, None);
+        assert!(args.ignore_meshgenerator_ini);
         assert_eq!(args.instances, None);
         assert_eq!(args.verbose, Some(true));
         assert_eq!(args.structured, Some(false));

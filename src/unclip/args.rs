@@ -36,6 +36,9 @@ pub struct UnclipArgs {
     #[arg(long = "meshgenerator-ini", value_name = "INI")]
     pub meshgenerator_ini: Option<PathBuf>,
 
+    #[arg(skip)]
+    pub(crate) ignore_meshgenerator_ini: bool,
+
     /// Emit the compact summary as machine-readable JSON.
     #[arg(long = "structured", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
     pub structured: Option<bool>,
@@ -143,7 +146,11 @@ impl UnclipArgs {
         let resolved = crate::unclip::config::UnclipConfig {
             openmw_cfg: None,
             plugin: plugin.clone(),
-            meshgenerator_ini: self.meshgenerator_ini.clone(),
+            meshgenerator_ini: if self.ignore_meshgenerator_ini {
+                None
+            } else {
+                self.meshgenerator_ini.clone()
+            },
             verbose: self.verbose.or(self.instances).unwrap_or(false),
             structured: self.structured.unwrap_or(false),
             write: self.write.unwrap_or(false),
