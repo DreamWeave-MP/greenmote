@@ -433,8 +433,14 @@ impl<'a> MeshCache<'a> {
             return Err(error.to_io());
         }
 
-        if let Some(CachedMesh::BoundsOnly { stream, .. }) = self.meshes.get(key) {
-            let mesh = mesh_geometry(stream)
+        if let Some(CachedMesh::BoundsOnly {
+            stream,
+            bounds,
+            collider_parts,
+            ..
+        }) = self.meshes.get(key)
+        {
+            let mesh = mesh_visible_geometry(stream, *bounds, collider_parts.clone())
                 .ok_or_else(|| no_triangle_vertices_error(&static_mesh.mesh_path));
             match mesh {
                 Ok(mesh) => {
@@ -520,6 +526,24 @@ impl<'a> MeshCache<'a> {
                 CachedMesh::Failed(_) => "failed",
             })
     }
+
+    #[cfg(test)]
+    fn set_cached_bounds_only_collision_data(
+        &mut self,
+        static_mesh: &StaticMesh,
+        replacement_bounds: MeshAabb,
+        replacement: MeshColliderParts,
+    ) {
+        if let Some(CachedMesh::BoundsOnly {
+            bounds,
+            collider_parts,
+            ..
+        }) = self.meshes.get_mut(&static_mesh.mesh_key)
+        {
+            *bounds = replacement_bounds;
+            *collider_parts = replacement;
+        }
+    }
 }
 
 fn load_geometry(vfs: &VFS, mesh_path: &str) -> io::Result<MeshGeometry> {
@@ -590,6 +614,38 @@ fn strip_meshes_prefix(mesh_path: &str) -> &str {
 }
 
 fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
+    let visible = mesh_visible(stream)?;
+    let occluder_bounds = mesh_bounds(stream).unwrap_or(visible.bounds);
+
+    Some(MeshGeometry {
+        contact: MeshContact::new(visible.vertices),
+        bounds: visible.bounds,
+        occluder_bounds,
+        occluder_parts: mesh_collider_parts(stream, occluder_bounds),
+    })
+}
+
+fn mesh_visible_geometry(
+    stream: &NiStream,
+    occluder_bounds: MeshAabb,
+    occluder_parts: MeshColliderParts,
+) -> Option<MeshGeometry> {
+    let visible = mesh_visible(stream)?;
+
+    Some(MeshGeometry {
+        contact: MeshContact::new(visible.vertices),
+        bounds: visible.bounds,
+        occluder_bounds,
+        occluder_parts,
+    })
+}
+
+struct VisibleMeshGeometry {
+    vertices: Vec<[f32; 3]>,
+    bounds: MeshAabb,
+}
+
+fn mesh_visible(stream: &NiStream) -> Option<VisibleMeshGeometry> {
     let (_, accumulated) = collect_mesh(stream, true, MeshSource::Visible)?;
     let mut vertices = accumulated.vertices.unwrap_or_default();
     dedup_vertices_preserving_order(&mut vertices);
@@ -598,13 +654,9 @@ fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
         max: accumulated.max.to_array(),
     };
 
-    let occluder_bounds = mesh_bounds(stream).unwrap_or(bounds);
-
-    Some(MeshGeometry {
-        contact: MeshContact::new(vertices.iter().map(glam::Vec3::to_array).collect()),
+    Some(VisibleMeshGeometry {
+        vertices: vertices.iter().map(glam::Vec3::to_array).collect(),
         bounds,
-        occluder_bounds,
-        occluder_parts: mesh_collider_parts(stream, occluder_bounds),
     })
 }
 
@@ -1338,19 +1390,28 @@ mod tests {
     #[test]
     fn mesh_cache_bounds_then_geometry_promotes_cached_stream() {
         let temp_dir = TempDir::new("bounds-then-geometry");
-        write_nif(&temp_dir.path().join("Meshes/Grass/Foo.nif"));
+        write_visible_and_collision_nif(&temp_dir.path().join("Meshes/Grass/Foo.nif"));
         let vfs = VFS::from_directories(vec![temp_dir.path().to_path_buf()], None);
         let static_mesh = test_static_mesh("Meshes/Grass/Foo.nif");
         let mut cache = MeshCache::new(&vfs);
 
-        assert_eq!(cache.bounds(&static_mesh).unwrap(), expected_bounds());
+        assert_eq!(cache.bounds(&static_mesh).unwrap(), collision_bounds());
         assert_eq!(cache.cached_mesh_state(&static_mesh), Some("bounds_only"));
+        let cached_parts =
+            MeshColliderParts::from_local_obbs([LocalObb::from_mesh_aabb(far_collision_bounds())]);
+        cache.set_cached_bounds_only_collision_data(
+            &static_mesh,
+            far_collision_bounds(),
+            cached_parts.clone(),
+        );
 
         std::fs::remove_file(temp_dir.path().join("Meshes/Grass/Foo.nif")).unwrap();
 
         {
             let cached_geometry = cache.geometry(&static_mesh).unwrap();
             assert_eq!(cached_geometry.bounds, expected_bounds());
+            assert_eq!(cached_geometry.occluder_bounds, far_collision_bounds());
+            assert_eq!(cached_geometry.occluder_parts, cached_parts);
             assert_eq!(
                 cached_geometry.contact.vertices,
                 expected_contact_vertices()
@@ -2020,6 +2081,17 @@ mod tests {
         let shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
         let collision_root = insert_root_collision_node(&mut stream, vec![shape]);
         push_root(&mut stream, collision_root);
+        std::fs::write(path, stream.save_bytes().unwrap()).unwrap();
+    }
+
+    fn write_visible_and_collision_nif(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
+        let collision_root = insert_root_collision_node(&mut stream, vec![collision_shape]);
+        let root = insert_node(&mut stream, "root", vec![visible, collision_root], None, 0);
+        push_root(&mut stream, root);
         std::fs::write(path, stream.save_bytes().unwrap()).unwrap();
     }
 
