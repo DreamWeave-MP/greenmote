@@ -353,12 +353,31 @@ impl Localizer {
     ) -> String {
         if failed == 0 && skipped == 0 {
             return match self.language {
-                UiLanguage::English => format!("{label} finished."),
-                UiLanguage::French => format!("{label} terminée."),
-                UiLanguage::German => format!("{label} abgeschlossen."),
-                UiLanguage::Russian => format!("{label} завершена."),
-                UiLanguage::Spanish => format!("{label} finalizada."),
-                UiLanguage::Swedish => format!("{label} slutförd."),
+                UiLanguage::English if succeeded == 1 => {
+                    format!("{label} finished: 1 target succeeded.")
+                }
+                UiLanguage::English => format!("{label} finished: {succeeded} targets succeeded."),
+                UiLanguage::French if succeeded == 1 => {
+                    format!("{label} terminée : 1 cible réussie.")
+                }
+                UiLanguage::French => format!("{label} terminée : {succeeded} cibles réussies."),
+                UiLanguage::German if succeeded == 1 => {
+                    format!("{label} abgeschlossen: 1 Ziel erfolgreich.")
+                }
+                UiLanguage::German => {
+                    format!("{label} abgeschlossen: {succeeded} Ziele erfolgreich.")
+                }
+                UiLanguage::Russian => format!(
+                    "{label} завершена: {succeeded} {} успешно.",
+                    russian_success_target_plural(succeeded)
+                ),
+                UiLanguage::Spanish if succeeded == 1 => {
+                    format!("{label} finalizada: 1 objetivo correcto.")
+                }
+                UiLanguage::Spanish => {
+                    format!("{label} finalizada: {succeeded} objetivos correctos.")
+                }
+                UiLanguage::Swedish => format!("{label} slutförd: {succeeded} mål lyckades."),
             };
         }
 
@@ -385,6 +404,39 @@ impl Localizer {
             ),
         }
     }
+
+    pub(super) fn unclip_finished_error_status(
+        self,
+        label: &str,
+        succeeded: usize,
+        failed: usize,
+        skipped: usize,
+        error: &str,
+    ) -> String {
+        let status = self.unclip_finished_status(label, succeeded, failed, skipped);
+        match self.language {
+            UiLanguage::English => format!("{status} — error: {error}"),
+            UiLanguage::French => format!("{status} — erreur : {error}"),
+            UiLanguage::German => format!("{status} — Fehler: {error}"),
+            UiLanguage::Russian => format!("{status} — ошибка: {error}"),
+            UiLanguage::Spanish => format!("{status} — error detectado: {error}"),
+            UiLanguage::Swedish => format!("{status} — fel: {error}"),
+        }
+    }
+}
+
+const fn russian_success_target_plural(count: usize) -> &'static str {
+    let last_two = count % 100;
+    let last_one = count % 10;
+    if last_two >= 11 && last_two <= 14 {
+        "целей"
+    } else if last_one == 1 {
+        "цель"
+    } else if last_one >= 2 && last_one <= 4 {
+        "цели"
+    } else {
+        "целей"
+    }
 }
 
 #[cfg(test)]
@@ -408,8 +460,20 @@ mod tests {
         assert_eq!(localizer.unclip_target_overflow(2), "... and 2 more");
         assert_eq!(localizer.text(UiText::UnclipTargetPending), "Pending");
         assert_eq!(
+            localizer.unclip_finished_status("Unclip write", 1, 0, 0),
+            "Unclip write finished: 1 target succeeded."
+        );
+        assert_eq!(
+            localizer.unclip_finished_status("Unclip write", 2, 0, 0),
+            "Unclip write finished: 2 targets succeeded."
+        );
+        assert_eq!(
             localizer.unclip_finished_status("Unclip write", 2, 1, 1),
             "Unclip write finished: 2 succeeded, 1 failed, 1 skipped."
+        );
+        assert_eq!(
+            localizer.unclip_finished_error_status("Unclip write", 1, 1, 0, "disk full"),
+            "Unclip write finished: 1 succeeded, 1 failed, 0 skipped. — error: disk full"
         );
 
         let mut french = Localizer::default();
@@ -450,12 +514,26 @@ mod tests {
             russian.unclip_finished_status("Запись Unclip", 2, 1, 1),
             "Запись Unclip завершена: успешно: 2, с ошибкой: 1, пропущено: 1."
         );
+        assert_eq!(
+            russian.unclip_finished_error_status("Запись Unclip", 1, 1, 0, "нет доступа"),
+            "Запись Unclip завершена: успешно: 1, с ошибкой: 1, пропущено: 0. — ошибка: нет доступа"
+        );
+        assert!(
+            !russian
+                .unclip_finished_error_status("Запись Unclip", 1, 1, 0, "нет доступа")
+                .contains("error:")
+        );
 
         let mut spanish = Localizer::default();
         spanish.set_language(UiLanguage::Spanish);
         assert_eq!(spanish.text(UiText::Settings), "Ajustes");
         assert_eq!(spanish.unclip_target_count(6), "Objetivos: 6 plugins");
         assert_eq!(spanish.unclip_target_overflow(2), "... y 2 más");
+        let spanish_error =
+            spanish.unclip_finished_error_status("Escritura Unclip", 1, 1, 0, "disco lleno");
+        assert!(spanish_error.contains("1 correctos, 1 fallidos, 0 omitidos"));
+        assert!(spanish_error.contains("disco lleno"));
+        assert!(!spanish_error.contains("error:"));
 
         let mut swedish = Localizer::default();
         swedish.set_language(UiLanguage::Swedish);

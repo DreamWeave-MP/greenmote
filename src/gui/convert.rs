@@ -1067,12 +1067,16 @@ impl GreenmoteApp {
         self.convert.active_worker = None;
         self.convert.cancellation = None;
 
-        if let Some(error) = error {
-            self.set_status(format!("Unclip failed: {error}"));
-        } else if self.convert.unclip.run_options.write {
-            self.set_status(self.unclip_finished_status(UiText::UnclipWrite));
+        let label = if self.convert.unclip.run_options.write {
+            UiText::UnclipWrite
         } else {
-            self.set_status(self.unclip_finished_status(UiText::UnclipInspection));
+            UiText::UnclipInspection
+        };
+
+        if let Some(error) = error {
+            self.set_status(self.unclip_finished_error_status(label, &error));
+        } else {
+            self.set_status(self.unclip_finished_status(label));
         }
     }
 
@@ -1083,6 +1087,17 @@ impl GreenmoteApp {
             summary.succeeded,
             summary.failed,
             summary.skipped,
+        )
+    }
+
+    fn unclip_finished_error_status(&self, label: UiText, error: &str) -> String {
+        let summary = summarize_unclip_statuses(&self.convert.unclip.target_statuses);
+        self.localizer.unclip_finished_error_status(
+            self.localizer.text(label),
+            summary.succeeded,
+            summary.failed,
+            summary.skipped,
+            error,
         )
     }
 
