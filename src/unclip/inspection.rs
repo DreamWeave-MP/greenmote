@@ -117,6 +117,7 @@ fn count_reference(
             reference,
             mesh_resolution: &mesh_contact,
             context: static_bounds_context,
+            evidence: StaticBoundsEvidence::CountsOnly,
         },
     );
     let _ = classify_origin(
@@ -205,6 +206,7 @@ fn inspect_reference(
             reference,
             mesh_resolution: &mesh_contact,
             context: static_bounds_context,
+            evidence: StaticBoundsEvidence::Details,
         },
     );
     let origin = classify_origin(
@@ -405,12 +407,25 @@ struct StaticBoundsOcclusionDetails {
 }
 
 #[derive(Clone, Copy)]
+enum StaticBoundsEvidence {
+    CountsOnly,
+    Details,
+}
+
+impl StaticBoundsEvidence {
+    const fn needs_details(self) -> bool {
+        matches!(self, Self::Details)
+    }
+}
+
+#[derive(Clone, Copy)]
 struct StaticBoundsOcclusionInput<'a, 'b> {
     cell: CellCoord,
     key: (u32, u32),
     reference: &'a tes3::esp::Reference,
     mesh_resolution: &'a MeshContactResolution<'b>,
     context: StaticBoundsContext<'a>,
+    evidence: StaticBoundsEvidence,
 }
 
 #[derive(Clone, Copy)]
@@ -439,7 +454,7 @@ fn classify_static_bounds_occlusion(
         .write
         .and_then(|write| write.static_bounds_analysis(input.cell, input.key))
     {
-        return Some(static_bounds_details_from_write_analysis(report, analysis));
+        return static_bounds_details_from_write_analysis(report, analysis, input.evidence);
     }
     let mut corrected_translation = input.reference.translation;
     let generated_placement = input.context.generated_placements.get(static_mesh);
@@ -463,7 +478,7 @@ fn classify_static_bounds_occlusion(
         &clearance_collider,
         input.context.static_occluders,
     );
-    let (status, ratio, occluder) = classify_static_bounds_action(
+    let classification = classify_static_bounds_action(
         report,
         action,
         input,
@@ -473,14 +488,18 @@ fn classify_static_bounds_occlusion(
         generated_placement,
     );
 
-    let intersection_volume = occluder
-        .as_ref()
+    if !input.evidence.needs_details() {
+        return None;
+    }
+
+    let intersection_volume = classification
+        .occluder
         .and_then(|occluder| corrected_bounds.intersection(occluder.bounds))
         .map(WorldAabb::volume);
     Some(StaticBoundsOcclusionDetails {
-        status,
-        ratio,
-        occluder,
+        status: classification.status,
+        ratio: classification.ratio,
+        occluder: classification.occluder.cloned(),
         target_bounds: Some(corrected_bounds),
         intersection_volume,
     })
@@ -547,9 +566,13 @@ fn terrain_delta(
 fn static_bounds_details_from_write_analysis(
     report: &mut TerrainInspectionReport,
     analysis: &WriteStaticBoundsAnalysis,
-) -> StaticBoundsOcclusionDetails {
+    evidence: StaticBoundsEvidence,
+) -> Option<StaticBoundsOcclusionDetails> {
     record_static_bounds_report_counts(report, analysis.status);
-    StaticBoundsOcclusionDetails {
+    if !evidence.needs_details() {
+        return None;
+    }
+    Some(StaticBoundsOcclusionDetails {
         status: analysis.status,
         ratio: analysis.ratio,
         occluder: analysis.occluder_id.as_ref().map(|id| {
@@ -567,20 +590,31 @@ fn static_bounds_details_from_write_analysis(
         }),
         target_bounds: analysis.target_bounds,
         intersection_volume: analysis.intersection_volume,
-    }
+    })
 }
 
-fn classify_static_bounds_action(
+#[derive(Clone, Copy)]
+struct StaticBoundsClassification<'a> {
+    status: &'static str,
+    ratio: f32,
+    occluder: Option<&'a StaticOccluder>,
+}
+
+fn classify_static_bounds_action<'a>(
     report: &mut TerrainInspectionReport,
-    action: StaticBoundsAction<'_>,
+    action: StaticBoundsAction<'a>,
     input: StaticBoundsOcclusionInput<'_, '_>,
     contact: &MeshContact,
     bounds: MeshAabb,
     corrected_translation: [f32; 3],
     generated_placement: Option<GeneratedPlacement>,
-) -> (&'static str, f32, Option<StaticOccluder>) {
+) -> StaticBoundsClassification<'a> {
     match action {
-        StaticBoundsAction::None => ("static_bounds_clear", 0.0, None),
+        StaticBoundsAction::None => StaticBoundsClassification {
+            status: "static_bounds_clear",
+            ratio: 0.0,
+            occluder: None,
+        },
         StaticBoundsAction::Delete { ratio, occluder }
             if input.context.policy.write_actions.static_move()
                 && can_relocate_static_bounds(
@@ -592,15 +626,19 @@ fn classify_static_bounds_action(
                 ) =>
         {
             record_static_bounds_report_counts(report, "static_bounds_relocatable");
-            ("static_bounds_relocatable", ratio, Some(occluder.clone()))
+            StaticBoundsClassification {
+                status: "static_bounds_relocatable",
+                ratio,
+                occluder: Some(occluder),
+            }
         }
         StaticBoundsAction::Delete { ratio, occluder } => {
             record_static_bounds_report_counts(report, "static_bounds_fully_occluded");
-            (
-                "static_bounds_fully_occluded",
+            StaticBoundsClassification {
+                status: "static_bounds_fully_occluded",
                 ratio,
-                Some(occluder.clone()),
-            )
+                occluder: Some(occluder),
+            }
         }
         StaticBoundsAction::Move {
             ratio,
@@ -620,7 +658,11 @@ fn classify_static_bounds_action(
                 "static_bounds_relocatable"
             };
             record_static_bounds_report_counts(report, status);
-            (status, ratio, Some(occluder.clone()))
+            StaticBoundsClassification {
+                status,
+                ratio,
+                occluder: Some(occluder),
+            }
         }
         StaticBoundsAction::Move {
             ratio,
@@ -635,7 +677,11 @@ fn classify_static_bounds_action(
                 "static_bounds_deleted_no_relocation"
             };
             record_static_bounds_report_counts(report, status);
-            (status, ratio, Some(occluder.clone()))
+            StaticBoundsClassification {
+                status,
+                ratio,
+                occluder: Some(occluder),
+            }
         }
         StaticBoundsAction::Move {
             ratio,
@@ -648,7 +694,11 @@ fn classify_static_bounds_action(
                 "static_bounds_blocked"
             };
             record_static_bounds_report_counts(report, status);
-            (status, ratio, Some(occluder.clone()))
+            StaticBoundsClassification {
+                status,
+                ratio,
+                occluder: Some(occluder),
+            }
         }
     }
 }
@@ -882,8 +932,8 @@ mod tests {
     use tes3::esp::Reference;
 
     use super::{
-        MeshContactResolution, StaticBoundsContext, StaticBoundsOcclusionInput,
-        classify_static_bounds_occlusion, deleted_reference_inspection,
+        MeshContactResolution, StaticBoundsContext, StaticBoundsEvidence,
+        StaticBoundsOcclusionInput, classify_static_bounds_occlusion, deleted_reference_inspection,
     };
     use crate::unclip::{
         args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
@@ -948,6 +998,7 @@ mod tests {
                     write: Some(&write),
                     generated_placements: &generated_placements,
                 },
+                evidence: StaticBoundsEvidence::Details,
             },
         )
         .expect("static bounds evidence should produce details");
@@ -995,6 +1046,7 @@ mod tests {
                     write: Some(&write),
                     generated_placements: &generated_placements,
                 },
+                evidence: StaticBoundsEvidence::Details,
             },
         )
         .expect("static bounds evidence should produce details");
@@ -1002,6 +1054,52 @@ mod tests {
         assert_eq!(details.status, "static_bounds_blocked");
         assert_eq!(report.refs_static_bounds_occluded, 1);
         assert_eq!(report.refs_static_bounds_relocatable, 0);
+        assert_eq!(report.refs_static_bounds_blocked, 1);
+    }
+
+    #[test]
+    fn static_bounds_count_mode_omits_write_analysis_details() {
+        let mut report = TerrainInspectionReport::default();
+        let mesh = static_mesh();
+        let contact = MeshContact::new(vec![[0.0; 3]]);
+        let resolution = MeshContactResolution::Resolved {
+            static_mesh: &mesh,
+            contact: &contact,
+            bounds: MeshAabb {
+                min: [0.0; 3],
+                max: [1.0; 3],
+            },
+        };
+        let write = WriteStatusIndex::from_plan(&WritePlan {
+            static_bounds_analysis: vec![static_bounds_analysis("static_bounds_blocked")],
+            ..WritePlan::default()
+        });
+
+        let terrain = TerrainIndex::from_landscapes(std::iter::empty());
+        let static_occluders = StaticOccluderIndex::default();
+        let generated_placements = GeneratedPlacementIndex::default();
+        let policy = test_policy();
+        let reference = reference_at_z(10.0);
+        let details = classify_static_bounds_occlusion(
+            &mut report,
+            StaticBoundsOcclusionInput {
+                cell: (1, 2),
+                key: (3, 4),
+                reference: &reference,
+                mesh_resolution: &resolution,
+                context: StaticBoundsContext {
+                    terrain: &terrain,
+                    static_occluders: &static_occluders,
+                    policy: &policy,
+                    write: Some(&write),
+                    generated_placements: &generated_placements,
+                },
+                evidence: StaticBoundsEvidence::CountsOnly,
+            },
+        );
+
+        assert!(details.is_none());
+        assert_eq!(report.refs_static_bounds_occluded, 1);
         assert_eq!(report.refs_static_bounds_blocked, 1);
     }
 

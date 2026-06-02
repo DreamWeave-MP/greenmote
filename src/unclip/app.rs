@@ -129,6 +129,7 @@ pub fn run(
             static_occluders: &static_occluders,
             policy: &policy,
             generated_placements: &generated_placements,
+            retain_static_bounds_details: config.verbose,
             cancellation,
         },
         write_actions_enabled,

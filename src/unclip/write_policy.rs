@@ -46,6 +46,7 @@ pub(crate) struct UnclipWritePlanningInput<'a, 'b> {
     pub(crate) static_occluders: &'a StaticOccluderIndex,
     pub(crate) policy: &'a UnclipPolicy,
     pub(crate) generated_placements: &'a GeneratedPlacementIndex,
+    pub(crate) retain_static_bounds_details: bool,
     pub(crate) cancellation: &'a CancellationToken,
 }
 
@@ -61,6 +62,7 @@ pub(crate) fn plan_unclip_adjustments(
         static_occluders,
         policy,
         generated_placements,
+        retain_static_bounds_details,
         cancellation,
     } = input;
     let mut plan = WritePlan::default();
@@ -71,6 +73,7 @@ pub(crate) fn plan_unclip_adjustments(
         static_occluders,
         policy,
         generated_placements,
+        retain_static_bounds_details,
         cancellation,
     };
     for (cell_grid, key, reference) in target_refs.iter_refs(plugin) {
@@ -94,6 +97,7 @@ struct WritePlanningContext<'a, 'b> {
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
     generated_placements: &'a GeneratedPlacementIndex,
+    retain_static_bounds_details: bool,
     cancellation: &'a CancellationToken,
 }
 
@@ -285,6 +289,7 @@ fn adjust_reference_for_terrain_and_static_bounds(
         static_occluders,
         policy,
         generated_placement,
+        retain_details: context.retain_static_bounds_details,
         cancellation: context.cancellation,
     };
     let Ok(geometry) = context.mesh_contacts.geometry(static_mesh) else {
@@ -356,6 +361,7 @@ struct StaticBoundsPlanningContext<'a> {
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
     generated_placement: Option<GeneratedPlacement>,
+    retain_details: bool,
     cancellation: &'a CancellationToken,
 }
 
@@ -391,13 +397,15 @@ fn plan_static_bounds_change(
         context.static_occluders,
     ) {
         StaticBoundsAction::None => {
-            changes.static_bounds_analysis = Some(static_bounds_analysis(
+            record_static_bounds_analysis(
+                changes,
+                context,
                 target,
                 "static_bounds_clear",
                 0.0,
                 None,
                 corrected_bounds,
-            ));
+            );
         }
         StaticBoundsAction::Delete { ratio, occluder } => {
             let move_ = if context.policy.write_actions.static_move() {
@@ -416,24 +424,28 @@ fn plan_static_bounds_change(
                 None
             };
             if let Some(move_) = move_ {
-                changes.static_bounds_analysis = Some(static_bounds_analysis(
+                record_static_bounds_analysis(
+                    changes,
+                    context,
                     target,
                     "static_bounds_relocatable",
                     ratio,
                     Some(occluder),
                     corrected_bounds,
-                ));
+                );
                 let new_position = move_.new_position;
                 changes.move_ = Some(move_);
                 return Ok(StaticBoundsPlanResult::Continue(new_position));
             }
-            changes.static_bounds_analysis = Some(static_bounds_analysis(
+            record_static_bounds_analysis(
+                changes,
+                context,
                 target,
                 "static_bounds_fully_occluded",
                 ratio,
                 Some(occluder),
                 corrected_bounds,
-            ));
+            );
             if context.policy.write_actions.static_delete() {
                 changes.deletion = Some(static_bounds_deletion(
                     target.cell,
@@ -484,22 +496,26 @@ fn plan_static_bounds_move_change(
         input.cause,
     )?;
     let status = static_bounds_move_status(input.cause.reason, move_.is_some());
-    changes.static_bounds_analysis = Some(static_bounds_analysis(
+    record_static_bounds_analysis(
+        changes,
+        input.context,
         input.target,
         status,
         input.cause.ratio,
         Some(input.cause.occluder),
         input.corrected_bounds,
-    ));
+    );
     let Some(move_) = move_ else {
         if input.context.policy.write_actions.static_delete() {
-            changes.static_bounds_analysis = Some(static_bounds_analysis(
+            record_static_bounds_analysis(
+                changes,
+                input.context,
                 input.target,
                 static_bounds_failed_relocation_delete_status(input.cause.reason),
                 input.cause.ratio,
                 Some(input.cause.occluder),
                 input.corrected_bounds,
-            ));
+            );
             changes.deletion = Some(static_bounds_deletion(
                 input.target.cell,
                 input.target.key,
@@ -643,26 +659,58 @@ fn static_bounds_deletion(
     }
 }
 
+fn record_static_bounds_analysis(
+    changes: &mut WriteReferenceChanges,
+    context: StaticBoundsPlanningContext<'_>,
+    target: WriteTarget,
+    status: &'static str,
+    ratio: f32,
+    occluder: Option<&StaticOccluder>,
+    target_bounds: WorldAabb,
+) {
+    changes.static_bounds_analysis = Some(static_bounds_analysis(
+        target,
+        status,
+        ratio,
+        occluder,
+        target_bounds,
+        context.retain_details,
+    ));
+}
+
 fn static_bounds_analysis(
     target: WriteTarget,
     status: &'static str,
     ratio: f32,
     occluder: Option<&StaticOccluder>,
     target_bounds: WorldAabb,
+    retain_details: bool,
 ) -> WriteStaticBoundsAnalysis {
     WriteStaticBoundsAnalysis {
         cell: [target.cell.0, target.cell.1],
         reference_key: [target.key.0, target.key.1],
         status,
         ratio,
-        occluder_id: occluder.map(|occluder| occluder.id.clone()),
-        occluder_cell: occluder.map(|occluder| occluder.cell),
-        occluder_reference_key: occluder.map(|occluder| occluder.reference_key),
-        target_bounds: Some(target_bounds),
-        occluder_bounds: occluder.map(|occluder| occluder.bounds),
-        intersection_volume: occluder
-            .and_then(|occluder| target_bounds.intersection(occluder.bounds))
-            .map(WorldAabb::volume),
+        occluder_id: retain_details
+            .then(|| occluder.map(|occluder| occluder.id.clone()))
+            .flatten(),
+        occluder_cell: retain_details
+            .then(|| occluder.map(|occluder| occluder.cell))
+            .flatten(),
+        occluder_reference_key: retain_details
+            .then(|| occluder.map(|occluder| occluder.reference_key))
+            .flatten(),
+        target_bounds: retain_details.then_some(target_bounds),
+        occluder_bounds: retain_details
+            .then(|| occluder.map(|occluder| occluder.bounds))
+            .flatten(),
+        intersection_volume: retain_details
+            .then(|| {
+                occluder
+                    .and_then(|occluder| target_bounds.intersection(occluder.bounds))
+                    .map(WorldAabb::volume)
+            })
+            .flatten(),
     }
 }
 
@@ -1171,6 +1219,7 @@ mod tests {
                     z_offset: 0.0,
                     tolerance: 4.0,
                 }),
+                retain_details: true,
                 cancellation: &cancellation,
             },
         )
@@ -1186,6 +1235,58 @@ mod tests {
             "static_bounds_relocatable"
         );
         assert_close(new_position[0], 32.0);
+    }
+
+    #[test]
+    fn static_bounds_planning_can_skip_detailed_analysis_evidence() {
+        let reference = reference_at_z(0.0);
+        let geometry = test_geometry();
+        let terrain = flat_terrain();
+        let occluder_bounds = WorldAabb {
+            min: [-1.0, -1.0, -1.0],
+            max: [2.0, 2.0, 2.0],
+        };
+        let static_occluders = StaticOccluderIndex::new(vec![StaticOccluder {
+            id: "house".to_owned(),
+            cell: [0, 0],
+            reference_key: [1, 1],
+            bounds: occluder_bounds,
+            collider: RapierCollider::from_world_aabb(occluder_bounds),
+        }]);
+        let policy = test_policy();
+        let mut changes = WriteReferenceChanges::default();
+        let cancellation = CancellationToken::default();
+
+        let result = plan_static_bounds_change(
+            &mut changes,
+            super::WriteTarget {
+                cell: (0, 0),
+                key: (3, 4),
+            },
+            &reference,
+            reference.translation,
+            &geometry,
+            StaticBoundsPlanningContext {
+                terrain: &terrain,
+                static_occluders: &static_occluders,
+                policy: &policy,
+                generated_placement: Some(GeneratedPlacement {
+                    z_offset: 0.0,
+                    tolerance: 4.0,
+                }),
+                retain_details: false,
+                cancellation: &cancellation,
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(result, StaticBoundsPlanResult::Continue(_)));
+        assert!(changes.move_.is_some());
+        let analysis = changes.static_bounds_analysis.unwrap();
+        assert_eq!(analysis.status, "static_bounds_relocatable");
+        assert!(analysis.occluder_id.is_none());
+        assert!(analysis.target_bounds.is_none());
+        assert!(analysis.intersection_volume.is_none());
     }
 
     #[test]
@@ -1289,6 +1390,7 @@ mod tests {
                 static_occluders: &static_occluders,
                 policy: &policy,
                 generated_placement: None,
+                retain_details: true,
                 cancellation: &CancellationToken::default(),
             },
         )
@@ -1588,6 +1690,7 @@ mod tests {
                     z_offset: 0.0,
                     tolerance: 4.0,
                 }),
+                retain_details: true,
                 cancellation: &CancellationToken::default(),
             },
         )
