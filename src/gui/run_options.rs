@@ -14,11 +14,19 @@ pub(super) struct ConvertRunOptions {
     pub(super) auto_enable: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct UnclipRunOptions {
     pub(super) target_plugins: Vec<String>,
-    pub(super) verbose: bool,
     pub(super) write: bool,
+}
+
+impl Default for UnclipRunOptions {
+    fn default() -> Self {
+        Self {
+            target_plugins: Vec::new(),
+            write: true,
+        }
+    }
 }
 
 impl ConvertRunOptions {
@@ -80,8 +88,11 @@ impl UnclipRunOptions {
 
         Self {
             target_plugins,
-            verbose: config.unclip.verbose.unwrap_or(false),
-            write: false,
+            write: if config.unclip.is_generated_default() {
+                true
+            } else {
+                config.unclip.write.unwrap_or(true)
+            },
         }
     }
 
@@ -126,7 +137,7 @@ impl UnclipRunOptions {
                 meshgenerator_ini: None,
                 ignore_meshgenerator_ini: true,
                 instances: None,
-                verbose: Some(self.verbose),
+                verbose: None,
                 structured: Some(false),
                 write: Some(self.write),
                 write_actions: Vec::new(),
@@ -278,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn unclip_run_options_prefill_visible_plugin_and_verbose_only() {
+    fn unclip_run_options_prefill_visible_plugin_and_write_only() {
         let mut config = GroundcoverConfig::default();
         config.unclip.plugin = Some("groundcover.omwaddon".into());
         config.unclip.meshgenerator_ini = Some("groundcover.ini".into());
@@ -288,8 +299,38 @@ mod tests {
         let options = UnclipRunOptions::from_config(&config);
 
         assert_eq!(options.target_plugins, ["groundcover.omwaddon"]);
-        assert!(options.verbose);
+        assert!(options.write);
+    }
+
+    #[test]
+    fn unclip_run_options_default_write_enabled() {
+        assert!(UnclipRunOptions::default().write);
+    }
+
+    #[test]
+    fn unclip_run_options_config_default_write_enabled() {
+        assert!(UnclipRunOptions::from_config(&GroundcoverConfig::default()).write);
+    }
+
+    #[test]
+    fn unclip_run_options_preserves_saved_write_false() {
+        let mut config = GroundcoverConfig::default();
+        config.unclip = crate::unclip::config::PersistedUnclipConfig::default();
+        config.unclip.write = Some(false);
+
+        let options = UnclipRunOptions::from_config(&config);
+
         assert!(!options.write);
+    }
+
+    #[test]
+    fn unclip_run_options_indistinguishable_generated_false_prefers_gui_default() {
+        let mut config = GroundcoverConfig::default();
+        config.unclip = crate::unclip::config::PersistedUnclipConfig::generated_default();
+
+        let options = UnclipRunOptions::from_config(&config);
+
+        assert!(options.write);
     }
 
     #[test]
@@ -306,7 +347,6 @@ mod tests {
     fn unclip_run_options_build_explicit_safe_args() {
         let options = UnclipRunOptions {
             target_plugins: vec![" groundcover.omwaddon ".to_owned()],
-            verbose: true,
             write: false,
         };
 
@@ -317,7 +357,7 @@ mod tests {
         assert_eq!(args.meshgenerator_ini, None);
         assert!(args.ignore_meshgenerator_ini);
         assert_eq!(args.instances, None);
-        assert_eq!(args.verbose, Some(true));
+        assert_eq!(args.verbose, None);
         assert_eq!(args.structured, Some(false));
         assert_eq!(args.write, Some(false));
         assert!(args.write_actions.is_empty());
@@ -347,7 +387,6 @@ mod tests {
     fn unclip_run_options_remove_and_clear_targets() {
         let mut options = UnclipRunOptions {
             target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
-            verbose: false,
             write: false,
         };
 
@@ -363,7 +402,6 @@ mod tests {
     fn unclip_run_options_builds_multiple_args() {
         let options = UnclipRunOptions {
             target_plugins: vec![" first.omwaddon ".to_owned(), "second.omwaddon".to_owned()],
-            verbose: false,
             write: true,
         };
 
@@ -378,7 +416,6 @@ mod tests {
     fn unclip_run_options_all_args_ignore_meshgenerator_ini() {
         let options = UnclipRunOptions {
             target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
-            verbose: false,
             write: false,
         };
 

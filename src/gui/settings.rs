@@ -804,7 +804,8 @@ impl GreenmoteApp {
                 );
                 self.convert
                     .sync_saved_run_options_from_settings(ConvertRunOptions::from_config(&config));
-                self.convert.reset_unclip_write_after_settings_save();
+                self.convert
+                    .sync_unclip_write_from_settings(UnclipRunOptions::from_config(&config).write);
                 true
             }
             Err(error) => {
@@ -1483,11 +1484,14 @@ fn output_path_frame(ui: &mut egui::Ui, path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, time::SystemTime};
+
     use super::{
         SettingsDraft, SettingsListItem, SettingsListKind, SettingsUiState,
         clamp_settings_list_viewport_start, commit_inline_list_edit,
         ensure_settings_list_item_visible, list_item_from_text, remove_selected_list_item,
     };
+    use crate::gui::GreenmoteApp;
     use crate::unclip::WriteActionArg;
 
     #[test]
@@ -1622,6 +1626,25 @@ mod tests {
     }
 
     #[test]
+    fn save_settings_syncs_unclip_write_from_saved_config() {
+        let directory = unique_temp_directory("greenmote-gui-settings-save");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("greenmote.toml");
+        let mut app = GreenmoteApp::default();
+        app.settings.config_path = Some(path);
+        app.convert.set_unclip_write_for_test(false);
+        app.convert
+            .set_pending_unclip_write_confirmation_for_test(true);
+
+        assert!(app.save_settings());
+
+        assert!(app.convert.unclip_write_for_test());
+        assert!(!app.convert.pending_unclip_write_confirmation_for_test());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn list_viewport_clamps_to_valid_start() {
         assert_eq!(clamp_settings_list_viewport_start(4, 3, 6), 0);
         assert_eq!(clamp_settings_list_viewport_start(99, 10, 6), 4);
@@ -1640,5 +1663,13 @@ mod tests {
 
         ensure_settings_list_item_visible(&mut viewport_start, 5, 10, 6);
         assert_eq!(viewport_start, 2);
+    }
+
+    fn unique_temp_directory(prefix: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
     }
 }

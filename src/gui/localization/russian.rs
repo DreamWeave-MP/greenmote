@@ -67,10 +67,6 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::EmptyTargetList => "Целевые плагины не добавлены.",
         UiText::TargetPathEntry => "Имя плагина или путь",
         UiText::WriteChangesToPlugin => "Записать изменения в плагин",
-        UiText::DetailedRefDiagnostics => "Подробный лог",
-        UiText::DetailedRefDiagnosticsTooltip => {
-            "Записывает полную диагностику Unclip по каждой ссылке в greenmote.log. Медленнее и может создавать очень большие файлы лога."
-        }
         UiText::StartConversion => "Начать конвертацию",
         UiText::WriteChanges => "Записать изменения",
         UiText::InspectPlugin => "Проверить плагин",

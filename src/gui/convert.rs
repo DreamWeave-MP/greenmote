@@ -186,13 +186,33 @@ impl ConvertUiState {
         self.saved_run_options = options;
     }
 
-    pub(super) fn reset_unclip_write_after_settings_save(&mut self) {
-        self.unclip.run_options.write = false;
+    pub(super) fn sync_unclip_write_from_settings(&mut self, write: bool) {
+        self.unclip.run_options.write = write;
         self.unclip.pending_write_confirmation = false;
     }
 
     pub(super) fn cancel_pending_unclip_write_confirmation(&mut self) {
         self.unclip.pending_write_confirmation = false;
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_unclip_write_for_test(&mut self, write: bool) {
+        self.unclip.run_options.write = write;
+    }
+
+    #[cfg(test)]
+    pub(super) fn unclip_write_for_test(&self) -> bool {
+        self.unclip.run_options.write
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_pending_unclip_write_confirmation_for_test(&mut self, pending: bool) {
+        self.unclip.pending_write_confirmation = pending;
+    }
+
+    #[cfg(test)]
+    pub(super) fn pending_unclip_write_confirmation_for_test(&self) -> bool {
+        self.unclip.pending_write_confirmation
     }
 
     fn selected_unclip_target(&self) -> Option<usize> {
@@ -319,17 +339,10 @@ impl GreenmoteApp {
             ui.add_enabled_ui(!self.convert.running, |ui| {
                 self.show_unclip_target_list(ui);
 
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(
-                        &mut self.convert.unclip.run_options.write,
-                        self.localizer.text(UiText::WriteChangesToPlugin),
-                    );
-                    ui.checkbox(
-                        &mut self.convert.unclip.run_options.verbose,
-                        self.localizer.text(UiText::DetailedRefDiagnostics),
-                    )
-                    .on_hover_text(self.localizer.text(UiText::DetailedRefDiagnosticsTooltip));
-                });
+                ui.checkbox(
+                    &mut self.convert.unclip.run_options.write,
+                    self.localizer.text(UiText::WriteChangesToPlugin),
+                );
             });
         });
     }
@@ -1700,7 +1713,6 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
             target_plugins: vec!["target.omwaddon".to_owned()],
-            verbose: false,
             write: true,
         };
         app.convert.unclip.pending_write_confirmation = true;
@@ -1724,7 +1736,6 @@ mod tests {
         app.settings.clear_unclip_write_actions_for_test();
         app.convert.unclip.run_options = UnclipRunOptions {
             target_plugins: vec!["target.omwaddon".to_owned()],
-            verbose: false,
             write: true,
         };
 
@@ -1734,6 +1745,22 @@ mod tests {
             error,
             "Unclip write mode is blocked because no write actions are enabled in Settings."
         );
+    }
+
+    #[test]
+    fn settings_sync_updates_unclip_write_without_forcing_false() {
+        let mut state = ConvertUiState::ready();
+        state.unclip.run_options = UnclipRunOptions {
+            target_plugins: vec!["target.omwaddon".to_owned()],
+            write: false,
+        };
+        state.unclip.pending_write_confirmation = true;
+
+        state.sync_unclip_write_from_settings(true);
+
+        assert!(state.unclip.run_options.write);
+        assert_eq!(state.unclip.run_options.target_plugins, ["target.omwaddon"]);
+        assert!(!state.unclip.pending_write_confirmation);
     }
 
     #[test]
@@ -1758,7 +1785,6 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
             target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
-            verbose: false,
             write: false,
         };
 
@@ -1999,7 +2025,7 @@ mod tests {
                 meshgenerator_ini: None,
                 ignore_meshgenerator_ini: true,
                 instances: None,
-                verbose: Some(false),
+                verbose: None,
                 structured: Some(false),
                 write: Some(write),
                 write_actions: Vec::new(),
@@ -2020,7 +2046,6 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
             target_plugins: vec![" ".to_owned()],
-            verbose: false,
             write: false,
         };
 

@@ -57,10 +57,6 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::EmptyTargetList => "Keine Ziel-Plugins hinzugefügt.",
         UiText::TargetPathEntry => "Plugin-Name oder Pfad",
         UiText::WriteChangesToPlugin => "Änderungen ins Plugin schreiben",
-        UiText::DetailedRefDiagnostics => "Detailliertes Log",
-        UiText::DetailedRefDiagnosticsTooltip => {
-            "Schreibt vollständige Unclip-Diagnosen pro Referenz nach greenmote.log. Langsamer und kann sehr große Logdateien erzeugen."
-        }
         UiText::StartConversion => "Konvertierung starten",
         UiText::WriteChanges => "Änderungen schreiben",
         UiText::InspectPlugin => "Plugin prüfen",

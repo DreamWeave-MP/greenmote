@@ -36,7 +36,7 @@ pub(crate) struct UnclipConfig {
     pub(crate) exclude_occluder_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub(crate) struct PersistedUnclipConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) plugin: Option<PathBuf>,
@@ -213,6 +213,10 @@ impl PersistedUnclipConfig {
             exclude_occluder_ids: Some(default_tree_occluder_exclude_ids()),
             ..Self::default()
         }
+    }
+
+    pub(crate) fn is_generated_default(&self) -> bool {
+        self == &Self::generated_default()
     }
 
     pub(crate) fn from_toml(contents: &str) -> io::Result<Self> {

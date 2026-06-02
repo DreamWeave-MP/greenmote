@@ -30,8 +30,6 @@ macro_rules! route_text {
             | UiText::EmptyTargetList
             | UiText::TargetPathEntry
             | UiText::WriteChangesToPlugin
-            | UiText::DetailedRefDiagnostics
-            | UiText::DetailedRefDiagnosticsTooltip
             | UiText::StartConversion
             | UiText::WriteChanges
             | UiText::InspectPlugin
@@ -181,8 +179,6 @@ pub(super) enum UiText {
     EmptyTargetList,
     TargetPathEntry,
     WriteChangesToPlugin,
-    DetailedRefDiagnostics,
-    DetailedRefDiagnosticsTooltip,
     StartConversion,
     WriteChanges,
     InspectPlugin,
