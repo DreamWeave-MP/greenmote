@@ -63,6 +63,13 @@ impl StaticMeshIndex {
     }
 }
 
+impl StaticMesh {
+    #[must_use]
+    pub(crate) fn mesh_key(&self) -> &str {
+        &self.mesh_key
+    }
+}
+
 #[cfg(test)]
 impl StaticMesh {
     pub(crate) fn new_for_test(static_id: &str, mesh_path: &str) -> Self {
@@ -579,7 +586,7 @@ fn no_triangle_vertices_error(mesh_path: &str) -> io::Error {
     )
 }
 
-fn normalize_mesh_key(mesh_path: &str) -> String {
+pub(super) fn normalize_mesh_key(mesh_path: &str) -> String {
     strip_meshes_prefix(mesh_path)
         .replace('/', "\\")
         .to_lowercase()
