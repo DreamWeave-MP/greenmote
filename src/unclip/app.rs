@@ -111,7 +111,6 @@ pub fn run(
             cancellation,
         },
         write_actions_enabled,
-        cancellation,
     )?);
     super::check_cancellation(cancellation)?;
     let write_status = write_plan.as_ref().map(WriteStatusIndex::from_plan);
@@ -224,12 +223,11 @@ fn write_reports(
 fn plan_requested_unclip_adjustments(
     input: UnclipWritePlanningInput<'_, '_>,
     write_actions_enabled: bool,
-    cancellation: &CancellationToken,
 ) -> io::Result<WritePlan> {
     if write_actions_enabled {
         plan_unclip_adjustments(input)
     } else {
-        super::check_cancellation(cancellation)?;
+        super::check_cancellation(input.cancellation)?;
         Ok(WritePlan::default())
     }
 }

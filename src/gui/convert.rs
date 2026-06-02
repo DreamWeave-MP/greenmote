@@ -1094,7 +1094,7 @@ impl GreenmoteApp {
             if let Some(error) = error {
                 append_error(&mut self.convert.output, &error);
             }
-            self.set_status("Unclip cancelled.");
+            self.set_status(self.unclip_cancelled_finished_status(label));
         } else if let Some(error) = error {
             self.set_status(self.unclip_finished_error_status(label, &error));
         } else {
@@ -1109,6 +1109,7 @@ impl GreenmoteApp {
             summary.succeeded,
             summary.failed,
             summary.skipped,
+            summary.cancelled,
         )
     }
 
@@ -1119,7 +1120,19 @@ impl GreenmoteApp {
             summary.succeeded,
             summary.failed,
             summary.skipped,
+            summary.cancelled,
             error,
+        )
+    }
+
+    fn unclip_cancelled_finished_status(&self, label: UiText) -> String {
+        let summary = summarize_unclip_statuses(&self.convert.unclip.target_statuses);
+        self.localizer.unclip_cancelled_finished_status(
+            self.localizer.text(label),
+            summary.succeeded,
+            summary.failed,
+            summary.skipped,
+            summary.cancelled,
         )
     }
 
@@ -1332,6 +1345,7 @@ where
             }
             Err(error) => {
                 if error.kind() == io::ErrorKind::Interrupted && cancellation.is_cancelled() {
+                    summary.cancelled += 1;
                     set_status(index, UnclipTargetStatus::Cancelled);
                     writeln!(stdout, "Unclip target cancelled: {target}").ok();
                     writeln!(stdout, "error:").ok();
@@ -1389,14 +1403,21 @@ fn write_unclip_batch_summary(
     summary: UnclipBatchSummary,
     cancelled: bool,
 ) {
-    writeln!(
-        stdout,
-        "Unclip batch summary: {} succeeded, {} failed, {} skipped.",
-        summary.succeeded, summary.failed, summary.skipped
-    )
-    .ok();
     if cancelled {
+        writeln!(
+            stdout,
+            "Unclip batch summary: {} succeeded, {} failed, {} skipped, {} cancelled.",
+            summary.succeeded, summary.failed, summary.skipped, summary.cancelled
+        )
+        .ok();
         writeln!(stdout, "Unclip batch cancelled.").ok();
+    } else {
+        writeln!(
+            stdout,
+            "Unclip batch summary: {} succeeded, {} failed, {} skipped.",
+            summary.succeeded, summary.failed, summary.skipped
+        )
+        .ok();
     }
 }
 
@@ -1567,7 +1588,7 @@ mod tests {
     };
     use crate::{
         groundcover::CancellationToken,
-        gui::{AppTab, GreenmoteApp},
+        gui::{AppTab, GreenmoteApp, UiLanguage},
         unclip::UnclipArgs,
     };
 
@@ -1713,6 +1734,23 @@ mod tests {
             error,
             "Unclip write mode is blocked because no write actions are enabled in Settings."
         );
+    }
+
+    #[test]
+    fn finish_unclip_cancelled_status_includes_batch_counts() {
+        let mut app = GreenmoteApp::default();
+        app.localizer.set_language(UiLanguage::French);
+        app.convert.unclip.run_options.write = true;
+        app.convert.unclip.target_statuses =
+            vec![UnclipTargetStatus::Cancelled, UnclipTargetStatus::Skipped];
+
+        app.finish_unclip(None, true);
+
+        assert_eq!(
+            app.convert.status,
+            "Unclip annulé. Écriture Unclip terminée : 0 réussis, 0 échoués, 1 ignorés, 1 annulés."
+        );
+        assert!(!app.convert.status.contains("Unclip cancelled"));
     }
 
     #[test]
@@ -1919,6 +1957,9 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("Unclip target cancelled: first.omwaddon"));
         assert!(output.contains("Unclip target skipped after cancellation: second.omwaddon"));
+        assert!(
+            output.contains("Unclip batch summary: 0 succeeded, 0 failed, 1 skipped, 1 cancelled.")
+        );
     }
 
     #[test]
