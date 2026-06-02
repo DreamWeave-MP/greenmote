@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::{cells::CellCoord, mesh::WorldAabb, physics::RapierCollider};
 
@@ -52,17 +52,19 @@ impl StaticOccluderIndex {
     }
 
     pub(crate) fn candidates_for(&self, bounds: WorldAabb) -> Vec<&StaticOccluder> {
-        let mut indices = BTreeSet::new();
+        let mut indices = Vec::new();
         if let Some(cells) = cell_span_for_bounds(bounds) {
             for cell in cells {
                 if let Some(cell_indices) = self.cells.get(&cell) {
-                    indices.extend(cell_indices.iter().copied());
+                    indices.extend_from_slice(cell_indices);
                 }
             }
             indices.extend(self.large_occluders.iter().copied());
         } else {
             indices.extend(0..self.occluders.len());
         }
+        indices.sort_unstable();
+        indices.dedup();
         indices
             .into_iter()
             .filter_map(|index| self.occluders.get(index))
@@ -515,6 +517,22 @@ mod tests {
     }
 
     #[test]
+    fn static_occluder_index_keeps_candidate_order_by_occluder_index() {
+        let occluders = StaticOccluderIndex::new(vec![
+            static_occluder_with_id("first", aabb([8193.0, 0.0, 0.0], [8200.0, 10.0, 10.0])),
+            static_occluder_with_id("second", aabb([0.0, 0.0, 0.0], [10.0, 10.0, 10.0])),
+        ]);
+
+        let ids = occluders
+            .candidates_for(aabb([0.0, 0.0, 0.0], [8200.0, 10.0, 10.0]))
+            .into_iter()
+            .map(|occluder| occluder.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, ["first", "second"]);
+    }
+
+    #[test]
     fn static_occluder_index_intersects_cross_cell_occluders_without_dedup() {
         let occluders = StaticOccluderIndex::new(vec![static_occluder(aabb(
             [8190.0, 0.0, 0.0],
@@ -664,6 +682,12 @@ mod tests {
 
     fn static_occluder(bounds: WorldAabb) -> StaticOccluder {
         static_occluder_from_collider(RapierCollider::from_world_aabb(bounds))
+    }
+
+    fn static_occluder_with_id(id: &str, bounds: WorldAabb) -> StaticOccluder {
+        let mut occluder = static_occluder(bounds);
+        occluder.id = id.to_owned();
+        occluder
     }
 
     fn static_occluder_from_collider(collider: RapierCollider) -> StaticOccluder {
