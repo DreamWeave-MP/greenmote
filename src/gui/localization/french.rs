@@ -17,7 +17,6 @@ const fn language_text(key: UiText) -> &'static str {
         UiText::Unclip => "Unclip",
         UiText::Settings => "Paramètres",
         UiText::General => "Général",
-        UiText::Browse => "Parcourir...",
         UiText::Save => "Enregistrer",
         UiText::Cancel => "Annuler",
         UiText::Add => "Ajouter",
@@ -34,7 +33,13 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Options d’exécution",
-        UiText::TargetPlugin => "Plugin cible",
+        UiText::TargetPlugins => "Plugins cibles",
+        UiText::AddFiles => "Ajouter des fichiers...",
+        UiText::AddTargetPath => "Ajouter cible/chemin",
+        UiText::RemoveSelectedTarget => "Retirer la cible sélectionnée",
+        UiText::ClearTargets => "Effacer les cibles",
+        UiText::EmptyTargetList => "Aucun plugin cible ajouté.",
+        UiText::TargetPathEntry => "Nom ou chemin du plugin",
         UiText::WriteChangesToPlugin => "Écrire les changements dans le plugin",
         UiText::DetailedRefDiagnostics => "Journal détaillé",
         UiText::DetailedRefDiagnosticsTooltip => {
@@ -91,7 +96,7 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Choisissez un chemin de configuration OpenMW valide avant de continuer."
         }
         UiText::SelectOpenMwConfig => "Sélectionner la configuration OpenMW",
-        UiText::SelectUnclipTargetPlugin => "Sélectionner le plugin cible Unclip",
+        UiText::SelectUnclipTargetPlugins => "Sélectionner les plugins cibles Unclip",
         _ => unreachable!(),
     }
 }

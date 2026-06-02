@@ -17,7 +17,6 @@ const fn language_text(key: UiText) -> &'static str {
         UiText::Unclip => "Unclip",
         UiText::Settings => "Inställningar",
         UiText::General => "Allmänt",
-        UiText::Browse => "Bläddra...",
         UiText::Save => "Spara",
         UiText::Cancel => "Avbryt",
         UiText::Add => "Lägg till",
@@ -34,7 +33,13 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Köralternativ",
-        UiText::TargetPlugin => "Målplugin",
+        UiText::TargetPlugins => "Målplugin",
+        UiText::AddFiles => "Lägg till filer...",
+        UiText::AddTargetPath => "Lägg till mål/sökväg",
+        UiText::RemoveSelectedTarget => "Ta bort valt mål",
+        UiText::ClearTargets => "Rensa mål",
+        UiText::EmptyTargetList => "Inga målplugin tillagda.",
+        UiText::TargetPathEntry => "Pluginnamn eller sökväg",
         UiText::WriteChangesToPlugin => "Skriv ändringar till plugin",
         UiText::DetailedRefDiagnostics => "Detaljerad logg",
         UiText::DetailedRefDiagnosticsTooltip => {
@@ -85,7 +90,7 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Välj en giltig OpenMW-configsökväg innan du fortsätter."
         }
         UiText::SelectOpenMwConfig => "Välj OpenMW-config",
-        UiText::SelectUnclipTargetPlugin => "Välj Unclip-målplugin",
+        UiText::SelectUnclipTargetPlugins => "Välj Unclip-målplugin",
         _ => unreachable!(),
     }
 }

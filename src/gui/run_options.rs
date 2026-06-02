@@ -85,16 +85,37 @@ impl UnclipRunOptions {
         }
     }
 
-    pub(super) fn first_target_mut(&mut self) -> &mut String {
-        if self.target_plugins.is_empty() {
-            self.target_plugins.push(String::new());
-        }
-
-        &mut self.target_plugins[0]
-    }
-
     pub(super) fn first_target(&self) -> &str {
         self.target_plugins.first().map_or("", String::as_str)
+    }
+
+    pub(super) fn add_target(&mut self, target: impl Into<String>) -> bool {
+        let target = target.into();
+        let target = target.trim();
+        if target.is_empty()
+            || self
+                .target_plugins
+                .iter()
+                .any(|existing| existing == target)
+        {
+            return false;
+        }
+
+        self.target_plugins.push(target.to_owned());
+        true
+    }
+
+    pub(super) fn remove_target(&mut self, index: usize) -> bool {
+        if index >= self.target_plugins.len() {
+            return false;
+        }
+
+        self.target_plugins.remove(index);
+        true
+    }
+
+    pub(super) fn clear_targets(&mut self) {
+        self.target_plugins.clear();
     }
 
     pub(super) fn to_args_list(&self) -> Result<Vec<UnclipArgs>, String> {
@@ -331,6 +352,37 @@ mod tests {
     #[test]
     fn unclip_run_options_reject_empty_plugin() {
         assert!(UnclipRunOptions::default().to_args_list().is_err());
+    }
+
+    #[test]
+    fn unclip_run_options_add_target_preserves_order_and_dedupes_exact_names() {
+        let mut options = UnclipRunOptions::default();
+
+        assert!(options.add_target(" first.omwaddon "));
+        assert!(options.add_target("second.omwaddon"));
+        assert!(!options.add_target("first.omwaddon"));
+        assert!(!options.add_target(" "));
+
+        assert_eq!(
+            options.target_plugins,
+            ["first.omwaddon", "second.omwaddon"]
+        );
+    }
+
+    #[test]
+    fn unclip_run_options_remove_and_clear_targets() {
+        let mut options = UnclipRunOptions {
+            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        assert!(options.remove_target(0));
+        assert!(!options.remove_target(3));
+        assert_eq!(options.target_plugins, ["second.omwaddon"]);
+
+        options.clear_targets();
+        assert!(options.target_plugins.is_empty());
     }
 
     #[test]

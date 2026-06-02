@@ -17,7 +17,6 @@ const fn language_text(key: UiText) -> &'static str {
         UiText::Unclip => "Unclip",
         UiText::Settings => "Settings",
         UiText::General => "General",
-        UiText::Browse => "Browse...",
         UiText::Save => "Save",
         UiText::Cancel => "Cancel",
         UiText::Add => "Add",
@@ -34,7 +33,13 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Run options",
-        UiText::TargetPlugin => "Target plugin",
+        UiText::TargetPlugins => "Target plugins",
+        UiText::AddFiles => "Add files...",
+        UiText::AddTargetPath => "Add target/path",
+        UiText::RemoveSelectedTarget => "Remove selected target",
+        UiText::ClearTargets => "Clear targets",
+        UiText::EmptyTargetList => "No target plugins added.",
+        UiText::TargetPathEntry => "Plugin name or path",
         UiText::WriteChangesToPlugin => "Write changes to plugin",
         UiText::DetailedRefDiagnostics => "Detailed log",
         UiText::DetailedRefDiagnosticsTooltip => {
@@ -87,7 +92,7 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Choose a valid OpenMW config path before continuing."
         }
         UiText::SelectOpenMwConfig => "Select OpenMW Config",
-        UiText::SelectUnclipTargetPlugin => "Select Unclip Target Plugin",
+        UiText::SelectUnclipTargetPlugins => "Select Unclip Target Plugins",
         _ => unreachable!(),
     }
 }

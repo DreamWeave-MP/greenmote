@@ -17,7 +17,6 @@ const fn language_text(key: UiText) -> &'static str {
         UiText::Unclip => "Unclip",
         UiText::Settings => "Einstellungen",
         UiText::General => "Allgemein",
-        UiText::Browse => "Durchsuchen...",
         UiText::Save => "Speichern",
         UiText::Cancel => "Abbrechen",
         UiText::Add => "Hinzufügen",
@@ -34,7 +33,13 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Ausführungsoptionen",
-        UiText::TargetPlugin => "Ziel-Plugin",
+        UiText::TargetPlugins => "Ziel-Plugins",
+        UiText::AddFiles => "Dateien hinzufügen...",
+        UiText::AddTargetPath => "Ziel/Pfad hinzufügen",
+        UiText::RemoveSelectedTarget => "Ausgewähltes Ziel entfernen",
+        UiText::ClearTargets => "Ziele löschen",
+        UiText::EmptyTargetList => "Keine Ziel-Plugins hinzugefügt.",
+        UiText::TargetPathEntry => "Plugin-Name oder Pfad",
         UiText::WriteChangesToPlugin => "Änderungen ins Plugin schreiben",
         UiText::DetailedRefDiagnostics => "Detailliertes Log",
         UiText::DetailedRefDiagnosticsTooltip => {
@@ -89,7 +94,7 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Wähle einen gültigen OpenMW-Konfigurationspfad, bevor du fortfährst."
         }
         UiText::SelectOpenMwConfig => "OpenMW-Konfiguration auswählen",
-        UiText::SelectUnclipTargetPlugin => "Unclip-Ziel-Plugin auswählen",
+        UiText::SelectUnclipTargetPlugins => "Unclip-Ziel-Plugins auswählen",
         _ => unreachable!(),
     }
 }

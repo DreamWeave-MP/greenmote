@@ -47,6 +47,8 @@ enum WorkerKind {
 #[derive(Default)]
 struct UnclipUiState {
     run_options: UnclipRunOptions,
+    selected_target: Option<usize>,
+    pending_target: String,
     pending_write_confirmation: bool,
 }
 
@@ -118,6 +120,8 @@ impl ConvertUiState {
 
     pub(super) fn sync_unclip_run_options(&mut self, options: UnclipRunOptions) {
         self.unclip.run_options = options;
+        self.unclip.selected_target = None;
+        self.unclip.pending_target.clear();
         self.unclip.pending_write_confirmation = false;
     }
 
@@ -164,6 +168,49 @@ impl ConvertUiState {
 
     pub(super) fn cancel_pending_unclip_write_confirmation(&mut self) {
         self.unclip.pending_write_confirmation = false;
+    }
+
+    fn selected_unclip_target(&self) -> Option<usize> {
+        let selected = self.unclip.selected_target?;
+        (selected < self.unclip.run_options.target_plugins.len()).then_some(selected)
+    }
+
+    fn set_selected_unclip_target(&mut self, selected: Option<usize>) {
+        self.unclip.selected_target =
+            selected.filter(|index| *index < self.unclip.run_options.target_plugins.len());
+    }
+
+    fn add_unclip_target(&mut self, target: impl Into<String>) -> bool {
+        let added = self.unclip.run_options.add_target(target);
+        if added {
+            self.unclip.selected_target =
+                self.unclip.run_options.target_plugins.len().checked_sub(1);
+        }
+
+        added
+    }
+
+    fn remove_selected_unclip_target(&mut self) -> bool {
+        let Some(selected) = self.selected_unclip_target() else {
+            return false;
+        };
+
+        let removed = self.unclip.run_options.remove_target(selected);
+        if removed {
+            let len = self.unclip.run_options.target_plugins.len();
+            self.unclip.selected_target = if len == 0 {
+                None
+            } else {
+                Some(selected.min(len - 1))
+            };
+        }
+
+        removed
+    }
+
+    fn clear_unclip_targets(&mut self) {
+        self.unclip.run_options.clear_targets();
+        self.unclip.selected_target = None;
     }
 
     fn run_options_differ_from_saved(&self) -> bool {
@@ -235,21 +282,7 @@ impl GreenmoteApp {
             ui.set_width(finite_widget_extent(ui.available_width()));
             ui.label(egui::RichText::new(self.localizer.text(UiText::RunOptions)).strong());
             ui.add_enabled_ui(!self.convert.running, |ui| {
-                ui.label(self.localizer.text(UiText::TargetPlugin));
-                ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(
-                            self.convert.unclip.run_options.first_target_mut(),
-                        )
-                        .desired_width(finite_widget_extent(ui.available_width() - 84.0)),
-                    );
-                    if ui.button(self.localizer.text(UiText::Browse)).clicked()
-                        && let Some(path) = select_plugin_file(self.localizer)
-                    {
-                        *self.convert.unclip.run_options.first_target_mut() =
-                            path.display().to_string();
-                    }
-                });
+                self.show_unclip_target_list(ui);
 
                 ui.horizontal_wrapped(|ui| {
                     ui.checkbox(
@@ -263,6 +296,92 @@ impl GreenmoteApp {
                     .on_hover_text(self.localizer.text(UiText::DetailedRefDiagnosticsTooltip));
                 });
             });
+        });
+    }
+
+    fn show_unclip_target_list(&mut self, ui: &mut egui::Ui) {
+        ui.label(self.localizer.text(UiText::TargetPlugins));
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(finite_widget_extent(ui.available_width()));
+            if self.convert.unclip.run_options.target_plugins.is_empty() {
+                ui.label(egui::RichText::new(self.localizer.text(UiText::EmptyTargetList)).weak());
+            } else {
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        let selected_target = self.convert.selected_unclip_target();
+                        let mut next_selected = selected_target;
+                        for (index, target) in self
+                            .convert
+                            .unclip
+                            .run_options
+                            .target_plugins
+                            .iter()
+                            .enumerate()
+                        {
+                            if ui
+                                .selectable_label(selected_target == Some(index), target)
+                                .clicked()
+                            {
+                                next_selected = Some(index);
+                            }
+                        }
+                        self.convert.set_selected_unclip_target(next_selected);
+                    });
+            }
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(self.localizer.text(UiText::AddFiles)).clicked()
+                && let Some(paths) = select_plugin_files(self.localizer)
+            {
+                for path in paths {
+                    self.convert.add_unclip_target(path.display().to_string());
+                }
+            }
+
+            let can_remove = self.convert.selected_unclip_target().is_some();
+            if ui
+                .add_enabled(
+                    can_remove,
+                    egui::Button::new(self.localizer.text(UiText::RemoveSelectedTarget)),
+                )
+                .clicked()
+            {
+                self.convert.remove_selected_unclip_target();
+            }
+
+            let can_clear = !self.convert.unclip.run_options.target_plugins.is_empty();
+            if ui
+                .add_enabled(
+                    can_clear,
+                    egui::Button::new(self.localizer.text(UiText::ClearTargets)),
+                )
+                .clicked()
+            {
+                self.convert.clear_unclip_targets();
+            }
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.convert.unclip.pending_target)
+                    .hint_text(self.localizer.text(UiText::TargetPathEntry))
+                    .desired_width(finite_widget_extent(ui.available_width() - 112.0)),
+            );
+            let submitted =
+                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let clicked = ui
+                .button(self.localizer.text(UiText::AddTargetPath))
+                .clicked();
+            if clicked || submitted {
+                let target = self.convert.unclip.pending_target.clone();
+                if self.convert.add_unclip_target(target) {
+                    self.convert.unclip.pending_target.clear();
+                }
+            }
         });
     }
 
@@ -1121,14 +1240,14 @@ fn open_path_native(path: &Path) -> io::Result<()> {
         .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no path opener available")))
 }
 
-fn select_plugin_file(localizer: super::Localizer) -> Option<std::path::PathBuf> {
+fn select_plugin_files(localizer: super::Localizer) -> Option<Vec<std::path::PathBuf>> {
     rfd::FileDialog::new()
-        .set_title(localizer.text(UiText::SelectUnclipTargetPlugin))
+        .set_title(localizer.text(UiText::SelectUnclipTargetPlugins))
         .add_filter(
             localizer.text(UiText::OpenMwPlugins),
             &["omwaddon", "esp", "esm"],
         )
-        .pick_file()
+        .pick_files()
 }
 
 #[cfg(target_os = "windows")]
@@ -1253,6 +1372,23 @@ mod tests {
                 auto_enable: false,
             }
         );
+    }
+
+    #[test]
+    fn unclip_target_state_add_remove_and_clear_updates_selection() {
+        let mut state = ConvertUiState::ready();
+
+        assert!(state.add_unclip_target("first.omwaddon"));
+        assert!(state.add_unclip_target("second.omwaddon"));
+        assert_eq!(state.selected_unclip_target(), Some(1));
+
+        assert!(state.remove_selected_unclip_target());
+        assert_eq!(state.unclip.run_options.target_plugins, ["first.omwaddon"]);
+        assert_eq!(state.selected_unclip_target(), Some(0));
+
+        state.clear_unclip_targets();
+        assert!(state.unclip.run_options.target_plugins.is_empty());
+        assert_eq!(state.selected_unclip_target(), None);
     }
 
     #[test]

@@ -12,7 +12,6 @@ macro_rules! route_text {
             | UiText::Unclip
             | UiText::Settings
             | UiText::General
-            | UiText::Browse
             | UiText::Save
             | UiText::Cancel
             | UiText::Add
@@ -23,7 +22,13 @@ macro_rules! route_text {
             | UiText::ShowPreviousItems
             | UiText::ShowNextItems => $language($key),
             UiText::RunOptions
-            | UiText::TargetPlugin
+            | UiText::TargetPlugins
+            | UiText::AddFiles
+            | UiText::AddTargetPath
+            | UiText::RemoveSelectedTarget
+            | UiText::ClearTargets
+            | UiText::EmptyTargetList
+            | UiText::TargetPathEntry
             | UiText::WriteChangesToPlugin
             | UiText::DetailedRefDiagnostics
             | UiText::DetailedRefDiagnosticsTooltip
@@ -58,7 +63,7 @@ macro_rules! route_text {
             | UiText::OpenMwConfigNotFoundMessage
             | UiText::ChooseOpenMwConfigBeforeContinuing
             | UiText::SelectOpenMwConfig
-            | UiText::SelectUnclipTargetPlugin => $dialogs($key),
+            | UiText::SelectUnclipTargetPlugins => $dialogs($key),
             UiText::OpenMwConfig
             | UiText::OpenMwPlugins
             | UiText::UsingOpenMwAutodetection
@@ -159,8 +164,13 @@ pub(super) enum UiText {
     Settings,
     General,
     RunOptions,
-    TargetPlugin,
-    Browse,
+    TargetPlugins,
+    AddFiles,
+    AddTargetPath,
+    RemoveSelectedTarget,
+    ClearTargets,
+    EmptyTargetList,
+    TargetPathEntry,
     WriteChangesToPlugin,
     DetailedRefDiagnostics,
     DetailedRefDiagnosticsTooltip,
@@ -200,7 +210,7 @@ pub(super) enum UiText {
     OpenMwConfigNotFoundMessage,
     ChooseOpenMwConfigBeforeContinuing,
     SelectOpenMwConfig,
-    SelectUnclipTargetPlugin,
+    SelectUnclipTargetPlugins,
     OpenMwConfig,
     OpenMwPlugins,
     UsingOpenMwAutodetection,

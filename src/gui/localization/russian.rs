@@ -17,7 +17,6 @@ const fn language_text(key: UiText) -> &'static str {
         UiText::Unclip => "Unclip",
         UiText::Settings => "Настройки",
         UiText::General => "Общие",
-        UiText::Browse => "Обзор...",
         UiText::Save => "Сохранить",
         UiText::Cancel => "Отмена",
         UiText::Add => "Добавить",
@@ -34,7 +33,13 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Параметры запуска",
-        UiText::TargetPlugin => "Целевой plugin",
+        UiText::TargetPlugins => "Целевые plugins",
+        UiText::AddFiles => "Добавить файлы...",
+        UiText::AddTargetPath => "Добавить цель/путь",
+        UiText::RemoveSelectedTarget => "Удалить выбранную цель",
+        UiText::ClearTargets => "Очистить цели",
+        UiText::EmptyTargetList => "Целевые plugins не добавлены.",
+        UiText::TargetPathEntry => "Имя plugin или путь",
         UiText::WriteChangesToPlugin => "Записать изменения в plugin",
         UiText::DetailedRefDiagnostics => "Подробный лог",
         UiText::DetailedRefDiagnosticsTooltip => {
@@ -89,7 +94,7 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Выберите допустимый путь к конфигурации OpenMW перед продолжением."
         }
         UiText::SelectOpenMwConfig => "Выбрать конфигурацию OpenMW",
-        UiText::SelectUnclipTargetPlugin => "Выбрать целевой plugin Unclip",
+        UiText::SelectUnclipTargetPlugins => "Выбрать целевые plugins Unclip",
         _ => unreachable!(),
     }
 }
