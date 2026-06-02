@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Command-line arguments for `greenmote convert`.
 
 use clap::Parser;

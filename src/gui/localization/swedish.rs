@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use super::UiText;
 
 pub(super) const fn text(key: UiText) -> &'static str {

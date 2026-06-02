@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Command-line arguments and policy values for `greenmote unclip`.
 
 use std::path::PathBuf;

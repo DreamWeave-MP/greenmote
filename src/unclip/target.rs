@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{collections::BTreeSet, io};
 
 use tes3::esp::{Plugin, Reference, TES3Object};

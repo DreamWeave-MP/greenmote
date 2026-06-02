@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{collections::BTreeSet, path::PathBuf};
 
 use tes3::esp::{Activator, Cell, CellData, CellFlags, Reference, Static, TES3Object};

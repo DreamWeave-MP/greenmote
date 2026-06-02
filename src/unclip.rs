@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Public entry points for the `greenmote unclip` workflow.
 
 use std::{io, io::Write, path::Path};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use glam::{EulerRot, Quat, Vec3};
 use rapier3d::{math::Pose3, math::Rot3, math::Vec3 as RapierVec3, prelude::Cuboid};
 

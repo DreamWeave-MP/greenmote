@@ -332,3 +332,7 @@ Documentation validation:
 ```sh
 cargo doc --workspace --all-features --no-deps
 ```
+
+## License
+
+Greenmote is licensed under GPL-3.0-only. See [LICENSE](LICENSE).

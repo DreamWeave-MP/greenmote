@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{ffi::OsString, io, path::Path, process::Command, sync::mpsc, thread};
 
 use eframe::egui;

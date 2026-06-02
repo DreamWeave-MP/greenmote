@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{collections::BTreeMap, io};
 
 use crate::groundcover::plan::{MasterSpec, PluginCellPlan};

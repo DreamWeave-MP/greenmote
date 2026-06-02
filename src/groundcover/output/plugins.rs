@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::io;
 
 use tes3::esp::{FixedString, Header, ObjectFlags, Plugin, types::FileType};

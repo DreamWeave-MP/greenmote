@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use glam::{EulerRot, Mat3, Vec3};
 
 use super::terrain::TerrainSample;

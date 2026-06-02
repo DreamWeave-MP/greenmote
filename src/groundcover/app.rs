@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{collections::HashSet, fs::File, io, io::Write, path::Path};
 
 use openmw_config::OpenMWConfiguration;

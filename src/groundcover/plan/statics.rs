@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{cmp::Reverse, collections::HashSet};
 
 use tes3::esp::{ObjectFlags, TES3Object};

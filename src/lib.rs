@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 

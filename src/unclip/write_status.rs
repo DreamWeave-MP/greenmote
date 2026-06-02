@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use super::{args::WriteActions, cells::CellCoord, write_plan::WriteStatusIndex};
 
 pub(crate) struct WriteStatusInput {

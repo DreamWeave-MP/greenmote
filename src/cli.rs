@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Command-line parser and generated CLI documentation helpers.
 
 use std::path::PathBuf;

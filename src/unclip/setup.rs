@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{collections::BTreeSet, io, path::PathBuf};
 
 use tes3::esp::{Cell, Landscape, Plugin, Static};

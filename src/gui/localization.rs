@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 macro_rules! route_text {
     ($key:expr, $language:ident, $convert:ident, $dialogs:ident, $settings:ident) => {
         match $key {

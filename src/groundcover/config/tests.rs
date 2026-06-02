@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{
     fs::{create_dir, read_to_string},
     io,

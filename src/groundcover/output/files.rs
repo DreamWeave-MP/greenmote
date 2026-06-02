@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{fs::create_dir_all, io};
 
 use tes3::esp::TES3Object;

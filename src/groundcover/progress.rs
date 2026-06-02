@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Progress and cancellation primitives for conversion runs.
 
 use std::sync::{
