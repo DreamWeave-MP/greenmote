@@ -23,7 +23,7 @@ pub struct StaticMesh {
     mesh_key: String,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct StaticMeshIndex {
     statics: HashMap<String, StaticMesh>,
 }

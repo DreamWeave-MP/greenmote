@@ -55,8 +55,12 @@ pub fn run(
     super::check_cancellation(cancellation)?;
     let active_static_index = build_static_index(&context_plugins, None);
     super::check_cancellation(cancellation)?;
-    let target_static_index =
-        target_static_index(&context_plugins, target_is_active, &target_plugin_data);
+    let target_static_index = target_static_index(
+        &context_plugins,
+        &active_static_index,
+        target_is_active,
+        &target_plugin_data,
+    );
     let target_refs = TargetRefIndex::build(&target_plugin_data, &policy, cancellation)?;
     let active_cells = active_cells(&target_refs.target_cells)?;
     super::check_cancellation(cancellation)?;
@@ -195,13 +199,15 @@ fn build_report_context(input: ReportContextBuildInput<'_>) -> UnclipReportConte
 
 fn target_static_index(
     context_plugins: &[Plugin],
+    active_static_index: &StaticMeshIndex,
     target_is_active: bool,
     target_plugin_data: &Plugin,
 ) -> StaticMeshIndex {
-    build_static_index(
-        context_plugins,
-        (!target_is_active).then_some(target_plugin_data),
-    )
+    if target_is_active {
+        active_static_index.clone()
+    } else {
+        build_static_index(context_plugins, Some(target_plugin_data))
+    }
 }
 
 fn write_reports(
@@ -388,10 +394,76 @@ mod tests {
         config::UnclipConfig,
         contact_baseline::ContactBaselineIndex,
         model::{TerrainInspectionReport, UnclipReportContext},
+        setup::build_static_index,
         write_plan::{WriteAdjustment, WritePlan, WriteReport},
     };
 
-    use super::{write_log_footer, write_output_footer};
+    use tes3::esp::{Plugin, Static, TES3Object};
+
+    use super::{target_static_index, write_log_footer, write_output_footer};
+
+    #[test]
+    fn active_target_static_index_reuses_active_index_without_overlay() {
+        let context_plugins = vec![plugin_with_statics([static_record(
+            "grass_shared",
+            "meshes/active.nif",
+        )])];
+        let active_static_index = build_static_index(&context_plugins, None);
+        let target_plugin = plugin_with_statics([
+            static_record("grass_shared", "meshes/target.nif"),
+            static_record("grass_target_only", "meshes/target_only.nif"),
+        ]);
+
+        let index =
+            target_static_index(&context_plugins, &active_static_index, true, &target_plugin);
+
+        assert_eq!(
+            index
+                .get("grass_shared")
+                .map(|static_| static_.mesh_path.as_str()),
+            Some("meshes/active.nif")
+        );
+        assert!(index.get("grass_target_only").is_none());
+    }
+
+    #[test]
+    fn inactive_target_static_index_overlays_target_statics() {
+        let context_plugins = vec![plugin_with_statics([
+            static_record("grass_context", "meshes/context.nif"),
+            static_record("grass_shared", "meshes/context_shared.nif"),
+        ])];
+        let active_static_index = build_static_index(&context_plugins, None);
+        let target_plugin = plugin_with_statics([
+            static_record("grass_shared", "meshes/target_shared.nif"),
+            static_record("grass_target_only", "meshes/target_only.nif"),
+        ]);
+
+        let index = target_static_index(
+            &context_plugins,
+            &active_static_index,
+            false,
+            &target_plugin,
+        );
+
+        assert_eq!(
+            index
+                .get("grass_context")
+                .map(|static_| static_.mesh_path.as_str()),
+            Some("meshes/context.nif")
+        );
+        assert_eq!(
+            index
+                .get("grass_shared")
+                .map(|static_| static_.mesh_path.as_str()),
+            Some("meshes/target_shared.nif")
+        );
+        assert_eq!(
+            index
+                .get("grass_target_only")
+                .map(|static_| static_.mesh_path.as_str()),
+            Some("meshes/target_only.nif")
+        );
+    }
 
     #[test]
     fn structured_footer_omits_write_change_records() {
@@ -559,6 +631,20 @@ mod tests {
             sample_kind: "contact",
             contact_position: [0.0, 0.0, 7.0],
             terrain_z: 9.0,
+        }
+    }
+
+    fn plugin_with_statics<const N: usize>(statics: [Static; N]) -> Plugin {
+        Plugin {
+            objects: statics.into_iter().map(TES3Object::from).collect(),
+        }
+    }
+
+    fn static_record(id: &str, mesh: &str) -> Static {
+        Static {
+            id: id.to_owned(),
+            mesh: mesh.to_owned(),
+            ..Static::default()
         }
     }
 }
