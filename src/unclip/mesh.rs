@@ -595,7 +595,7 @@ fn strip_meshes_prefix(mesh_path: &str) -> &str {
 }
 
 fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
-    let accumulated = collect_mesh(stream, true, MeshSource::Visible)?;
+    let (_, accumulated) = collect_mesh(stream, true, MeshSource::Visible)?;
     let mut vertices = accumulated.vertices.unwrap_or_default();
     dedup_vertices_preserving_order(&mut vertices);
     let bounds = MeshAabb {
@@ -614,8 +614,7 @@ fn mesh_geometry(stream: &NiStream) -> Option<MeshGeometry> {
 }
 
 fn mesh_bounds(stream: &NiStream) -> Option<MeshAabb> {
-    let accumulated = collect_mesh(stream, false, MeshSource::Collision)
-        .or_else(|| collect_mesh(stream, false, MeshSource::Visible))?;
+    let accumulated = collect_mesh(stream, false, MeshSource::Collision).map(|(_, mesh)| mesh)?;
 
     Some(MeshAabb {
         min: accumulated.min.to_array(),
@@ -625,11 +624,6 @@ fn mesh_bounds(stream: &NiStream) -> Option<MeshAabb> {
 
 fn mesh_collider_parts(stream: &NiStream, bounds: MeshAabb) -> MeshColliderParts {
     let (source, collected) = collect_mesh_parts(stream, MeshSource::Collision)
-        .map(|parts| (MeshColliderSource::Collision, parts))
-        .or_else(|| {
-            collect_mesh_parts(stream, MeshSource::Visible)
-                .map(|parts| (MeshColliderSource::VisibleFallback, parts))
-        })
         .unwrap_or((MeshColliderSource::VisibleFallback, Ok(Vec::new())));
 
     match collected {
@@ -702,19 +696,20 @@ fn collect_mesh(
     stream: &NiStream,
     store_vertices: bool,
     source: MeshSource,
-) -> Option<MeshAccumulator> {
+) -> Option<(MeshColliderSource, MeshAccumulator)> {
     let mut accumulated = MeshAccumulator::new(store_vertices);
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
+    let mut collider_source = MeshColliderSource::VisibleFallback;
 
     for root in &stream.roots {
+        let root = selected_traversal_root(root.cast(), source, stream);
+        collider_source = collider_source_for_selection(collider_source, root.collider_source);
         queue.push_back(VisitItem {
-            parent: None,
-            link: root.cast(),
-            transform: Affine3A::IDENTITY,
-            collision: false,
-            depth_from_root: 0,
-            deep_collision_search: root_has_rcn_extra(root.cast(), stream),
+            parent: root.parent,
+            link: root.link,
+            transform: root.parent_transform,
+            collision: root.collision,
         });
     }
 
@@ -733,25 +728,29 @@ fn collect_mesh(
         return None;
     }
 
-    Some(accumulated)
+    Some((collider_source, accumulated))
 }
 
 fn collect_mesh_parts(
     stream: &NiStream,
     source: MeshSource,
-) -> Option<Result<Vec<MeshColliderPart>, ColliderPartsFallback>> {
+) -> Option<(
+    MeshColliderSource,
+    Result<Vec<MeshColliderPart>, ColliderPartsFallback>,
+)> {
     let mut parts = Vec::new();
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
+    let mut collider_source = MeshColliderSource::VisibleFallback;
 
     for root in &stream.roots {
+        let root = selected_traversal_root(root.cast(), source, stream);
+        collider_source = collider_source_for_selection(collider_source, root.collider_source);
         queue.push_back(VisitItem {
-            parent: None,
-            link: root.cast(),
-            transform: Affine3A::IDENTITY,
-            collision: false,
-            depth_from_root: 0,
-            deep_collision_search: root_has_rcn_extra(root.cast(), stream),
+            parent: root.parent,
+            link: root.link,
+            transform: root.parent_transform,
+            collision: root.collision,
         });
     }
 
@@ -759,14 +758,14 @@ fn collect_mesh_parts(
         if let Err(fallback) =
             visit_object_parts(stream, item, source, &mut visited, &mut queue, &mut parts)
         {
-            return Some(Err(fallback));
+            return Some((collider_source, Err(fallback)));
         }
         if parts.len() > MAX_COLLIDER_PARTS {
-            return Some(Err(ColliderPartsFallback::OverBudget));
+            return Some((collider_source, Err(ColliderPartsFallback::OverBudget)));
         }
     }
 
-    (!parts.is_empty()).then_some(Ok(parts))
+    (!parts.is_empty()).then_some((collider_source, Ok(parts)))
 }
 
 #[derive(Clone, Copy)]
@@ -775,11 +774,127 @@ struct VisitItem {
     link: NiLink<NiAVObject>,
     transform: Affine3A,
     collision: bool,
-    depth_from_root: usize,
-    deep_collision_search: bool,
 }
 
-type VisitEdge = (Option<tes3::nif::NiKey>, tes3::nif::NiKey, bool, bool);
+type VisitEdge = (Option<tes3::nif::NiKey>, tes3::nif::NiKey, bool);
+
+#[derive(Clone, Copy)]
+struct SelectedTraversalRoot {
+    parent: Option<tes3::nif::NiKey>,
+    link: NiLink<NiAVObject>,
+    parent_transform: Affine3A,
+    collision: bool,
+    collider_source: MeshColliderSource,
+}
+
+fn selected_traversal_root(
+    root: NiLink<NiAVObject>,
+    source: MeshSource,
+    stream: &NiStream,
+) -> SelectedTraversalRoot {
+    if source == MeshSource::Visible {
+        return SelectedTraversalRoot {
+            parent: None,
+            link: root,
+            parent_transform: Affine3A::IDENTITY,
+            collision: false,
+            collider_source: MeshColliderSource::VisibleFallback,
+        };
+    }
+
+    if stream.get_as::<_, RootCollisionNode>(root).is_some() {
+        return SelectedTraversalRoot {
+            parent: None,
+            link: root,
+            parent_transform: Affine3A::IDENTITY,
+            collision: true,
+            collider_source: MeshColliderSource::Collision,
+        };
+    }
+
+    if let Some(node) = stream.get_as::<_, NiNode>(root) {
+        let root_transform = affine3a_from_nif(node.transform());
+        for child in &node.children {
+            if stream.get_as::<_, RootCollisionNode>(*child).is_some() {
+                return SelectedTraversalRoot {
+                    parent: Some(root.key),
+                    link: *child,
+                    parent_transform: root_transform,
+                    collision: true,
+                    collider_source: MeshColliderSource::Collision,
+                };
+            }
+        }
+    }
+
+    if root_has_rcn_extra(root, stream)
+        && let Some(selected) = first_deep_root_collision_node(root, stream)
+    {
+        return selected;
+    }
+
+    SelectedTraversalRoot {
+        parent: None,
+        link: root,
+        parent_transform: Affine3A::IDENTITY,
+        collision: true,
+        collider_source: MeshColliderSource::VisibleFallback,
+    }
+}
+
+fn first_deep_root_collision_node(
+    root: NiLink<NiAVObject>,
+    stream: &NiStream,
+) -> Option<SelectedTraversalRoot> {
+    let mut visited = HashSet::new();
+    let mut stack = vec![SelectedTraversalRoot {
+        parent: None,
+        link: root,
+        parent_transform: Affine3A::IDENTITY,
+        collision: true,
+        collider_source: MeshColliderSource::Collision,
+    }];
+
+    while let Some(item) = stack.pop() {
+        if item.link.is_null() || !visited.insert((item.parent, item.link.key)) {
+            continue;
+        }
+        if stream
+            .get_as::<_, RootCollisionNode>(item.link)
+            .is_some_and(|_| item.parent.is_some())
+        {
+            return Some(item);
+        }
+        let Some(node) = stream.get_as::<_, NiNode>(item.link) else {
+            continue;
+        };
+        let transform = item.parent_transform * affine3a_from_nif(node.transform());
+        for child in node.children.iter().rev() {
+            stack.push(SelectedTraversalRoot {
+                parent: Some(item.link.key),
+                link: *child,
+                parent_transform: transform,
+                collision: true,
+                collider_source: MeshColliderSource::Collision,
+            });
+        }
+    }
+
+    None
+}
+
+const fn collider_source_for_selection(
+    current: MeshColliderSource,
+    selected: MeshColliderSource,
+) -> MeshColliderSource {
+    if matches!(current, MeshColliderSource::Collision)
+        || matches!(selected, MeshColliderSource::Collision)
+    {
+        MeshColliderSource::Collision
+    } else {
+        MeshColliderSource::VisibleFallback
+    }
+}
 
 fn visit_object(
     stream: &NiStream,
@@ -794,25 +909,19 @@ fn visit_object(
         link,
         transform: parent_transform,
         collision: parent_collision,
-        depth_from_root,
-        deep_collision_search,
     } = item;
     if link.is_null() {
         return;
     }
-    if !visited.insert((parent, link.key, parent_collision, deep_collision_search)) {
+    if !visited.insert((parent, link.key, parent_collision)) {
         return;
     }
 
     if let Some(root_collision_node) = stream.get_as::<_, RootCollisionNode>(link) {
-        let collision =
-            parent_collision || parent.is_none() || depth_from_root == 1 || deep_collision_search;
-        if !collision {
-            return;
-        }
-        // Some shipped collision roots are app-culled while still carrying valid
-        // collision geometry. Visible extraction still honors app-cull flags.
-        if source == MeshSource::Visible && root_collision_node.app_culled() {
+        let collision = parent_collision;
+        // Visible extraction treats actual collision roots as collision-only
+        // subtrees. Collision extraction ignores app-cull after root selection.
+        if source == MeshSource::Visible {
             return;
         }
         let transform = parent_transform * affine3a_from_nif(root_collision_node.transform());
@@ -822,8 +931,6 @@ fn visit_object(
                 link: *child,
                 transform,
                 collision,
-                depth_from_root: depth_from_root + 1,
-                deep_collision_search,
             });
         }
     } else if let Some(node) = stream.get_as::<_, NiNode>(link) {
@@ -840,8 +947,6 @@ fn visit_object(
                 link: *child,
                 transform,
                 collision: parent_collision,
-                depth_from_root: depth_from_root + 1,
-                deep_collision_search,
             });
         }
     } else if let Some(shape) = stream.get_as::<_, NiTriShape>(link) {
@@ -887,25 +992,19 @@ fn visit_object_parts(
         link,
         transform: parent_transform,
         collision: parent_collision,
-        depth_from_root,
-        deep_collision_search,
     } = item;
     if link.is_null() {
         return Ok(());
     }
-    if !visited.insert((parent, link.key, parent_collision, deep_collision_search)) {
+    if !visited.insert((parent, link.key, parent_collision)) {
         return Ok(());
     }
 
     if let Some(root_collision_node) = stream.get_as::<_, RootCollisionNode>(link) {
-        let collision =
-            parent_collision || parent.is_none() || depth_from_root == 1 || deep_collision_search;
-        if !collision {
-            return Ok(());
-        }
-        // Some shipped collision roots are app-culled while still carrying valid
-        // collision geometry. Visible extraction still honors app-cull flags.
-        if source == MeshSource::Visible && root_collision_node.app_culled() {
+        let collision = parent_collision;
+        // Visible extraction treats actual collision roots as collision-only
+        // subtrees. Collision extraction ignores app-cull after root selection.
+        if source == MeshSource::Visible {
             return Ok(());
         }
         let transform = parent_transform * affine3a_from_nif(root_collision_node.transform());
@@ -915,8 +1014,6 @@ fn visit_object_parts(
                 link: *child,
                 transform,
                 collision,
-                depth_from_root: depth_from_root + 1,
-                deep_collision_search,
             });
         }
     } else if let Some(node) = stream.get_as::<_, NiNode>(link) {
@@ -933,8 +1030,6 @@ fn visit_object_parts(
                 link: *child,
                 transform,
                 collision: parent_collision,
-                depth_from_root: depth_from_root + 1,
-                deep_collision_search,
             });
         }
     } else if let Some(shape) = stream.get_as::<_, NiTriShape>(link) {
@@ -1485,15 +1580,11 @@ mod tests {
         let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
 
         assert_eq!(geometry.bounds, expected_bounds());
-        assert_eq!(geometry.occluder_bounds, expected_bounds());
-        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
         assert_eq!(parts.source(), MeshColliderSource::VisibleFallback);
         assert_eq!(parts.fallback(), None);
-        assert_eq!(parts.parts.len(), 1);
-        assert_obb_close(
-            parts.parts[0].obb,
-            LocalObb::from_mesh_aabb(expected_bounds()),
-        );
+        assert_eq!(parts.parts.len(), 2);
     }
 
     #[test]
@@ -1558,15 +1649,11 @@ mod tests {
         let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
 
         assert_eq!(geometry.bounds, expected_bounds());
-        assert_eq!(geometry.occluder_bounds, expected_bounds());
-        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
         assert_eq!(parts.source(), MeshColliderSource::VisibleFallback);
         assert_eq!(parts.fallback(), None);
-        assert_eq!(parts.parts.len(), 1);
-        assert_obb_close(
-            parts.parts[0].obb,
-            LocalObb::from_mesh_aabb(expected_bounds()),
-        );
+        assert_eq!(parts.parts.len(), 2);
     }
 
     #[test]
@@ -1583,15 +1670,117 @@ mod tests {
         let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
 
         assert_eq!(geometry.bounds, expected_bounds());
-        assert_eq!(geometry.occluder_bounds, expected_bounds());
-        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
         assert_eq!(parts.source(), MeshColliderSource::VisibleFallback);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 2);
+    }
+
+    #[test]
+    fn immediate_root_child_rcn_wins_over_root_extra_deep_rcn() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let immediate_shape = insert_shape(&mut stream, "immediate", &collision_vertices(), 0);
+        let immediate_collision_root =
+            insert_root_collision_node(&mut stream, vec![immediate_shape]);
+        let deep_shape = insert_shape(&mut stream, "deep", &far_collision_vertices(), 0);
+        let deep_collision_root = insert_root_collision_node(&mut stream, vec![deep_shape]);
+        let wrapper = insert_node(&mut stream, "wrapper", vec![deep_collision_root], None, 0);
+        let root = insert_node(
+            &mut stream,
+            "root",
+            vec![visible, immediate_collision_root, wrapper],
+            Some("RCN"),
+            0,
+        );
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::Collision);
         assert_eq!(parts.fallback(), None);
         assert_eq!(parts.parts.len(), 1);
         assert_obb_close(
             parts.parts[0].obb,
-            LocalObb::from_mesh_aabb(expected_bounds()),
+            LocalObb::from_mesh_aabb(collision_bounds()),
         );
+    }
+
+    #[test]
+    fn root_rcn_extra_deep_search_takes_first_nested_root_collision_node_only() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let first_shape = insert_shape(&mut stream, "first", &collision_vertices(), 0);
+        let first_collision_root = insert_root_collision_node(&mut stream, vec![first_shape]);
+        let first_wrapper = insert_node(
+            &mut stream,
+            "first_wrapper",
+            vec![first_collision_root],
+            None,
+            0,
+        );
+        let later_shape = insert_shape(&mut stream, "later", &far_collision_vertices(), 0);
+        let later_collision_root = insert_root_collision_node(&mut stream, vec![later_shape]);
+        let later_wrapper = insert_node(
+            &mut stream,
+            "later_wrapper",
+            vec![later_collision_root],
+            None,
+            0,
+        );
+        let root = insert_node(
+            &mut stream,
+            "root",
+            vec![visible, first_wrapper, later_wrapper],
+            Some("RCN"),
+            0,
+        );
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
+
+        assert_eq!(geometry.bounds, expected_bounds());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::Collision);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_obb_close(
+            parts.parts[0].obb,
+            LocalObb::from_mesh_aabb(collision_bounds()),
+        );
+    }
+
+    #[test]
+    fn no_valid_rcn_uses_whole_scene_graph_for_collision_fallback() {
+        let mut stream = NiStream::new();
+        let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
+        let second_visible = insert_shape(&mut stream, "second_visible", &collision_vertices(), 0);
+        let app_culled = insert_shape(&mut stream, "app_culled", &far_collision_vertices(), 1);
+        let root = insert_node(
+            &mut stream,
+            "root",
+            vec![visible, second_visible, app_culled],
+            None,
+            0,
+        );
+        push_root(&mut stream, root);
+
+        let geometry = mesh_geometry(&stream).unwrap();
+        let parts = mesh_collider_parts(&stream, geometry.occluder_bounds);
+
+        assert_eq!(geometry.bounds, collision_bounds());
+        assert_eq!(geometry.occluder_bounds, far_collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), far_collision_bounds());
+        assert_eq!(parts.source(), MeshColliderSource::VisibleFallback);
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 3);
     }
 
     #[test]
@@ -1616,7 +1805,7 @@ mod tests {
     }
 
     #[test]
-    fn app_culled_non_root_rcn_extra_subtree_does_not_replace_visible_occluder_bounds() {
+    fn app_culled_non_root_rcn_extra_subtree_is_included_in_scene_graph_fallback() {
         let mut stream = NiStream::new();
         let visible = insert_shape(&mut stream, "visible", &expected_contact_vertices(), 0);
         let collision_shape = insert_shape(&mut stream, "collision", &collision_vertices(), 0);
@@ -1639,8 +1828,8 @@ mod tests {
         let geometry = mesh_geometry(&stream).unwrap();
 
         assert_eq!(geometry.bounds, expected_bounds());
-        assert_eq!(geometry.occluder_bounds, expected_bounds());
-        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+        assert_eq!(geometry.occluder_bounds, collision_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
     }
 
     #[test]
@@ -1714,7 +1903,7 @@ mod tests {
         let geometry = mesh_geometry(&stream).unwrap();
 
         assert_eq!(geometry.bounds, expected_bounds());
-        assert_eq!(mesh_bounds(&stream).unwrap(), expected_bounds());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
     }
 
     #[test]
@@ -1724,7 +1913,7 @@ mod tests {
         push_root(&mut stream, culled);
 
         assert!(mesh_geometry(&stream).is_none());
-        assert!(mesh_bounds(&stream).is_none());
+        assert_eq!(mesh_bounds(&stream).unwrap(), collision_bounds());
     }
 
     #[test]
@@ -1776,6 +1965,14 @@ mod tests {
         ]
     }
 
+    fn far_collision_vertices() -> Vec<[f32; 3]> {
+        vec![
+            [1_000.0, 900.0, 800.0],
+            [1_100.0, 900.0, 800.0],
+            [1_100.0, 950.0, 850.0],
+        ]
+    }
+
     fn box_vertices() -> Vec<[f32; 3]> {
         vec![[-1.0, -2.0, -3.0], [1.0, -2.0, -3.0], [1.0, 2.0, 3.0]]
     }
@@ -1784,6 +1981,13 @@ mod tests {
         MeshAabb {
             min: [-100.0, -50.0, -20.0],
             max: [80.0, 40.0, 30.0],
+        }
+    }
+
+    fn far_collision_bounds() -> MeshAabb {
+        MeshAabb {
+            min: [-100.0, -50.0, -20.0],
+            max: [1_100.0, 950.0, 850.0],
         }
     }
 
