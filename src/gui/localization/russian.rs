@@ -101,6 +101,7 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::UnclipTargetSucceeded => "Успешно",
         UiText::UnclipTargetFailed => "Ошибка",
         UiText::UnclipTargetSkipped => "Пропущено",
+        UiText::UnclipTargetCancelled => "Отменено",
         _ => unreachable!(),
     }
 }

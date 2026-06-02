@@ -83,6 +83,7 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::UnclipTargetSucceeded => "Correcto",
         UiText::UnclipTargetFailed => "Fallido",
         UiText::UnclipTargetSkipped => "Omitido",
+        UiText::UnclipTargetCancelled => "Cancelado",
         _ => unreachable!(),
     }
 }

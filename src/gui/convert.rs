@@ -65,6 +65,7 @@ enum UnclipTargetStatus {
     Succeeded,
     Failed,
     Skipped,
+    Cancelled,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -72,6 +73,7 @@ struct UnclipBatchSummary {
     succeeded: usize,
     failed: usize,
     skipped: usize,
+    cancelled: usize,
 }
 
 #[derive(Clone)]
@@ -713,14 +715,12 @@ impl GreenmoteApp {
             let actions_enabled = !self.convert.running;
             if ui
                 .add_enabled(
-                    self.convert.running
-                        && !self.convert.cancelling
-                        && matches!(self.convert.active_worker, Some(WorkerKind::Convert)),
+                    self.convert.running && !self.convert.cancelling,
                     egui::Button::new(self.localizer.text(UiText::Cancel)),
                 )
                 .clicked()
             {
-                self.cancel_conversion();
+                self.cancel_worker();
             }
 
             if ui
@@ -848,6 +848,8 @@ impl GreenmoteApp {
         let (sender, receiver) = mpsc::channel();
         let sink = GuiEventSink::new(sender, ctx.clone());
         let openmw_cfg = self.session_openmw_cfg.clone();
+        let cancellation = CancellationToken::default();
+        let worker_cancellation = cancellation.clone();
 
         self.convert.running = true;
         self.convert.unclip.pending_write_confirmation = false;
@@ -856,7 +858,7 @@ impl GreenmoteApp {
         self.convert.phase_reached = None;
         self.convert.active_worker = Some(WorkerKind::Unclip);
         self.convert.event_receiver = Some(receiver);
-        self.convert.cancellation = None;
+        self.convert.cancellation = Some(cancellation);
         self.convert.output.clear();
         self.convert.reset_unclip_target_statuses();
         if self.convert.unclip.run_options.write {
@@ -874,25 +876,40 @@ impl GreenmoteApp {
                     .first()
                     .is_some_and(|args| args.write.unwrap_or(false)),
                 &mut stdout,
+                &worker_cancellation,
                 |index, status| {
                     sink.send(GuiEvent::UnclipTargetStatus { index, status });
                 },
-                |openmw_cfg, args, stdout| unclip::run_with_output(openmw_cfg, None, args, stdout),
+                |openmw_cfg, args, stdout, cancellation| {
+                    unclip::run_with_output_and_cancel(openmw_cfg, None, args, stdout, cancellation)
+                },
             );
+            let (error, cancelled) = match error {
+                Ok(error) => (error, false),
+                Err(error) => {
+                    let cancelled = error.kind() == io::ErrorKind::Interrupted
+                        && worker_cancellation.is_cancelled();
+                    (Some(error.to_string()), cancelled)
+                }
+            };
             sink.send(GuiEvent::Finished {
                 worker: WorkerKind::Unclip,
                 error,
-                cancelled: false,
+                cancelled,
             });
         });
     }
 
-    fn cancel_conversion(&mut self) {
+    fn cancel_worker(&mut self) {
         if let Some(cancellation) = &self.convert.cancellation {
             cancellation.cancel();
             self.convert.cancelling = true;
             self.convert.progress = None;
-            self.set_status("Cancelling conversion...");
+            let label = match self.convert.active_worker.unwrap_or(WorkerKind::Convert) {
+                WorkerKind::Convert => "conversion",
+                WorkerKind::Unclip => "Unclip",
+            };
+            self.set_status(format!("Cancelling {label}..."));
         }
     }
 
@@ -1035,7 +1052,7 @@ impl GreenmoteApp {
     fn finish_worker(&mut self, worker: WorkerKind, error: Option<String>, cancelled: bool) {
         match worker {
             WorkerKind::Convert => self.finish_conversion(error, cancelled),
-            WorkerKind::Unclip => self.finish_unclip(error),
+            WorkerKind::Unclip => self.finish_unclip(error, cancelled),
         }
     }
 
@@ -1059,7 +1076,7 @@ impl GreenmoteApp {
         }
     }
 
-    fn finish_unclip(&mut self, error: Option<String>) {
+    fn finish_unclip(&mut self, error: Option<String>, cancelled: bool) {
         self.convert.running = false;
         self.convert.cancelling = false;
         self.convert.progress = None;
@@ -1073,7 +1090,12 @@ impl GreenmoteApp {
             UiText::UnclipInspection
         };
 
-        if let Some(error) = error {
+        if cancelled {
+            if let Some(error) = error {
+                append_error(&mut self.convert.output, &error);
+            }
+            self.set_status("Unclip cancelled.");
+        } else if let Some(error) = error {
             self.set_status(self.unclip_finished_error_status(label, &error));
         } else {
             self.set_status(self.unclip_finished_status(label));
@@ -1258,6 +1280,7 @@ impl UnclipTargetStatus {
             Self::Succeeded => UiText::UnclipTargetSucceeded,
             Self::Failed => UiText::UnclipTargetFailed,
             Self::Skipped => UiText::UnclipTargetSkipped,
+            Self::Cancelled => UiText::UnclipTargetCancelled,
         }
     }
 }
@@ -1267,28 +1290,68 @@ fn run_unclip_batch<R, S>(
     args_list: &[UnclipArgs],
     write: bool,
     stdout: &mut dyn io::Write,
+    cancellation: &CancellationToken,
     mut set_status: S,
     mut runner: R,
-) -> Option<String>
+) -> io::Result<Option<String>>
 where
-    R: FnMut(Option<&Path>, &UnclipArgs, &mut dyn io::Write) -> io::Result<()>,
+    R: FnMut(Option<&Path>, &UnclipArgs, &mut dyn io::Write, &CancellationToken) -> io::Result<()>,
     S: FnMut(usize, UnclipTargetStatus),
 {
     let mut summary = UnclipBatchSummary::default();
     let mut first_error = None;
 
     for (index, args) in args_list.iter().enumerate() {
+        if cancellation.is_cancelled() {
+            for (skipped_index, skipped_args) in args_list.iter().enumerate().skip(index) {
+                let skipped = unclip_target_label(skipped_args);
+                summary.skipped += 1;
+                set_status(skipped_index, UnclipTargetStatus::Skipped);
+                writeln!(stdout, "=== Unclip: {skipped} ===").ok();
+                writeln!(
+                    stdout,
+                    "Unclip target skipped after cancellation: {skipped}\n"
+                )
+                .ok();
+            }
+            write_unclip_batch_summary(stdout, summary, true);
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "unclip cancelled",
+            ));
+        }
         let target = unclip_target_label(args);
         writeln!(stdout, "=== Unclip: {target} ===").ok();
         set_status(index, UnclipTargetStatus::Running);
 
-        match runner(openmw_cfg, args, stdout) {
+        match runner(openmw_cfg, args, stdout, cancellation) {
             Ok(()) => {
                 summary.succeeded += 1;
                 set_status(index, UnclipTargetStatus::Succeeded);
                 writeln!(stdout, "Unclip target succeeded: {target}\n").ok();
             }
             Err(error) => {
+                if error.kind() == io::ErrorKind::Interrupted && cancellation.is_cancelled() {
+                    set_status(index, UnclipTargetStatus::Cancelled);
+                    writeln!(stdout, "Unclip target cancelled: {target}").ok();
+                    writeln!(stdout, "error:").ok();
+                    writeln!(stdout, "{error}\n").ok();
+                    for (skipped_index, skipped_args) in
+                        args_list.iter().enumerate().skip(index + 1)
+                    {
+                        let skipped = unclip_target_label(skipped_args);
+                        summary.skipped += 1;
+                        set_status(skipped_index, UnclipTargetStatus::Skipped);
+                        writeln!(stdout, "=== Unclip: {skipped} ===").ok();
+                        writeln!(
+                            stdout,
+                            "Unclip target skipped after cancellation: {skipped}\n"
+                        )
+                        .ok();
+                    }
+                    write_unclip_batch_summary(stdout, summary, true);
+                    return Err(error);
+                }
                 let error = error.to_string();
                 summary.failed += 1;
                 set_status(index, UnclipTargetStatus::Failed);
@@ -1316,14 +1379,25 @@ where
         }
     }
 
+    write_unclip_batch_summary(stdout, summary, false);
+
+    Ok(first_error)
+}
+
+fn write_unclip_batch_summary(
+    stdout: &mut dyn io::Write,
+    summary: UnclipBatchSummary,
+    cancelled: bool,
+) {
     writeln!(
         stdout,
         "Unclip batch summary: {} succeeded, {} failed, {} skipped.",
         summary.succeeded, summary.failed, summary.skipped
     )
     .ok();
-
-    first_error
+    if cancelled {
+        writeln!(stdout, "Unclip batch cancelled.").ok();
+    }
 }
 
 fn unclip_target_label(args: &UnclipArgs) -> String {
@@ -1341,6 +1415,7 @@ fn summarize_unclip_statuses(statuses: &[UnclipTargetStatus]) -> UnclipBatchSumm
                 UnclipTargetStatus::Succeeded => summary.succeeded += 1,
                 UnclipTargetStatus::Failed => summary.failed += 1,
                 UnclipTargetStatus::Skipped => summary.skipped += 1,
+                UnclipTargetStatus::Cancelled => summary.cancelled += 1,
                 UnclipTargetStatus::Pending | UnclipTargetStatus::Running => {}
             }
             summary
@@ -1484,13 +1559,14 @@ fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, path::Path};
+    use std::{ffi::OsString, io, path::Path};
 
     use super::{
         ConvertRunOptions, ConvertUiState, UnclipRunOptions, UnclipTargetStatus, egui,
         loaded_openmw_config_status, run_unclip_batch,
     };
     use crate::{
+        groundcover::CancellationToken,
         gui::{AppTab, GreenmoteApp},
         unclip::UnclipArgs,
     };
@@ -1657,20 +1733,22 @@ mod tests {
         let mut output = Vec::new();
         let mut order = Vec::new();
         let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
 
         let error = run_unclip_batch(
             None,
             &args,
             false,
             &mut output,
+            &cancellation,
             |index, status| statuses.push((index, status)),
-            |_openmw_cfg, args, _stdout| {
+            |_openmw_cfg, args, _stdout, _cancellation| {
                 order.push(args.plugin.as_ref().unwrap().display().to_string());
                 Ok(())
             },
         );
 
-        assert_eq!(error, None);
+        assert_eq!(error.unwrap(), None);
         assert_eq!(order, ["first.omwaddon", "second.omwaddon"]);
         assert_eq!(
             statuses,
@@ -1695,14 +1773,16 @@ mod tests {
         let mut output = Vec::new();
         let mut order = Vec::new();
         let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
 
         let error = run_unclip_batch(
             None,
             &args,
             false,
             &mut output,
+            &cancellation,
             |index, status| statuses.push((index, status)),
-            |_openmw_cfg, args, _stdout| {
+            |_openmw_cfg, args, _stdout, _cancellation| {
                 let target = args.plugin.as_ref().unwrap().display().to_string();
                 order.push(target.clone());
                 if target == "second.omwaddon" {
@@ -1713,7 +1793,7 @@ mod tests {
             },
         );
 
-        assert_eq!(error, None);
+        assert_eq!(error.unwrap(), None);
         assert_eq!(
             order,
             ["first.omwaddon", "second.omwaddon", "third.omwaddon"]
@@ -1734,14 +1814,16 @@ mod tests {
         let mut output = Vec::new();
         let mut order = Vec::new();
         let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
 
         let error = run_unclip_batch(
             None,
             &args,
             true,
             &mut output,
+            &cancellation,
             |index, status| statuses.push((index, status)),
-            |_openmw_cfg, args, _stdout| {
+            |_openmw_cfg, args, _stdout, _cancellation| {
                 let target = args.plugin.as_ref().unwrap().display().to_string();
                 order.push(target.clone());
                 if target == "second.omwaddon" {
@@ -1752,7 +1834,7 @@ mod tests {
             },
         );
 
-        assert_eq!(error.as_deref(), Some("simulated failure"));
+        assert_eq!(error.unwrap().as_deref(), Some("simulated failure"));
         assert_eq!(order, ["first.omwaddon", "second.omwaddon"]);
         assert!(statuses.contains(&(1, UnclipTargetStatus::Failed)));
         assert!(statuses.contains(&(2, UnclipTargetStatus::Skipped)));
@@ -1764,21 +1846,99 @@ mod tests {
     }
 
     #[test]
-    fn unclip_single_target_batch_succeeds() {
-        let args = test_unclip_args(["single.omwaddon"], false);
+    fn unclip_batch_cancellation_before_next_target_skips_remaining_and_interrupts() {
+        let args = test_unclip_args(["first.omwaddon", "second.omwaddon"], false);
         let mut output = Vec::new();
+        let mut order = Vec::new();
         let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
 
         let error = run_unclip_batch(
             None,
             &args,
             false,
             &mut output,
+            &cancellation,
             |index, status| statuses.push((index, status)),
-            |_openmw_cfg, _args, _stdout| Ok(()),
+            |_openmw_cfg, args, _stdout, cancellation| {
+                order.push(args.plugin.as_ref().unwrap().display().to_string());
+                cancellation.cancel();
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(order, ["first.omwaddon"]);
+        assert_eq!(
+            statuses,
+            [
+                (0, UnclipTargetStatus::Running),
+                (0, UnclipTargetStatus::Succeeded),
+                (1, UnclipTargetStatus::Skipped),
+            ]
+        );
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Unclip target skipped after cancellation: second.omwaddon"));
+        assert!(output.contains("Unclip batch cancelled."));
+    }
+
+    #[test]
+    fn unclip_batch_current_target_cancellation_marks_cancelled_and_skips_rest() {
+        let args = test_unclip_args(["first.omwaddon", "second.omwaddon"], false);
+        let mut output = Vec::new();
+        let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        let error = run_unclip_batch(
+            None,
+            &args,
+            false,
+            &mut output,
+            &cancellation,
+            |index, status| statuses.push((index, status)),
+            |_openmw_cfg, _args, _stdout, cancellation| {
+                cancellation.cancel();
+                Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "unclip cancelled",
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(
+            statuses,
+            [
+                (0, UnclipTargetStatus::Running),
+                (0, UnclipTargetStatus::Cancelled),
+                (1, UnclipTargetStatus::Skipped),
+            ]
+        );
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Unclip target cancelled: first.omwaddon"));
+        assert!(output.contains("Unclip target skipped after cancellation: second.omwaddon"));
+    }
+
+    #[test]
+    fn unclip_single_target_batch_succeeds() {
+        let args = test_unclip_args(["single.omwaddon"], false);
+        let mut output = Vec::new();
+        let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        let error = run_unclip_batch(
+            None,
+            &args,
+            false,
+            &mut output,
+            &cancellation,
+            |index, status| statuses.push((index, status)),
+            |_openmw_cfg, _args, _stdout, _cancellation| Ok(()),
         );
 
-        assert_eq!(error, None);
+        assert_eq!(error.unwrap(), None);
         assert_eq!(
             statuses,
             [

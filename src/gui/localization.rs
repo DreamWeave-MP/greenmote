@@ -55,7 +55,8 @@ macro_rules! route_text {
             | UiText::UnclipTargetRunning
             | UiText::UnclipTargetSucceeded
             | UiText::UnclipTargetFailed
-            | UiText::UnclipTargetSkipped => $convert($key),
+            | UiText::UnclipTargetSkipped
+            | UiText::UnclipTargetCancelled => $convert($key),
             UiText::ConfirmUnclipWriteTitle
             | UiText::ConfirmUnclipWriteMessage
             | UiText::EnabledWriteActions
@@ -211,6 +212,7 @@ pub(super) enum UiText {
     UnclipTargetSucceeded,
     UnclipTargetFailed,
     UnclipTargetSkipped,
+    UnclipTargetCancelled,
     ConfirmUnclipWriteTitle,
     ConfirmUnclipWriteMessage,
     EnabledWriteActions,

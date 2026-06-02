@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use tes3::esp::Plugin;
 
+use crate::groundcover::CancellationToken;
+
 use super::{
     mesh::{MeshCache, StaticMeshIndex},
     target::TargetRefIndex,
@@ -72,11 +74,13 @@ pub(super) fn build_contact_baselines(
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
     mesh_contacts: &mut MeshCache<'_>,
-) -> ContactBaselineIndex {
+    cancellation: &CancellationToken,
+) -> std::io::Result<ContactBaselineIndex> {
     let mut samples = BTreeMap::<String, Vec<f32>>::new();
     let mut meshes = BTreeMap::<String, String>::new();
 
     for (_, _, reference) in target_refs.iter_refs(plugin) {
+        super::check_cancellation(cancellation)?;
         if reference.deleted == Some(true) {
             continue;
         }
@@ -122,7 +126,7 @@ pub(super) fn build_contact_baselines(
         })
         .collect();
 
-    ContactBaselineIndex { baselines, meshes }
+    Ok(ContactBaselineIndex { baselines, meshes })
 }
 
 fn median(samples: &[f32]) -> f32 {
