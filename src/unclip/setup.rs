@@ -2,6 +2,8 @@ use std::{collections::BTreeSet, io, path::PathBuf};
 
 use tes3::esp::{Cell, Landscape, Plugin, Static};
 
+use crate::groundcover::CancellationToken;
+
 use super::{cells::CellCoord, cells::active_grid, mesh::StaticMeshIndex};
 
 pub(super) fn resolve_content_plugin_paths(
@@ -100,10 +102,14 @@ pub(super) fn load_target_plugin(path: &std::path::Path) -> io::Result<Plugin> {
     })
 }
 
-pub(super) fn load_context_plugins(paths: &[PathBuf]) -> io::Result<Vec<Plugin>> {
+pub(super) fn load_context_plugins(
+    paths: &[PathBuf],
+    cancellation: &CancellationToken,
+) -> io::Result<Vec<Plugin>> {
     paths
         .iter()
         .map(|path| {
+            super::check_cancellation(cancellation)?;
             Plugin::from_path_filtered(path, |tag| {
                 &tag == Landscape::TAG || &tag == Static::TAG || &tag == Cell::TAG
             })

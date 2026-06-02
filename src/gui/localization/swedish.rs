@@ -4,6 +4,18 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
+pub(super) fn unclip_target_count(count: usize) -> String {
+    if count == 1 {
+        "Mål: 1 plugin".to_owned()
+    } else {
+        format!("Mål: {count} plugin")
+    }
+}
+
+pub(super) fn unclip_target_overflow(count: usize) -> String {
+    format!("... och {count} till")
+}
+
 const fn language_text(key: UiText) -> &'static str {
     match key {
         UiText::Language => "Språk",
@@ -17,7 +29,6 @@ const fn language_text(key: UiText) -> &'static str {
         UiText::Unclip => "Unclip",
         UiText::Settings => "Inställningar",
         UiText::General => "Allmänt",
-        UiText::Browse => "Bläddra...",
         UiText::Save => "Spara",
         UiText::Cancel => "Avbryt",
         UiText::Add => "Lägg till",
@@ -34,8 +45,13 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Köralternativ",
-        UiText::TargetPlugin => "Målplugin",
-        UiText::MeshGeneratorIni => "MeshGenerator-INI",
+        UiText::TargetPlugins => "Målplugin",
+        UiText::AddFiles => "Lägg till filer...",
+        UiText::AddTargetPath => "Lägg till mål/sökväg",
+        UiText::RemoveSelectedTarget => "Ta bort valt mål",
+        UiText::ClearTargets => "Rensa mål",
+        UiText::EmptyTargetList => "Inga målplugin tillagda.",
+        UiText::TargetPathEntry => "Pluginnamn eller sökväg",
         UiText::WriteChangesToPlugin => "Skriv ändringar till plugin",
         UiText::DetailedRefDiagnostics => "Detaljerad logg",
         UiText::DetailedRefDiagnosticsTooltip => {
@@ -58,6 +74,16 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::CopyOutput => "Kopiera utdata",
         UiText::OpenOutputDir => "Öppna utdatakatalog",
         UiText::OpenLog => "Öppna logg",
+        UiText::WritingUnclipBatch => "Skriver Unclip-batch...",
+        UiText::InspectingUnclipBatch => "Inspekterar Unclip-batch...",
+        UiText::UnclipWrite => "Unclip-skrivning",
+        UiText::UnclipInspection => "Unclip-inspektion",
+        UiText::UnclipTargetPending => "Väntar",
+        UiText::UnclipTargetRunning => "Körs",
+        UiText::UnclipTargetSucceeded => "Lyckades",
+        UiText::UnclipTargetFailed => "Misslyckades",
+        UiText::UnclipTargetSkipped => "Överhoppad",
+        UiText::UnclipTargetCancelled => "Avbruten",
         _ => unreachable!(),
     }
 }
@@ -66,9 +92,8 @@ const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Bekräfta Unclip-skrivning",
         UiText::ConfirmUnclipWriteMessage => {
-            "Unclip kommer att ändra målpluginet och skapa en säkerhetskopia."
+            "Unclip kommer att ändra valda målplugin och skapa säkerhetskopior."
         }
-        UiText::Target => "Mål:",
         UiText::EnabledWriteActions => "Aktiverade skrivåtgärder:",
         UiText::UnsavedSettingsTitle => "Osparade inställningar",
         UiText::UnsavedSettingsMessage => "Inställningarna har osparade ändringar.",
@@ -86,8 +111,7 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Välj en giltig OpenMW-configsökväg innan du fortsätter."
         }
         UiText::SelectOpenMwConfig => "Välj OpenMW-config",
-        UiText::SelectUnclipTargetPlugin => "Välj Unclip-målplugin",
-        UiText::SelectMeshGeneratorIni => "Välj MeshGenerator-INI",
+        UiText::SelectUnclipTargetPlugins => "Välj Unclip-målplugin",
         _ => unreachable!(),
     }
 }

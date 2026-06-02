@@ -4,6 +4,18 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
+pub(super) fn unclip_target_count(count: usize) -> String {
+    if count == 1 {
+        "Objetivo: 1 plugin".to_owned()
+    } else {
+        format!("Objetivos: {count} plugins")
+    }
+}
+
+pub(super) fn unclip_target_overflow(count: usize) -> String {
+    format!("... y {count} más")
+}
+
 const fn language_text(key: UiText) -> &'static str {
     match key {
         UiText::Language => "Idioma",
@@ -17,7 +29,6 @@ const fn language_text(key: UiText) -> &'static str {
         UiText::Unclip => "Unclip",
         UiText::Settings => "Ajustes",
         UiText::General => "General",
-        UiText::Browse => "Examinar...",
         UiText::Save => "Guardar",
         UiText::Cancel => "Cancelar",
         UiText::Add => "Añadir",
@@ -34,8 +45,13 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Opciones de ejecución",
-        UiText::TargetPlugin => "Plugin objetivo",
-        UiText::MeshGeneratorIni => "INI de MeshGenerator",
+        UiText::TargetPlugins => "Plugins objetivo",
+        UiText::AddFiles => "Añadir archivos...",
+        UiText::AddTargetPath => "Añadir objetivo/ruta",
+        UiText::RemoveSelectedTarget => "Quitar objetivo seleccionado",
+        UiText::ClearTargets => "Borrar objetivos",
+        UiText::EmptyTargetList => "No hay plugins objetivo añadidos.",
+        UiText::TargetPathEntry => "Nombre o ruta del plugin",
         UiText::WriteChangesToPlugin => "Escribir cambios en el plugin",
         UiText::DetailedRefDiagnostics => "Registro detallado",
         UiText::DetailedRefDiagnosticsTooltip => {
@@ -58,6 +74,16 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::CopyOutput => "Copiar salida",
         UiText::OpenOutputDir => "Abrir carpeta de salida",
         UiText::OpenLog => "Abrir registro",
+        UiText::WritingUnclipBatch => "Escribiendo lote de Unclip...",
+        UiText::InspectingUnclipBatch => "Inspeccionando lote de Unclip...",
+        UiText::UnclipWrite => "Escritura de Unclip",
+        UiText::UnclipInspection => "Inspección de Unclip",
+        UiText::UnclipTargetPending => "Pendiente",
+        UiText::UnclipTargetRunning => "En curso",
+        UiText::UnclipTargetSucceeded => "Correcto",
+        UiText::UnclipTargetFailed => "Fallido",
+        UiText::UnclipTargetSkipped => "Omitido",
+        UiText::UnclipTargetCancelled => "Cancelado",
         _ => unreachable!(),
     }
 }
@@ -66,9 +92,8 @@ const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Confirmar escritura de Unclip",
         UiText::ConfirmUnclipWriteMessage => {
-            "Unclip modificará el plugin objetivo y creará una copia de seguridad."
+            "Unclip modificará los plugins objetivo seleccionados y creará archivos de copia de seguridad."
         }
-        UiText::Target => "Objetivo:",
         UiText::EnabledWriteActions => "Acciones de escritura activadas:",
         UiText::UnsavedSettingsTitle => "Ajustes sin guardar",
         UiText::UnsavedSettingsMessage => "Los ajustes tienen cambios sin guardar.",
@@ -88,8 +113,7 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Elige una ruta válida de configuración de OpenMW antes de continuar."
         }
         UiText::SelectOpenMwConfig => "Seleccionar configuración de OpenMW",
-        UiText::SelectUnclipTargetPlugin => "Seleccionar plugin objetivo de Unclip",
-        UiText::SelectMeshGeneratorIni => "Seleccionar INI de MeshGenerator",
+        UiText::SelectUnclipTargetPlugins => "Seleccionar plugins objetivo de Unclip",
         _ => unreachable!(),
     }
 }

@@ -2,6 +2,8 @@ use std::io;
 
 use tes3::esp::Plugin;
 
+use crate::groundcover::CancellationToken;
+
 use super::{
     args::UnclipPolicy,
     cells::CellCoord,
@@ -33,11 +35,13 @@ pub(super) fn inspect_target_refs(
     plugin: &Plugin,
     target_refs: &TargetRefIndex,
     context: &mut ReferenceInspectionContext<'_, '_>,
+    cancellation: &CancellationToken,
     mut reference_sink: impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<TerrainInspectionReport> {
     let mut report = TerrainInspectionReport::default();
 
     for (cell, key, reference) in target_refs.iter_refs(plugin) {
+        super::check_cancellation(cancellation)?;
         inspect_reference(
             &mut report,
             context,
@@ -55,14 +59,16 @@ pub(super) fn count_target_refs(
     plugin: &Plugin,
     target_refs: &TargetRefIndex,
     context: &mut ReferenceInspectionContext<'_, '_>,
-) -> TerrainInspectionReport {
+    cancellation: &CancellationToken,
+) -> io::Result<TerrainInspectionReport> {
     let mut report = TerrainInspectionReport::default();
 
     for (cell, key, reference) in target_refs.iter_refs(plugin) {
+        super::check_cancellation(cancellation)?;
         count_reference(&mut report, context, cell, key, reference);
     }
 
-    report
+    Ok(report)
 }
 
 fn count_reference(
@@ -498,9 +504,10 @@ fn can_relocate_static_bounds(
             static_occluders: input.context.static_occluders,
             relocation: input.context.policy.relocation,
             generated_placement,
+            cancellation: None,
         },
     )
-    .is_some()
+    .is_ok_and(|candidate| candidate.is_some())
 }
 
 fn corrected_static_bounds(

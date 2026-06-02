@@ -14,6 +14,11 @@ use tes3::{
 };
 use vfstool_lib::{VFS, VfsFile};
 
+type NifAffine3A = rapier3d::glamx::Affine3A;
+#[cfg(test)]
+type NifMat3 = rapier3d::math::Mat3;
+type NifVec3 = rapier3d::math::Vec3;
+
 #[derive(Clone, Debug)]
 pub struct StaticMesh {
     pub static_id: String,
@@ -797,7 +802,8 @@ fn visit_object(
         if source == MeshSource::Visible && root_collision_node.base.base.app_culled() {
             return;
         }
-        let transform = parent_transform * root_collision_node.base.base.transform();
+        let transform =
+            parent_transform * affine3a_from_nif(root_collision_node.base.base.transform());
         for child in &root_collision_node.base.children {
             queue.push_back(VisitItem {
                 parent: Some(link.key),
@@ -814,7 +820,7 @@ fn visit_object(
         if source == MeshSource::Visible && collision {
             return;
         }
-        let transform = parent_transform * node.base.transform();
+        let transform = parent_transform * affine3a_from_nif(node.base.transform());
         for child in &node.children {
             queue.push_back(VisitItem {
                 parent: Some(link.key),
@@ -831,7 +837,7 @@ fn visit_object(
         if !source.includes(collision) {
             return;
         }
-        let transform = parent_transform * shape.base.base.base.transform();
+        let transform = parent_transform * affine3a_from_nif(shape.base.base.base.transform());
         if let Some(data) = stream.get_as::<_, NiTriShapeData>(shape.base.base.geometry_data) {
             include_vertices(
                 &data.base.base,
@@ -848,7 +854,7 @@ fn visit_object(
         if !source.includes(collision) {
             return;
         }
-        let transform = parent_transform * strips.base.base.base.transform();
+        let transform = parent_transform * affine3a_from_nif(strips.base.base.base.transform());
         if let Some(data) = stream.get_as::<_, NiTriStripsData>(strips.base.base.geometry_data) {
             include_vertices(
                 &data.base.base,
@@ -889,7 +895,8 @@ fn visit_object_parts(
         if source == MeshSource::Visible && root_collision_node.base.base.app_culled() {
             return Ok(());
         }
-        let transform = parent_transform * root_collision_node.base.base.transform();
+        let transform =
+            parent_transform * affine3a_from_nif(root_collision_node.base.base.transform());
         for child in &root_collision_node.base.children {
             queue.push_back(VisitItem {
                 parent: Some(link.key),
@@ -906,7 +913,7 @@ fn visit_object_parts(
         if source == MeshSource::Visible && collision {
             return Ok(());
         }
-        let transform = parent_transform * node.base.transform();
+        let transform = parent_transform * affine3a_from_nif(node.base.transform());
         for child in &node.children {
             queue.push_back(VisitItem {
                 parent: Some(link.key),
@@ -923,7 +930,7 @@ fn visit_object_parts(
         if !source.includes(collision) {
             return Ok(());
         }
-        let transform = parent_transform * shape.base.base.base.transform();
+        let transform = parent_transform * affine3a_from_nif(shape.base.base.base.transform());
         if let Some(data) = stream.get_as::<_, NiTriShapeData>(shape.base.base.geometry_data) {
             include_part(
                 &data.base.base,
@@ -940,7 +947,7 @@ fn visit_object_parts(
         if !source.includes(collision) {
             return Ok(());
         }
-        let transform = parent_transform * strips.base.base.base.transform();
+        let transform = parent_transform * affine3a_from_nif(strips.base.base.base.transform());
         if let Some(data) = stream.get_as::<_, NiTriStripsData>(strips.base.base.geometry_data) {
             include_part(
                 &data.base.base,
@@ -968,7 +975,7 @@ fn include_vertices(
 ) {
     for index in indices {
         if let Some(vertex) = data.vertices.get(usize::from(index)) {
-            mesh.include(transform.transform_point3(*vertex));
+            mesh.include(transform.transform_point3(vec3_from_nif(*vertex)));
         }
     }
 }
@@ -986,8 +993,9 @@ fn include_part(
     for index in indices {
         if let Some(vertex) = data.vertices.get(usize::from(index)) {
             has_vertices = true;
-            min = min.min(*vertex);
-            max = max.max(*vertex);
+            let vertex = vec3_from_nif(*vertex);
+            min = min.min(vertex);
+            max = max.max(vertex);
         }
     }
 
@@ -1019,6 +1027,24 @@ fn transform_local_obb(
         half_extents: half_extents.to_array(),
         orientation: orientation * local.orientation,
     })
+}
+
+fn affine3a_from_nif(value: NifAffine3A) -> Affine3A {
+    Affine3A::from_cols_array(&value.to_cols_array())
+}
+
+fn vec3_from_nif(value: NifVec3) -> Vec3 {
+    Vec3::from_array(value.to_array())
+}
+
+#[cfg(test)]
+fn nif_vec3_from_array(value: [f32; 3]) -> NifVec3 {
+    NifVec3::new(value[0], value[1], value[2])
+}
+
+#[cfg(test)]
+fn nif_mat3_from_glam(value: Mat3) -> NifMat3 {
+    NifMat3::from_cols_array(&value.to_cols_array())
 }
 
 fn decompose_uniform_transform(transform: Affine3A) -> Result<(Quat, f32), ColliderPartsFallback> {
@@ -1654,7 +1680,7 @@ mod tests {
         let geometry_data = NiTriShapeData {
             base: NiTriBasedGeomData {
                 base: NiGeometryData {
-                    vertices: vertices.iter().copied().map(Vec3::from).collect(),
+                    vertices: vertices.iter().copied().map(nif_vec3_from_array).collect(),
                     ..NiGeometryData::default()
                 },
             },
@@ -1756,18 +1782,18 @@ mod tests {
     ) {
         match stream.objects.get_mut(link.key).unwrap() {
             NiType::NiTriShape(shape) => {
-                shape.base.base.base.translation = translation;
-                shape.base.base.base.rotation = rotation;
+                shape.base.base.base.translation = nif_vec3_from_array(translation.to_array());
+                shape.base.base.base.rotation = nif_mat3_from_glam(rotation);
                 shape.base.base.base.scale = scale;
             }
             NiType::NiNode(node) => {
-                node.base.translation = translation;
-                node.base.rotation = rotation;
+                node.base.translation = nif_vec3_from_array(translation.to_array());
+                node.base.rotation = nif_mat3_from_glam(rotation);
                 node.base.scale = scale;
             }
             NiType::RootCollisionNode(node) => {
-                node.base.base.translation = translation;
-                node.base.base.rotation = rotation;
+                node.base.base.translation = nif_vec3_from_array(translation.to_array());
+                node.base.base.rotation = nif_mat3_from_glam(rotation);
                 node.base.base.scale = scale;
             }
             _ => panic!("unsupported transform target"),

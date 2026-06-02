@@ -1,6 +1,8 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, io};
 
 use tes3::esp::{Plugin, Reference, TES3Object};
+
+use crate::groundcover::CancellationToken;
 
 use super::{args::UnclipPolicy, cells::CellCoord};
 
@@ -18,13 +20,18 @@ struct TargetRefCell {
 }
 
 impl TargetRefIndex {
-    pub(crate) fn build(plugin: &Plugin, policy: &UnclipPolicy) -> Self {
+    pub(crate) fn build(
+        plugin: &Plugin,
+        policy: &UnclipPolicy,
+        cancellation: &CancellationToken,
+    ) -> io::Result<Self> {
         let mut target_cells = BTreeSet::new();
         let mut target_static_ids = BTreeSet::new();
         let mut exterior_ref_count = 0;
         let mut cells = Vec::new();
 
         for (object_index, object) in plugin.objects.iter().enumerate() {
+            super::check_cancellation(cancellation)?;
             let TES3Object::Cell(cell) = object else {
                 continue;
             };
@@ -58,12 +65,12 @@ impl TargetRefIndex {
 
         cells.sort_by_key(|cell| (cell.grid, cell.object_index));
 
-        Self {
+        Ok(Self {
             target_cells,
             target_static_ids,
             exterior_ref_count,
             cells,
-        }
+        })
     }
 
     pub(crate) fn iter_refs<'a>(
@@ -104,7 +111,13 @@ mod tests {
         };
         let policy = test_policy_with_filter(&["^flora_.*"], &[]);
 
-        let ids = TargetRefIndex::build(&plugin, &policy).target_static_ids;
+        let ids = TargetRefIndex::build(
+            &plugin,
+            &policy,
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap()
+        .target_static_ids;
 
         assert!(ids.contains("flora_grass_01"));
         assert!(!ids.contains("flora_deleted"));
@@ -126,7 +139,13 @@ mod tests {
         let policy = test_policy_with_filter(&[], &[]);
 
         assert_eq!(
-            TargetRefIndex::build(&plugin, &policy).exterior_ref_count,
+            TargetRefIndex::build(
+                &plugin,
+                &policy,
+                &crate::groundcover::CancellationToken::default()
+            )
+            .unwrap()
+            .exterior_ref_count,
             3
         );
     }
@@ -151,7 +170,13 @@ mod tests {
         let policy = test_policy_with_filter(&["^flora_.*"], &[]);
 
         assert_eq!(
-            TargetRefIndex::build(&plugin, &policy).target_cells,
+            TargetRefIndex::build(
+                &plugin,
+                &policy,
+                &crate::groundcover::CancellationToken::default()
+            )
+            .unwrap()
+            .target_cells,
             std::collections::BTreeSet::from([(1, 0), (3, 0)])
         );
     }
@@ -179,7 +204,12 @@ mod tests {
         };
         let policy = test_policy_with_filter(&["^flora_.*"], &[]);
 
-        let index = TargetRefIndex::build(&plugin, &policy);
+        let index = TargetRefIndex::build(
+            &plugin,
+            &policy,
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
         let refs = index
             .iter_refs(&plugin)
             .map(|(grid, key, reference)| (grid, key, reference.id.as_str()))

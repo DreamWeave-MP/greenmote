@@ -1,8 +1,5 @@
 use glam::{EulerRot, Quat, Vec3};
-use rapier3d::{
-    na::{Quaternion, UnitQuaternion},
-    prelude::{Cuboid, Isometry, Point, Translation, Vector},
-};
+use rapier3d::{math::Pose3, math::Rot3, math::Vec3 as RapierVec3, prelude::Cuboid};
 
 use super::mesh::{LocalObb, MeshAabb, MeshColliderParts, WorldAabb};
 
@@ -15,7 +12,7 @@ pub(crate) struct RapierCollider {
 #[derive(Clone, Debug, PartialEq)]
 struct RapierCuboid {
     half_extents: [f32; 3],
-    position: Isometry<f32>,
+    position: Pose3,
 }
 
 const CLEARANCE_CENTER_FOOTPRINT_FRACTION: f32 = 0.16;
@@ -132,8 +129,8 @@ impl RapierCollider {
         moved.bounds.min[1] += y;
         moved.bounds.max[1] += y;
         for cuboid in &mut moved.cuboids {
-            cuboid.position.translation.vector.x += x;
-            cuboid.position.translation.vector.y += y;
+            cuboid.position.translation.x += x;
+            cuboid.position.translation.y += y;
         }
         moved
     }
@@ -161,7 +158,8 @@ impl RapierCollider {
         };
         let local = cuboid
             .position
-            .inverse_transform_point(&Point::new(point[0], point[1], point[2]));
+            .inverse()
+            .transform_point(RapierVec3::new(point[0], point[1], point[2]));
         local.x.abs() <= cuboid.half_extents[0] + f32::EPSILON
             && local.y.abs() <= cuboid.half_extents[1] + f32::EPSILON
             && local.z.abs() <= cuboid.half_extents[2] + f32::EPSILON
@@ -177,7 +175,7 @@ impl RapierCollider {
 
 impl RapierCuboid {
     fn shape(&self) -> Cuboid {
-        Cuboid::new(Vector::new(
+        Cuboid::new(RapierVec3::new(
             self.half_extents[0],
             self.half_extents[1],
             self.half_extents[2],
@@ -199,7 +197,7 @@ impl RapierCuboid {
         local.map(|point| {
             let world = self
                 .position
-                .transform_point(&Point::new(point[0], point[1], point[2]));
+                .transform_point(RapierVec3::new(point[0], point[1], point[2]));
             [world.x, world.y, world.z]
         })
     }
@@ -277,12 +275,10 @@ fn openmw_rotation(rotation: [f32; 3]) -> Quat {
     Quat::from_euler(EulerRot::ZYX, -rotation[2], -rotation[1], -rotation[0])
 }
 
-fn isometry(translation: Vec3, rotation: Quat) -> Isometry<f32> {
-    Isometry::from_parts(
-        Translation::new(translation.x, translation.y, translation.z),
-        UnitQuaternion::from_quaternion(Quaternion::new(
-            rotation.w, rotation.x, rotation.y, rotation.z,
-        )),
+fn isometry(translation: Vec3, rotation: Quat) -> Pose3 {
+    Pose3::from_parts(
+        RapierVec3::new(translation.x, translation.y, translation.z),
+        Rot3::from_xyzw(rotation.x, rotation.y, rotation.z, rotation.w),
     )
 }
 

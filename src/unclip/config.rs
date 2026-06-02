@@ -131,10 +131,13 @@ impl UnclipConfig {
         Ok(Self {
             openmw_cfg,
             plugin,
-            meshgenerator_ini: args
-                .meshgenerator_ini
-                .clone()
-                .or(persisted.meshgenerator_ini),
+            meshgenerator_ini: if args.ignore_meshgenerator_ini {
+                None
+            } else {
+                args.meshgenerator_ini
+                    .clone()
+                    .or(persisted.meshgenerator_ini)
+            },
             verbose: args
                 .verbose
                 .or(args.instances)
@@ -346,6 +349,42 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.meshgenerator_ini, Some(PathBuf::from("cli.ini")));
+    }
+
+    #[test]
+    fn persisted_meshgenerator_ini_satisfies_missing_cli_path() {
+        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
+        let config = UnclipConfig::merge(
+            &args,
+            PersistedUnclipConfig {
+                meshgenerator_ini: Some(PathBuf::from("persisted.ini")),
+                ..PersistedUnclipConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.meshgenerator_ini,
+            Some(PathBuf::from("persisted.ini"))
+        );
+    }
+
+    #[test]
+    fn internal_ignore_meshgenerator_ini_suppresses_persisted_path() {
+        let mut args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
+        args.ignore_meshgenerator_ini = true;
+        let config = UnclipConfig::merge(
+            &args,
+            PersistedUnclipConfig {
+                meshgenerator_ini: Some(PathBuf::from("persisted.ini")),
+                ..PersistedUnclipConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(config.meshgenerator_ini, None);
     }
 
     #[test]

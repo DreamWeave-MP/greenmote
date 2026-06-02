@@ -5,7 +5,6 @@ use std::{
 };
 
 use clap::Parser;
-use glam::Vec3;
 use greenmote::{Cli, Command};
 use serde_json::Value;
 use tes3::{
@@ -19,6 +18,8 @@ use tes3::{
 };
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+type NifVec3 = rapier3d::math::Vec3;
 
 #[derive(Clone, Copy)]
 struct Profile {
@@ -208,7 +209,10 @@ fn write_nif(path: &Path, vertices: &[[f32; 3]; 4]) {
     let geometry_data = NiTriShapeData {
         base: NiTriBasedGeomData {
             base: NiGeometryData {
-                vertices: vertices.iter().map(|vertex| Vec3::from(*vertex)).collect(),
+                vertices: vertices
+                    .iter()
+                    .map(|vertex| NifVec3::new(vertex[0], vertex[1], vertex[2]))
+                    .collect(),
                 ..NiGeometryData::default()
             },
         },

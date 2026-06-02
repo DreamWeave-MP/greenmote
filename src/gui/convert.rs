@@ -4,7 +4,7 @@ use eframe::egui;
 
 use crate::{
     groundcover::{self, CancellationToken, ConversionEvent, ConversionPhase},
-    unclip,
+    unclip::{self, UnclipArgs},
 };
 
 use super::{ConvertRunOptions, GreenmoteApp, UiText, UnclipRunOptions};
@@ -31,6 +31,10 @@ pub(super) struct ConvertUiState {
 enum GuiEvent {
     Output(String),
     Progress(ConversionEvent),
+    UnclipTargetStatus {
+        index: usize,
+        status: UnclipTargetStatus,
+    },
     Finished {
         worker: WorkerKind,
         error: Option<String>,
@@ -47,7 +51,29 @@ enum WorkerKind {
 #[derive(Default)]
 struct UnclipUiState {
     run_options: UnclipRunOptions,
+    selected_target: Option<usize>,
+    pending_target: String,
     pending_write_confirmation: bool,
+    target_statuses: Vec<UnclipTargetStatus>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum UnclipTargetStatus {
+    #[default]
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Skipped,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct UnclipBatchSummary {
+    succeeded: usize,
+    failed: usize,
+    skipped: usize,
+    cancelled: usize,
 }
 
 #[derive(Clone)]
@@ -118,7 +144,10 @@ impl ConvertUiState {
 
     pub(super) fn sync_unclip_run_options(&mut self, options: UnclipRunOptions) {
         self.unclip.run_options = options;
+        self.unclip.selected_target = None;
+        self.unclip.pending_target.clear();
         self.unclip.pending_write_confirmation = false;
+        self.reset_unclip_target_statuses();
     }
 
     pub(super) fn sync_loaded_openmw_config_status(&mut self, openmw_cfg: Option<&Path>) {
@@ -166,6 +195,59 @@ impl ConvertUiState {
         self.unclip.pending_write_confirmation = false;
     }
 
+    fn selected_unclip_target(&self) -> Option<usize> {
+        let selected = self.unclip.selected_target?;
+        (selected < self.unclip.run_options.target_plugins.len()).then_some(selected)
+    }
+
+    fn set_selected_unclip_target(&mut self, selected: Option<usize>) {
+        self.unclip.selected_target =
+            selected.filter(|index| *index < self.unclip.run_options.target_plugins.len());
+    }
+
+    fn add_unclip_target(&mut self, target: impl Into<String>) -> bool {
+        let added = self.unclip.run_options.add_target(target);
+        if added {
+            self.unclip.selected_target =
+                self.unclip.run_options.target_plugins.len().checked_sub(1);
+            self.unclip
+                .target_statuses
+                .push(UnclipTargetStatus::Pending);
+        }
+
+        added
+    }
+
+    fn remove_selected_unclip_target(&mut self) -> bool {
+        let Some(selected) = self.selected_unclip_target() else {
+            return false;
+        };
+
+        let removed = self.unclip.run_options.remove_target(selected);
+        if removed {
+            self.unclip.target_statuses.remove(selected);
+            let len = self.unclip.run_options.target_plugins.len();
+            self.unclip.selected_target = if len == 0 {
+                None
+            } else {
+                Some(selected.min(len - 1))
+            };
+        }
+
+        removed
+    }
+
+    fn clear_unclip_targets(&mut self) {
+        self.unclip.run_options.clear_targets();
+        self.unclip.selected_target = None;
+        self.unclip.target_statuses.clear();
+    }
+
+    fn reset_unclip_target_statuses(&mut self) {
+        self.unclip.target_statuses =
+            vec![UnclipTargetStatus::Pending; self.unclip.run_options.target_plugins.len()];
+    }
+
     fn run_options_differ_from_saved(&self) -> bool {
         self.run_options != self.saved_run_options
     }
@@ -198,7 +280,7 @@ impl GreenmoteApp {
     }
 
     fn show_run_output(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("convert_output_actions")
+        egui::Panel::bottom("convert_output_actions")
             .resizable(false)
             .show_separator_line(true)
             .show_inside(ui, |ui| {
@@ -235,34 +317,7 @@ impl GreenmoteApp {
             ui.set_width(finite_widget_extent(ui.available_width()));
             ui.label(egui::RichText::new(self.localizer.text(UiText::RunOptions)).strong());
             ui.add_enabled_ui(!self.convert.running, |ui| {
-                ui.label(self.localizer.text(UiText::TargetPlugin));
-                ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.convert.unclip.run_options.plugin)
-                            .desired_width(finite_widget_extent(ui.available_width() - 84.0)),
-                    );
-                    if ui.button(self.localizer.text(UiText::Browse)).clicked()
-                        && let Some(path) = select_plugin_file(self.localizer)
-                    {
-                        self.convert.unclip.run_options.plugin = path.display().to_string();
-                    }
-                });
-
-                ui.label(self.localizer.text(UiText::MeshGeneratorIni));
-                ui.horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(
-                            &mut self.convert.unclip.run_options.meshgenerator_ini,
-                        )
-                        .desired_width(finite_widget_extent(ui.available_width() - 84.0)),
-                    );
-                    if ui.button(self.localizer.text(UiText::Browse)).clicked()
-                        && let Some(path) = select_meshgenerator_ini_file(self.localizer)
-                    {
-                        self.convert.unclip.run_options.meshgenerator_ini =
-                            path.display().to_string();
-                    }
-                });
+                self.show_unclip_target_list(ui);
 
                 ui.horizontal_wrapped(|ui| {
                     ui.checkbox(
@@ -276,6 +331,105 @@ impl GreenmoteApp {
                     .on_hover_text(self.localizer.text(UiText::DetailedRefDiagnosticsTooltip));
                 });
             });
+        });
+    }
+
+    fn show_unclip_target_list(&mut self, ui: &mut egui::Ui) {
+        ui.label(self.localizer.text(UiText::TargetPlugins));
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(finite_widget_extent(ui.available_width()));
+            if self.convert.unclip.run_options.target_plugins.is_empty() {
+                ui.label(egui::RichText::new(self.localizer.text(UiText::EmptyTargetList)).weak());
+            } else {
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        let selected_target = self.convert.selected_unclip_target();
+                        let mut next_selected = selected_target;
+                        for (index, target) in self
+                            .convert
+                            .unclip
+                            .run_options
+                            .target_plugins
+                            .iter()
+                            .enumerate()
+                        {
+                            let status = self
+                                .convert
+                                .unclip
+                                .target_statuses
+                                .get(index)
+                                .copied()
+                                .unwrap_or(UnclipTargetStatus::Pending);
+                            if ui
+                                .selectable_label(
+                                    selected_target == Some(index),
+                                    format!(
+                                        "[{}] {target}",
+                                        self.localizer.text(status.text_key())
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                next_selected = Some(index);
+                            }
+                        }
+                        self.convert.set_selected_unclip_target(next_selected);
+                    });
+            }
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(self.localizer.text(UiText::AddFiles)).clicked()
+                && let Some(paths) = select_plugin_files(self.localizer)
+            {
+                for path in paths {
+                    self.convert.add_unclip_target(path.display().to_string());
+                }
+            }
+
+            let can_remove = self.convert.selected_unclip_target().is_some();
+            if ui
+                .add_enabled(
+                    can_remove,
+                    egui::Button::new(self.localizer.text(UiText::RemoveSelectedTarget)),
+                )
+                .clicked()
+            {
+                self.convert.remove_selected_unclip_target();
+            }
+
+            let can_clear = !self.convert.unclip.run_options.target_plugins.is_empty();
+            if ui
+                .add_enabled(
+                    can_clear,
+                    egui::Button::new(self.localizer.text(UiText::ClearTargets)),
+                )
+                .clicked()
+            {
+                self.convert.clear_unclip_targets();
+            }
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.convert.unclip.pending_target)
+                    .hint_text(self.localizer.text(UiText::TargetPathEntry))
+                    .desired_width(finite_widget_extent(ui.available_width() - 112.0)),
+            );
+            let submitted =
+                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let clicked = ui
+                .button(self.localizer.text(UiText::AddTargetPath))
+                .clicked();
+            if clicked || submitted {
+                let target = self.convert.unclip.pending_target.clone();
+                if self.convert.add_unclip_target(target) {
+                    self.convert.unclip.pending_target.clear();
+                }
+            }
         });
     }
 
@@ -462,7 +616,7 @@ impl GreenmoteApp {
 
     fn validate_unclip_run(&self) -> Result<(), String> {
         self.validate_worker_start()?;
-        self.convert.unclip.run_options.to_args()?;
+        self.convert.unclip.run_options.to_args_list()?;
         if self.convert.unclip.run_options.write
             && self.settings.unclip_write_action_names().is_empty()
         {
@@ -495,7 +649,15 @@ impl GreenmoteApp {
             return;
         }
 
-        let target = self.convert.unclip.run_options.plugin.trim().to_owned();
+        let targets = self
+            .convert
+            .unclip
+            .run_options
+            .target_plugins
+            .iter()
+            .map(|target| target.trim())
+            .filter(|target| !target.is_empty())
+            .collect::<Vec<_>>();
         let actions = self.settings.unclip_write_action_names().join(", ");
         let mut confirm = false;
         let mut cancel = false;
@@ -506,7 +668,16 @@ impl GreenmoteApp {
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.label(self.localizer.text(UiText::ConfirmUnclipWriteMessage));
-                ui.label(format!("{} {target}", self.localizer.text(UiText::Target)));
+                ui.label(self.localizer.unclip_target_count(targets.len()));
+                for target in targets.iter().take(5) {
+                    ui.label(format!("- {target}"));
+                }
+                if targets.len() > 5 {
+                    ui.label(format!(
+                        "- {}",
+                        self.localizer.unclip_target_overflow(targets.len() - 5)
+                    ));
+                }
                 ui.label(format!(
                     "{} {actions}",
                     self.localizer.text(UiText::EnabledWriteActions)
@@ -544,14 +715,12 @@ impl GreenmoteApp {
             let actions_enabled = !self.convert.running;
             if ui
                 .add_enabled(
-                    self.convert.running
-                        && !self.convert.cancelling
-                        && matches!(self.convert.active_worker, Some(WorkerKind::Convert)),
+                    self.convert.running && !self.convert.cancelling,
                     egui::Button::new(self.localizer.text(UiText::Cancel)),
                 )
                 .clicked()
             {
-                self.cancel_conversion();
+                self.cancel_worker();
             }
 
             if ui
@@ -669,7 +838,7 @@ impl GreenmoteApp {
             return;
         }
 
-        let args = match self.convert.unclip.run_options.to_args() {
+        let args_list = match self.convert.unclip.run_options.to_args_list() {
             Ok(args) => args,
             Err(error) => {
                 self.set_status(error);
@@ -679,6 +848,8 @@ impl GreenmoteApp {
         let (sender, receiver) = mpsc::channel();
         let sink = GuiEventSink::new(sender, ctx.clone());
         let openmw_cfg = self.session_openmw_cfg.clone();
+        let cancellation = CancellationToken::default();
+        let worker_cancellation = cancellation.clone();
 
         self.convert.running = true;
         self.convert.unclip.pending_write_confirmation = false;
@@ -687,33 +858,58 @@ impl GreenmoteApp {
         self.convert.phase_reached = None;
         self.convert.active_worker = Some(WorkerKind::Unclip);
         self.convert.event_receiver = Some(receiver);
-        self.convert.cancellation = None;
+        self.convert.cancellation = Some(cancellation);
         self.convert.output.clear();
+        self.convert.reset_unclip_target_statuses();
         if self.convert.unclip.run_options.write {
-            self.set_status("Writing Unclip changes...");
+            self.set_status(self.localizer.text(UiText::WritingUnclipBatch));
         } else {
-            self.set_status("Inspecting plugin with Unclip...");
+            self.set_status(self.localizer.text(UiText::InspectingUnclipBatch));
         }
 
         thread::spawn(move || {
-            let mut stdout = io::sink();
-            let error = unclip::run_with_output(openmw_cfg.as_deref(), None, &args, &mut stdout)
-                .err()
-                .map(|error| error.to_string());
+            let mut stdout = GuiOutput::new(sink.clone());
+            let error = run_unclip_batch(
+                openmw_cfg.as_deref(),
+                &args_list,
+                args_list
+                    .first()
+                    .is_some_and(|args| args.write.unwrap_or(false)),
+                &mut stdout,
+                &worker_cancellation,
+                |index, status| {
+                    sink.send(GuiEvent::UnclipTargetStatus { index, status });
+                },
+                |openmw_cfg, args, stdout, cancellation| {
+                    unclip::run_with_output_and_cancel(openmw_cfg, None, args, stdout, cancellation)
+                },
+            );
+            let (error, cancelled) = match error {
+                Ok(error) => (error, false),
+                Err(error) => {
+                    let cancelled = error.kind() == io::ErrorKind::Interrupted
+                        && worker_cancellation.is_cancelled();
+                    (Some(error.to_string()), cancelled)
+                }
+            };
             sink.send(GuiEvent::Finished {
                 worker: WorkerKind::Unclip,
                 error,
-                cancelled: false,
+                cancelled,
             });
         });
     }
 
-    fn cancel_conversion(&mut self) {
+    fn cancel_worker(&mut self) {
         if let Some(cancellation) = &self.convert.cancellation {
             cancellation.cancel();
             self.convert.cancelling = true;
             self.convert.progress = None;
-            self.set_status("Cancelling conversion...");
+            let label = match self.convert.active_worker.unwrap_or(WorkerKind::Convert) {
+                WorkerKind::Convert => "conversion",
+                WorkerKind::Unclip => "Unclip",
+            };
+            self.set_status(format!("Cancelling {label}..."));
         }
     }
 
@@ -777,6 +973,11 @@ impl GreenmoteApp {
         match event {
             GuiEvent::Output(output) => self.convert.output.push_str(&output),
             GuiEvent::Progress(event) => self.handle_progress_event(event),
+            GuiEvent::UnclipTargetStatus { index, status } => {
+                if let Some(target_status) = self.convert.unclip.target_statuses.get_mut(index) {
+                    *target_status = status;
+                }
+            }
             GuiEvent::Finished {
                 worker,
                 error,
@@ -851,7 +1052,7 @@ impl GreenmoteApp {
     fn finish_worker(&mut self, worker: WorkerKind, error: Option<String>, cancelled: bool) {
         match worker {
             WorkerKind::Convert => self.finish_conversion(error, cancelled),
-            WorkerKind::Unclip => self.finish_unclip(error),
+            WorkerKind::Unclip => self.finish_unclip(error, cancelled),
         }
     }
 
@@ -875,7 +1076,7 @@ impl GreenmoteApp {
         }
     }
 
-    fn finish_unclip(&mut self, error: Option<String>) {
+    fn finish_unclip(&mut self, error: Option<String>, cancelled: bool) {
         self.convert.running = false;
         self.convert.cancelling = false;
         self.convert.progress = None;
@@ -883,14 +1084,56 @@ impl GreenmoteApp {
         self.convert.active_worker = None;
         self.convert.cancellation = None;
 
-        if let Some(error) = error {
-            append_error(&mut self.convert.output, &error);
-            self.set_status(format!("Unclip failed: {error}"));
-        } else if self.convert.unclip.run_options.write {
-            self.set_status("Unclip write finished.");
+        let label = if self.convert.unclip.run_options.write {
+            UiText::UnclipWrite
         } else {
-            self.set_status("Unclip inspection finished.");
+            UiText::UnclipInspection
+        };
+
+        if cancelled {
+            if let Some(error) = error {
+                append_error(&mut self.convert.output, &error);
+            }
+            self.set_status(self.unclip_cancelled_finished_status(label));
+        } else if let Some(error) = error {
+            self.set_status(self.unclip_finished_error_status(label, &error));
+        } else {
+            self.set_status(self.unclip_finished_status(label));
         }
+    }
+
+    fn unclip_finished_status(&self, label: UiText) -> String {
+        let summary = summarize_unclip_statuses(&self.convert.unclip.target_statuses);
+        self.localizer.unclip_finished_status(
+            self.localizer.text(label),
+            summary.succeeded,
+            summary.failed,
+            summary.skipped,
+            summary.cancelled,
+        )
+    }
+
+    fn unclip_finished_error_status(&self, label: UiText, error: &str) -> String {
+        let summary = summarize_unclip_statuses(&self.convert.unclip.target_statuses);
+        self.localizer.unclip_finished_error_status(
+            self.localizer.text(label),
+            summary.succeeded,
+            summary.failed,
+            summary.skipped,
+            summary.cancelled,
+            error,
+        )
+    }
+
+    fn unclip_cancelled_finished_status(&self, label: UiText) -> String {
+        let summary = summarize_unclip_statuses(&self.convert.unclip.target_statuses);
+        self.localizer.unclip_cancelled_finished_status(
+            self.localizer.text(label),
+            summary.succeeded,
+            summary.failed,
+            summary.skipped,
+            summary.cancelled,
+        )
     }
 
     fn cancellation_notice(&self) -> CancellationNotice {
@@ -1042,6 +1285,164 @@ impl ProgressState {
     }
 }
 
+impl UnclipTargetStatus {
+    const fn text_key(self) -> UiText {
+        match self {
+            Self::Pending => UiText::UnclipTargetPending,
+            Self::Running => UiText::UnclipTargetRunning,
+            Self::Succeeded => UiText::UnclipTargetSucceeded,
+            Self::Failed => UiText::UnclipTargetFailed,
+            Self::Skipped => UiText::UnclipTargetSkipped,
+            Self::Cancelled => UiText::UnclipTargetCancelled,
+        }
+    }
+}
+
+fn run_unclip_batch<R, S>(
+    openmw_cfg: Option<&Path>,
+    args_list: &[UnclipArgs],
+    write: bool,
+    stdout: &mut dyn io::Write,
+    cancellation: &CancellationToken,
+    mut set_status: S,
+    mut runner: R,
+) -> io::Result<Option<String>>
+where
+    R: FnMut(Option<&Path>, &UnclipArgs, &mut dyn io::Write, &CancellationToken) -> io::Result<()>,
+    S: FnMut(usize, UnclipTargetStatus),
+{
+    let mut summary = UnclipBatchSummary::default();
+    let mut first_error = None;
+
+    for (index, args) in args_list.iter().enumerate() {
+        if cancellation.is_cancelled() {
+            for (skipped_index, skipped_args) in args_list.iter().enumerate().skip(index) {
+                let skipped = unclip_target_label(skipped_args);
+                summary.skipped += 1;
+                set_status(skipped_index, UnclipTargetStatus::Skipped);
+                writeln!(stdout, "=== Unclip: {skipped} ===").ok();
+                writeln!(
+                    stdout,
+                    "Unclip target skipped after cancellation: {skipped}\n"
+                )
+                .ok();
+            }
+            write_unclip_batch_summary(stdout, summary, true);
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "unclip cancelled",
+            ));
+        }
+        let target = unclip_target_label(args);
+        writeln!(stdout, "=== Unclip: {target} ===").ok();
+        set_status(index, UnclipTargetStatus::Running);
+
+        match runner(openmw_cfg, args, stdout, cancellation) {
+            Ok(()) => {
+                summary.succeeded += 1;
+                set_status(index, UnclipTargetStatus::Succeeded);
+                writeln!(stdout, "Unclip target succeeded: {target}\n").ok();
+            }
+            Err(error) => {
+                if error.kind() == io::ErrorKind::Interrupted && cancellation.is_cancelled() {
+                    summary.cancelled += 1;
+                    set_status(index, UnclipTargetStatus::Cancelled);
+                    writeln!(stdout, "Unclip target cancelled: {target}").ok();
+                    writeln!(stdout, "error:").ok();
+                    writeln!(stdout, "{error}\n").ok();
+                    for (skipped_index, skipped_args) in
+                        args_list.iter().enumerate().skip(index + 1)
+                    {
+                        let skipped = unclip_target_label(skipped_args);
+                        summary.skipped += 1;
+                        set_status(skipped_index, UnclipTargetStatus::Skipped);
+                        writeln!(stdout, "=== Unclip: {skipped} ===").ok();
+                        writeln!(
+                            stdout,
+                            "Unclip target skipped after cancellation: {skipped}\n"
+                        )
+                        .ok();
+                    }
+                    write_unclip_batch_summary(stdout, summary, true);
+                    return Err(error);
+                }
+                let error = error.to_string();
+                summary.failed += 1;
+                set_status(index, UnclipTargetStatus::Failed);
+                writeln!(stdout, "Unclip target failed: {target}").ok();
+                writeln!(stdout, "error:").ok();
+                writeln!(stdout, "{error}\n").ok();
+                if write {
+                    first_error = Some(error);
+                    for (skipped_index, skipped_args) in
+                        args_list.iter().enumerate().skip(index + 1)
+                    {
+                        let skipped = unclip_target_label(skipped_args);
+                        summary.skipped += 1;
+                        set_status(skipped_index, UnclipTargetStatus::Skipped);
+                        writeln!(stdout, "=== Unclip: {skipped} ===").ok();
+                        writeln!(
+                            stdout,
+                            "Unclip target skipped after previous write failure: {skipped}\n"
+                        )
+                        .ok();
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    write_unclip_batch_summary(stdout, summary, false);
+
+    Ok(first_error)
+}
+
+fn write_unclip_batch_summary(
+    stdout: &mut dyn io::Write,
+    summary: UnclipBatchSummary,
+    cancelled: bool,
+) {
+    if cancelled {
+        writeln!(
+            stdout,
+            "Unclip batch summary: {} succeeded, {} failed, {} skipped, {} cancelled.",
+            summary.succeeded, summary.failed, summary.skipped, summary.cancelled
+        )
+        .ok();
+        writeln!(stdout, "Unclip batch cancelled.").ok();
+    } else {
+        writeln!(
+            stdout,
+            "Unclip batch summary: {} succeeded, {} failed, {} skipped.",
+            summary.succeeded, summary.failed, summary.skipped
+        )
+        .ok();
+    }
+}
+
+fn unclip_target_label(args: &UnclipArgs) -> String {
+    args.plugin.as_ref().map_or_else(
+        || "(no target plugin)".to_owned(),
+        |plugin| plugin.display().to_string(),
+    )
+}
+
+fn summarize_unclip_statuses(statuses: &[UnclipTargetStatus]) -> UnclipBatchSummary {
+    statuses
+        .iter()
+        .fold(UnclipBatchSummary::default(), |mut summary, status| {
+            match status {
+                UnclipTargetStatus::Succeeded => summary.succeeded += 1,
+                UnclipTargetStatus::Failed => summary.failed += 1,
+                UnclipTargetStatus::Skipped => summary.skipped += 1,
+                UnclipTargetStatus::Cancelled => summary.cancelled += 1,
+                UnclipTargetStatus::Pending | UnclipTargetStatus::Running => {}
+            }
+            summary
+        })
+}
+
 fn append_error(output: &mut String, error: &str) {
     if !output.is_empty() {
         output.push('\n');
@@ -1128,21 +1529,14 @@ fn open_path_native(path: &Path) -> io::Result<()> {
         .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no path opener available")))
 }
 
-fn select_plugin_file(localizer: super::Localizer) -> Option<std::path::PathBuf> {
+fn select_plugin_files(localizer: super::Localizer) -> Option<Vec<std::path::PathBuf>> {
     rfd::FileDialog::new()
-        .set_title(localizer.text(UiText::SelectUnclipTargetPlugin))
+        .set_title(localizer.text(UiText::SelectUnclipTargetPlugins))
         .add_filter(
             localizer.text(UiText::OpenMwPlugins),
             &["omwaddon", "esp", "esm"],
         )
-        .pick_file()
-}
-
-fn select_meshgenerator_ini_file(localizer: super::Localizer) -> Option<std::path::PathBuf> {
-    rfd::FileDialog::new()
-        .set_title(localizer.text(UiText::SelectMeshGeneratorIni))
-        .add_filter("INI", &["ini"])
-        .pick_file()
+        .pick_files()
 }
 
 #[cfg(target_os = "windows")]
@@ -1186,12 +1580,17 @@ fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, path::Path};
+    use std::{ffi::OsString, io, path::Path};
 
     use super::{
-        ConvertRunOptions, ConvertUiState, UnclipRunOptions, egui, loaded_openmw_config_status,
+        ConvertRunOptions, ConvertUiState, UnclipRunOptions, UnclipTargetStatus, egui,
+        loaded_openmw_config_status, run_unclip_batch,
     };
-    use crate::gui::{AppTab, GreenmoteApp};
+    use crate::{
+        groundcover::CancellationToken,
+        gui::{AppTab, GreenmoteApp, UiLanguage},
+        unclip::UnclipArgs,
+    };
 
     #[cfg(all(unix, not(target_os = "macos")))]
     use super::path_open_commands;
@@ -1270,6 +1669,23 @@ mod tests {
     }
 
     #[test]
+    fn unclip_target_state_add_remove_and_clear_updates_selection() {
+        let mut state = ConvertUiState::ready();
+
+        assert!(state.add_unclip_target("first.omwaddon"));
+        assert!(state.add_unclip_target("second.omwaddon"));
+        assert_eq!(state.selected_unclip_target(), Some(1));
+
+        assert!(state.remove_selected_unclip_target());
+        assert_eq!(state.unclip.run_options.target_plugins, ["first.omwaddon"]);
+        assert_eq!(state.selected_unclip_target(), Some(0));
+
+        state.clear_unclip_targets();
+        assert!(state.unclip.run_options.target_plugins.is_empty());
+        assert_eq!(state.selected_unclip_target(), None);
+    }
+
+    #[test]
     fn loaded_openmw_config_status_includes_path() {
         let path = Path::new("/tmp/openmw.cfg");
 
@@ -1283,8 +1699,7 @@ mod tests {
     fn pending_unclip_write_confirmation_cannot_start_after_worker_becomes_active() {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
-            plugin: "target.omwaddon".to_owned(),
-            meshgenerator_ini: String::new(),
+            target_plugins: vec!["target.omwaddon".to_owned()],
             verbose: false,
             write: true,
         };
@@ -1308,8 +1723,7 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.settings.clear_unclip_write_actions_for_test();
         app.convert.unclip.run_options = UnclipRunOptions {
-            plugin: "target.omwaddon".to_owned(),
-            meshgenerator_ini: String::new(),
+            target_plugins: vec!["target.omwaddon".to_owned()],
             verbose: false,
             write: true,
         };
@@ -1320,6 +1734,299 @@ mod tests {
             error,
             "Unclip write mode is blocked because no write actions are enabled in Settings."
         );
+    }
+
+    #[test]
+    fn finish_unclip_cancelled_status_includes_batch_counts() {
+        let mut app = GreenmoteApp::default();
+        app.localizer.set_language(UiLanguage::French);
+        app.convert.unclip.run_options.write = true;
+        app.convert.unclip.target_statuses =
+            vec![UnclipTargetStatus::Cancelled, UnclipTargetStatus::Skipped];
+
+        app.finish_unclip(None, true);
+
+        assert_eq!(
+            app.convert.status,
+            "Unclip annulé. Écriture Unclip terminée : 0 réussis, 0 échoués, 1 ignorés, 1 annulés."
+        );
+        assert!(!app.convert.status.contains("Unclip cancelled"));
+    }
+
+    #[test]
+    fn unclip_validation_accepts_multiple_usable_targets_for_batch_runs() {
+        let mut app = GreenmoteApp::default();
+        app.convert.unclip.run_options = UnclipRunOptions {
+            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        app.validate_unclip_run().unwrap();
+    }
+
+    #[test]
+    fn unclip_batch_runs_targets_in_order() {
+        let args = test_unclip_args(["first.omwaddon", "second.omwaddon"], false);
+        let mut output = Vec::new();
+        let mut order = Vec::new();
+        let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        let error = run_unclip_batch(
+            None,
+            &args,
+            false,
+            &mut output,
+            &cancellation,
+            |index, status| statuses.push((index, status)),
+            |_openmw_cfg, args, _stdout, _cancellation| {
+                order.push(args.plugin.as_ref().unwrap().display().to_string());
+                Ok(())
+            },
+        );
+
+        assert_eq!(error.unwrap(), None);
+        assert_eq!(order, ["first.omwaddon", "second.omwaddon"]);
+        assert_eq!(
+            statuses,
+            [
+                (0, UnclipTargetStatus::Running),
+                (0, UnclipTargetStatus::Succeeded),
+                (1, UnclipTargetStatus::Running),
+                (1, UnclipTargetStatus::Succeeded),
+            ]
+        );
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("=== Unclip: first.omwaddon ==="));
+        assert!(output.contains("Unclip batch summary: 2 succeeded, 0 failed, 0 skipped."));
+    }
+
+    #[test]
+    fn unclip_inspect_batch_continues_after_failure() {
+        let args = test_unclip_args(
+            ["first.omwaddon", "second.omwaddon", "third.omwaddon"],
+            false,
+        );
+        let mut output = Vec::new();
+        let mut order = Vec::new();
+        let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        let error = run_unclip_batch(
+            None,
+            &args,
+            false,
+            &mut output,
+            &cancellation,
+            |index, status| statuses.push((index, status)),
+            |_openmw_cfg, args, _stdout, _cancellation| {
+                let target = args.plugin.as_ref().unwrap().display().to_string();
+                order.push(target.clone());
+                if target == "second.omwaddon" {
+                    Err(std::io::Error::other("simulated failure"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(error.unwrap(), None);
+        assert_eq!(
+            order,
+            ["first.omwaddon", "second.omwaddon", "third.omwaddon"]
+        );
+        assert!(statuses.contains(&(1, UnclipTargetStatus::Failed)));
+        assert!(statuses.contains(&(2, UnclipTargetStatus::Succeeded)));
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Unclip target failed: second.omwaddon"));
+        assert!(output.contains("Unclip batch summary: 2 succeeded, 1 failed, 0 skipped."));
+    }
+
+    #[test]
+    fn unclip_write_batch_stops_after_first_failure_and_skips_rest() {
+        let args = test_unclip_args(
+            ["first.omwaddon", "second.omwaddon", "third.omwaddon"],
+            true,
+        );
+        let mut output = Vec::new();
+        let mut order = Vec::new();
+        let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        let error = run_unclip_batch(
+            None,
+            &args,
+            true,
+            &mut output,
+            &cancellation,
+            |index, status| statuses.push((index, status)),
+            |_openmw_cfg, args, _stdout, _cancellation| {
+                let target = args.plugin.as_ref().unwrap().display().to_string();
+                order.push(target.clone());
+                if target == "second.omwaddon" {
+                    Err(std::io::Error::other("simulated failure"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(error.unwrap().as_deref(), Some("simulated failure"));
+        assert_eq!(order, ["first.omwaddon", "second.omwaddon"]);
+        assert!(statuses.contains(&(1, UnclipTargetStatus::Failed)));
+        assert!(statuses.contains(&(2, UnclipTargetStatus::Skipped)));
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains("Unclip target skipped after previous write failure: third.omwaddon")
+        );
+        assert!(output.contains("Unclip batch summary: 1 succeeded, 1 failed, 1 skipped."));
+    }
+
+    #[test]
+    fn unclip_batch_cancellation_before_next_target_skips_remaining_and_interrupts() {
+        let args = test_unclip_args(["first.omwaddon", "second.omwaddon"], false);
+        let mut output = Vec::new();
+        let mut order = Vec::new();
+        let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        let error = run_unclip_batch(
+            None,
+            &args,
+            false,
+            &mut output,
+            &cancellation,
+            |index, status| statuses.push((index, status)),
+            |_openmw_cfg, args, _stdout, cancellation| {
+                order.push(args.plugin.as_ref().unwrap().display().to_string());
+                cancellation.cancel();
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(order, ["first.omwaddon"]);
+        assert_eq!(
+            statuses,
+            [
+                (0, UnclipTargetStatus::Running),
+                (0, UnclipTargetStatus::Succeeded),
+                (1, UnclipTargetStatus::Skipped),
+            ]
+        );
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Unclip target skipped after cancellation: second.omwaddon"));
+        assert!(output.contains("Unclip batch cancelled."));
+    }
+
+    #[test]
+    fn unclip_batch_current_target_cancellation_marks_cancelled_and_skips_rest() {
+        let args = test_unclip_args(["first.omwaddon", "second.omwaddon"], false);
+        let mut output = Vec::new();
+        let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        let error = run_unclip_batch(
+            None,
+            &args,
+            false,
+            &mut output,
+            &cancellation,
+            |index, status| statuses.push((index, status)),
+            |_openmw_cfg, _args, _stdout, cancellation| {
+                cancellation.cancel();
+                Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "unclip cancelled",
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(
+            statuses,
+            [
+                (0, UnclipTargetStatus::Running),
+                (0, UnclipTargetStatus::Cancelled),
+                (1, UnclipTargetStatus::Skipped),
+            ]
+        );
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Unclip target cancelled: first.omwaddon"));
+        assert!(output.contains("Unclip target skipped after cancellation: second.omwaddon"));
+        assert!(
+            output.contains("Unclip batch summary: 0 succeeded, 0 failed, 1 skipped, 1 cancelled.")
+        );
+    }
+
+    #[test]
+    fn unclip_single_target_batch_succeeds() {
+        let args = test_unclip_args(["single.omwaddon"], false);
+        let mut output = Vec::new();
+        let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        let error = run_unclip_batch(
+            None,
+            &args,
+            false,
+            &mut output,
+            &cancellation,
+            |index, status| statuses.push((index, status)),
+            |_openmw_cfg, _args, _stdout, _cancellation| Ok(()),
+        );
+
+        assert_eq!(error.unwrap(), None);
+        assert_eq!(
+            statuses,
+            [
+                (0, UnclipTargetStatus::Running),
+                (0, UnclipTargetStatus::Succeeded),
+            ]
+        );
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Unclip batch summary: 1 succeeded, 0 failed, 0 skipped."));
+    }
+
+    fn test_unclip_args<const N: usize>(targets: [&str; N], write: bool) -> Vec<UnclipArgs> {
+        targets
+            .into_iter()
+            .map(|target| UnclipArgs {
+                plugin: Some(target.into()),
+                meshgenerator_ini: None,
+                ignore_meshgenerator_ini: true,
+                instances: None,
+                verbose: Some(false),
+                structured: Some(false),
+                write: Some(write),
+                write_actions: Vec::new(),
+                origin_epsilon: None,
+                relocation_step: None,
+                relocation_steps: None,
+                orientation_epsilon: None,
+                include_grass_ids: Vec::new(),
+                exclude_grass_ids: Vec::new(),
+                include_occluder_ids: Vec::new(),
+                exclude_occluder_ids: Vec::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unclip_validation_rejects_blank_target_list() {
+        let mut app = GreenmoteApp::default();
+        app.convert.unclip.run_options = UnclipRunOptions {
+            target_plugins: vec![" ".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        let error = app.validate_unclip_run().unwrap_err();
+
+        assert_eq!(error, "Choose a target plugin before running Unclip.");
     }
 
     #[test]

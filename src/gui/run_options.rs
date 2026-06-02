@@ -16,8 +16,7 @@ pub(super) struct ConvertRunOptions {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct UnclipRunOptions {
-    pub(super) plugin: String,
-    pub(super) meshgenerator_ini: String,
+    pub(super) target_plugins: Vec<String>,
     pub(super) verbose: bool,
     pub(super) write: bool,
 }
@@ -72,50 +71,81 @@ impl ConvertRunOptions {
 impl UnclipRunOptions {
     #[must_use]
     pub(super) fn from_config(config: &GroundcoverConfig) -> Self {
+        let target_plugins = config
+            .unclip
+            .plugin
+            .as_ref()
+            .map(|path| vec![path.display().to_string()])
+            .unwrap_or_default();
+
         Self {
-            plugin: config
-                .unclip
-                .plugin
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
-            meshgenerator_ini: config
-                .unclip
-                .meshgenerator_ini
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
+            target_plugins,
             verbose: config.unclip.verbose.unwrap_or(false),
             write: false,
         }
     }
 
-    pub(super) fn to_args(&self) -> Result<UnclipArgs, String> {
-        let plugin = self.plugin.trim();
-        if plugin.is_empty() {
+    pub(super) fn add_target(&mut self, target: impl Into<String>) -> bool {
+        let target = target.into();
+        let target = target.trim();
+        if target.is_empty()
+            || self
+                .target_plugins
+                .iter()
+                .any(|existing| existing == target)
+        {
+            return false;
+        }
+
+        self.target_plugins.push(target.to_owned());
+        true
+    }
+
+    pub(super) fn remove_target(&mut self, index: usize) -> bool {
+        if index >= self.target_plugins.len() {
+            return false;
+        }
+
+        self.target_plugins.remove(index);
+        true
+    }
+
+    pub(super) fn clear_targets(&mut self) {
+        self.target_plugins.clear();
+    }
+
+    pub(super) fn to_args_list(&self) -> Result<Vec<UnclipArgs>, String> {
+        let plugins = self
+            .target_plugins
+            .iter()
+            .map(|plugin| plugin.trim())
+            .filter(|plugin| !plugin.is_empty());
+        let args = plugins
+            .map(|plugin| UnclipArgs {
+                plugin: Some(PathBuf::from(plugin)),
+                meshgenerator_ini: None,
+                ignore_meshgenerator_ini: true,
+                instances: None,
+                verbose: Some(self.verbose),
+                structured: Some(false),
+                write: Some(self.write),
+                write_actions: Vec::new(),
+                origin_epsilon: None,
+                relocation_step: None,
+                relocation_steps: None,
+                orientation_epsilon: None,
+                include_grass_ids: Vec::new(),
+                exclude_grass_ids: Vec::new(),
+                include_occluder_ids: Vec::new(),
+                exclude_occluder_ids: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        if args.is_empty() {
             return Err("Choose a target plugin before running Unclip.".to_owned());
         }
 
-        let meshgenerator_ini = self.meshgenerator_ini.trim();
-
-        Ok(UnclipArgs {
-            plugin: Some(PathBuf::from(plugin)),
-            meshgenerator_ini: (!meshgenerator_ini.is_empty())
-                .then(|| PathBuf::from(meshgenerator_ini)),
-            instances: None,
-            verbose: Some(self.verbose),
-            structured: Some(false),
-            write: Some(self.write),
-            write_actions: Vec::new(),
-            origin_epsilon: None,
-            relocation_step: None,
-            relocation_steps: None,
-            orientation_epsilon: None,
-            include_grass_ids: Vec::new(),
-            exclude_grass_ids: Vec::new(),
-            include_occluder_ids: Vec::new(),
-            exclude_occluder_ids: Vec::new(),
-        })
+        Ok(args)
     }
 }
 
@@ -257,25 +287,35 @@ mod tests {
 
         let options = UnclipRunOptions::from_config(&config);
 
-        assert_eq!(options.plugin, "groundcover.omwaddon");
-        assert_eq!(options.meshgenerator_ini, "groundcover.ini");
+        assert_eq!(options.target_plugins, ["groundcover.omwaddon"]);
         assert!(options.verbose);
         assert!(!options.write);
     }
 
     #[test]
+    fn unclip_run_options_config_prefill_creates_one_target() {
+        let mut config = GroundcoverConfig::default();
+        config.unclip.plugin = Some("groundcover.omwaddon".into());
+
+        let options = UnclipRunOptions::from_config(&config);
+
+        assert_eq!(options.target_plugins, vec!["groundcover.omwaddon"]);
+    }
+
+    #[test]
     fn unclip_run_options_build_explicit_safe_args() {
         let options = UnclipRunOptions {
-            plugin: " groundcover.omwaddon ".to_owned(),
-            meshgenerator_ini: " groundcover.ini ".to_owned(),
+            target_plugins: vec![" groundcover.omwaddon ".to_owned()],
             verbose: true,
             write: false,
         };
 
-        let args = options.to_args().unwrap();
+        let args = options.to_args_list().unwrap();
+        let args = args.first().unwrap();
 
         assert_eq!(args.plugin, Some("groundcover.omwaddon".into()));
-        assert_eq!(args.meshgenerator_ini, Some("groundcover.ini".into()));
+        assert_eq!(args.meshgenerator_ini, None);
+        assert!(args.ignore_meshgenerator_ini);
         assert_eq!(args.instances, None);
         assert_eq!(args.verbose, Some(true));
         assert_eq!(args.structured, Some(false));
@@ -285,6 +325,66 @@ mod tests {
 
     #[test]
     fn unclip_run_options_reject_empty_plugin() {
-        assert!(UnclipRunOptions::default().to_args().is_err());
+        assert!(UnclipRunOptions::default().to_args_list().is_err());
+    }
+
+    #[test]
+    fn unclip_run_options_add_target_preserves_order_and_dedupes_exact_names() {
+        let mut options = UnclipRunOptions::default();
+
+        assert!(options.add_target(" first.omwaddon "));
+        assert!(options.add_target("second.omwaddon"));
+        assert!(!options.add_target("first.omwaddon"));
+        assert!(!options.add_target(" "));
+
+        assert_eq!(
+            options.target_plugins,
+            ["first.omwaddon", "second.omwaddon"]
+        );
+    }
+
+    #[test]
+    fn unclip_run_options_remove_and_clear_targets() {
+        let mut options = UnclipRunOptions {
+            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        assert!(options.remove_target(0));
+        assert!(!options.remove_target(3));
+        assert_eq!(options.target_plugins, ["second.omwaddon"]);
+
+        options.clear_targets();
+        assert!(options.target_plugins.is_empty());
+    }
+
+    #[test]
+    fn unclip_run_options_builds_multiple_args() {
+        let options = UnclipRunOptions {
+            target_plugins: vec![" first.omwaddon ".to_owned(), "second.omwaddon".to_owned()],
+            verbose: false,
+            write: true,
+        };
+
+        let args = options.to_args_list().unwrap();
+
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0].plugin, Some("first.omwaddon".into()));
+        assert_eq!(args[1].plugin, Some("second.omwaddon".into()));
+    }
+
+    #[test]
+    fn unclip_run_options_all_args_ignore_meshgenerator_ini() {
+        let options = UnclipRunOptions {
+            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            verbose: false,
+            write: false,
+        };
+
+        let args = options.to_args_list().unwrap();
+
+        assert!(args.iter().all(|args| args.meshgenerator_ini.is_none()));
+        assert!(args.iter().all(|args| args.ignore_meshgenerator_ini));
     }
 }

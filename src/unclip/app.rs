@@ -6,7 +6,7 @@ use std::{
 
 use tes3::esp::{Landscape, Plugin};
 
-use crate::groundcover::{LOG_NAME, openmw};
+use crate::groundcover::{CancellationToken, LOG_NAME, openmw};
 
 use super::{
     args::UnclipPolicy,
@@ -30,23 +30,36 @@ use super::{
     writer::save_plugin_with_backup,
 };
 
-pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
+#[allow(clippy::too_many_lines)]
+pub fn run(
+    config: &UnclipConfig,
+    stdout: &mut dyn Write,
+    cancellation: &CancellationToken,
+) -> io::Result<()> {
+    super::check_cancellation(cancellation)?;
     let policy = config
         .policy()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    super::check_cancellation(cancellation)?;
     let openmw_config = openmw::load_config_from_path(config.openmw_cfg.as_deref())?;
     let vfs = openmw::build_vfs(&openmw_config);
     let target_plugin = resolve_target_plugin(&config.plugin, &openmw_config, &vfs)?;
+    super::check_cancellation(cancellation)?;
     let mut target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
     let context_plugin_paths = context_plugin_paths(&openmw_config, &vfs)?;
-    let context_plugins = load_context_plugins(&context_plugin_paths)?;
+    super::check_cancellation(cancellation)?;
+    let context_plugins = load_context_plugins(&context_plugin_paths, cancellation)?;
     let target_is_active = path_matches_any(&target_plugin.source_path, &context_plugin_paths);
+    super::check_cancellation(cancellation)?;
     let active_static_index = build_static_index(&context_plugins, None);
+    super::check_cancellation(cancellation)?;
     let target_static_index =
         target_static_index(&context_plugins, target_is_active, &target_plugin_data);
-    let target_refs = TargetRefIndex::build(&target_plugin_data, &policy);
+    let target_refs = TargetRefIndex::build(&target_plugin_data, &policy, cancellation)?;
     let active_cells = active_cells(&target_refs.target_cells)?;
+    super::check_cancellation(cancellation)?;
     let terrain = terrain_from_context_plugins(&context_plugins, &active_cells);
+    super::check_cancellation(cancellation)?;
     let mut mesh_cache = MeshCache::new(&vfs);
     let generated_placements = load_generated_placements(
         config,
@@ -54,6 +67,7 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         &target_refs,
         &terrain,
         &target_static_index,
+        cancellation,
     )?;
     let contact_baselines = build_contact_baselines(
         &target_plugin_data,
@@ -61,7 +75,8 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         &terrain,
         &target_static_index,
         &mut mesh_cache,
-    );
+        cancellation,
+    )?;
     let (static_occluders, static_occluder_report) = build_static_occluders(
         &context_plugins,
         &active_cells,
@@ -69,7 +84,8 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         &mut mesh_cache,
         &target_refs.target_static_ids,
         &policy.occluder_filter,
-    );
+        cancellation,
+    )?;
     let missing_active_terrain_cells = missing_active_terrain_cells(&active_cells, &terrain);
     let mut report_context = build_report_context(ReportContextBuildInput {
         target_plugin_path: &target_plugin.source_path,
@@ -92,12 +108,15 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
             static_occluders: &static_occluders,
             policy: &policy,
             generated_placements: &generated_placements,
+            cancellation,
         },
         write_actions_enabled,
-    ));
+    )?);
+    super::check_cancellation(cancellation)?;
     let write_status = write_plan.as_ref().map(WriteStatusIndex::from_plan);
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
     let mut log = BufWriter::new(File::create(log_path)?);
+    super::check_cancellation(cancellation)?;
     let mut output = OutputContext {
         plugin: &target_plugin_data,
         target_refs: &target_refs,
@@ -110,8 +129,14 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         contact_baselines: &contact_baselines,
         generated_placements: &generated_placements,
     };
-    let inspection =
-        inspect_refs_and_write_optional_log(&mut log, config, &mut output, write_status.as_ref())?;
+    let inspection = inspect_refs_and_write_optional_log(
+        &mut log,
+        config,
+        &mut output,
+        write_status.as_ref(),
+        cancellation,
+    )?;
+    super::check_cancellation(cancellation)?;
     report_context.write = save_write_plan(
         &mut target_plugin_data,
         &target_plugin.source_path,
@@ -120,6 +145,7 @@ pub fn run(config: &UnclipConfig, stdout: &mut dyn Write) -> io::Result<()> {
         config.write,
         (!write_actions_enabled).then_some("all_write_actions_disabled"),
     )?;
+    super::check_cancellation(cancellation)?;
     write_reports(
         stdout,
         config,
@@ -197,11 +223,12 @@ fn write_reports(
 fn plan_requested_unclip_adjustments(
     input: UnclipWritePlanningInput<'_, '_>,
     write_actions_enabled: bool,
-) -> WritePlan {
+) -> io::Result<WritePlan> {
     if write_actions_enabled {
         plan_unclip_adjustments(input)
     } else {
-        WritePlan::default()
+        super::check_cancellation(input.cancellation)?;
+        Ok(WritePlan::default())
     }
 }
 
@@ -275,6 +302,7 @@ fn inspect_refs_and_write_optional_log(
     config: &UnclipConfig,
     output: &mut OutputContext<'_, '_>,
     write_status: Option<&WriteStatusIndex>,
+    cancellation: &CancellationToken,
 ) -> io::Result<TerrainInspectionReport> {
     let mut context = ReferenceInspectionContext {
         terrain: output.terrain,
@@ -292,14 +320,16 @@ fn inspect_refs_and_write_optional_log(
             output.plugin,
             output.target_refs,
             &mut context,
+            cancellation,
             |reference| report::write_reference_text(log, reference),
         )
     } else {
-        Ok(count_target_refs(
+        count_target_refs(
             output.plugin,
             output.target_refs,
             &mut context,
-        ))
+            cancellation,
+        )
     }
 }
 
@@ -309,6 +339,7 @@ fn load_generated_placements(
     target_refs: &TargetRefIndex,
     terrain: &TerrainIndex,
     static_index: &StaticMeshIndex,
+    cancellation: &CancellationToken,
 ) -> io::Result<GeneratedPlacementIndex> {
     GeneratedPlacementIndex::build(
         config.meshgenerator_ini.as_deref(),
@@ -316,6 +347,7 @@ fn load_generated_placements(
         target_refs,
         terrain,
         static_index,
+        cancellation,
     )
 }
 

@@ -1,6 +1,8 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, io};
 
 use tes3::esp::{Plugin, TES3Object};
+
+use crate::groundcover::CancellationToken;
 
 use super::{
     args::{RelocationPolicy, UnclipPolicy},
@@ -42,9 +44,12 @@ pub(crate) struct UnclipWritePlanningInput<'a, 'b> {
     pub(crate) static_occluders: &'a StaticOccluderIndex,
     pub(crate) policy: &'a UnclipPolicy,
     pub(crate) generated_placements: &'a GeneratedPlacementIndex,
+    pub(crate) cancellation: &'a CancellationToken,
 }
 
-pub(crate) fn plan_unclip_adjustments(input: UnclipWritePlanningInput<'_, '_>) -> WritePlan {
+pub(crate) fn plan_unclip_adjustments(
+    input: UnclipWritePlanningInput<'_, '_>,
+) -> io::Result<WritePlan> {
     let UnclipWritePlanningInput {
         plugin,
         target_refs,
@@ -54,6 +59,7 @@ pub(crate) fn plan_unclip_adjustments(input: UnclipWritePlanningInput<'_, '_>) -
         static_occluders,
         policy,
         generated_placements,
+        cancellation,
     } = input;
     let mut plan = WritePlan::default();
     let mut context = WritePlanningContext {
@@ -63,14 +69,20 @@ pub(crate) fn plan_unclip_adjustments(input: UnclipWritePlanningInput<'_, '_>) -
         static_occluders,
         policy,
         generated_placements,
+        cancellation,
     };
     for (cell_grid, key, reference) in target_refs.iter_refs(plugin) {
-        let change =
-            adjust_reference_for_terrain_and_static_bounds(cell_grid, key, reference, &mut context);
+        super::check_cancellation(cancellation)?;
+        let change = adjust_reference_for_terrain_and_static_bounds(
+            cell_grid,
+            key,
+            reference,
+            &mut context,
+        )?;
         record_reference_change(change, &mut plan);
     }
 
-    plan
+    Ok(plan)
 }
 
 struct WritePlanningContext<'a, 'b> {
@@ -80,6 +92,7 @@ struct WritePlanningContext<'a, 'b> {
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
     generated_placements: &'a GeneratedPlacementIndex,
+    cancellation: &'a CancellationToken,
 }
 
 pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
@@ -248,16 +261,16 @@ fn adjust_reference_for_terrain_and_static_bounds(
     key: (u32, u32),
     reference: &tes3::esp::Reference,
     context: &mut WritePlanningContext<'_, '_>,
-) -> WriteReferenceChange {
+) -> io::Result<WriteReferenceChange> {
     if reference.deleted == Some(true) {
-        return WriteReferenceChange::None(None);
+        return Ok(WriteReferenceChange::None(None));
     }
     let terrain = context.terrain;
     let static_occluders = context.static_occluders;
     let policy = context.policy;
     let target = WriteTarget { cell, key };
     let Some(static_mesh) = context.static_index.get(&reference.id) else {
-        return WriteReferenceChange::None(None);
+        return Ok(WriteReferenceChange::None(None));
     };
     let generated_placement = context.generated_placements.get(static_mesh);
     let orientation_context = OrientationPlanningContext {
@@ -270,9 +283,10 @@ fn adjust_reference_for_terrain_and_static_bounds(
         static_occluders,
         policy,
         generated_placement,
+        cancellation: context.cancellation,
     };
     let Ok(geometry) = context.mesh_contacts.geometry(static_mesh) else {
-        return WriteReferenceChange::None(None);
+        return Ok(WriteReferenceChange::None(None));
     };
 
     let terrain_z = origin_terrain_z(terrain, reference.translation, generated_placement);
@@ -298,20 +312,24 @@ fn adjust_reference_for_terrain_and_static_bounds(
         corrected_translation,
         geometry,
         static_bounds_context,
-    ) {
+    )? {
         StaticBoundsPlanResult::Continue(final_translation) => final_translation,
         StaticBoundsPlanResult::FinishTerrainAndOrientation(final_translation) => {
-            return finish_with_terrain_and_orientation(
+            return Ok(finish_with_terrain_and_orientation(
                 changes,
                 final_translation,
                 adjustment_context,
-            );
+            ));
         }
-        StaticBoundsPlanResult::Stop => return changes_to_result(changes),
+        StaticBoundsPlanResult::Stop => return Ok(changes_to_result(changes)),
     };
 
     if changes.move_.is_none() {
-        return finish_with_terrain_and_orientation(changes, final_translation, adjustment_context);
+        return Ok(finish_with_terrain_and_orientation(
+            changes,
+            final_translation,
+            adjustment_context,
+        ));
     }
     plan_orientation_to_changes(
         &mut changes,
@@ -321,7 +339,7 @@ fn adjust_reference_for_terrain_and_static_bounds(
         geometry,
         orientation_context,
     );
-    changes_to_result(changes)
+    Ok(changes_to_result(changes))
 }
 
 enum StaticBoundsPlanResult {
@@ -336,6 +354,7 @@ struct StaticBoundsPlanningContext<'a> {
     static_occluders: &'a StaticOccluderIndex,
     policy: &'a UnclipPolicy,
     generated_placement: Option<GeneratedPlacement>,
+    cancellation: &'a CancellationToken,
 }
 
 #[derive(Clone, Copy)]
@@ -356,7 +375,7 @@ fn plan_static_bounds_change(
     corrected_translation: [f32; 3],
     geometry: &MeshGeometry,
     context: StaticBoundsPlanningContext<'_>,
-) -> StaticBoundsPlanResult {
+) -> io::Result<StaticBoundsPlanResult> {
     let (corrected_bounds, corrected_collider, clearance_collider) = corrected_static_bounds(
         geometry.bounds,
         corrected_translation,
@@ -379,7 +398,7 @@ fn plan_static_bounds_change(
             ));
         }
         StaticBoundsAction::Delete { ratio, occluder } => {
-            let move_ = context.policy.write_actions.static_move().then(|| {
+            let move_ = if context.policy.write_actions.static_move() {
                 try_static_bounds_move(
                     target,
                     reference,
@@ -390,9 +409,11 @@ fn plan_static_bounds_change(
                         occluder,
                         reason: StaticBoundsBlockReason::Volume,
                     },
-                )
-            });
-            if let Some(Some(move_)) = move_ {
+                )?
+            } else {
+                None
+            };
+            if let Some(move_) = move_ {
                 changes.static_bounds_analysis = Some(static_bounds_analysis(
                     target,
                     "static_bounds_relocatable",
@@ -402,7 +423,7 @@ fn plan_static_bounds_change(
                 ));
                 let new_position = move_.new_position;
                 changes.move_ = Some(move_);
-                return StaticBoundsPlanResult::Continue(new_position);
+                return Ok(StaticBoundsPlanResult::Continue(new_position));
             }
             changes.static_bounds_analysis = Some(static_bounds_analysis(
                 target,
@@ -419,7 +440,7 @@ fn plan_static_bounds_change(
                     ratio,
                     occluder,
                 ));
-                return StaticBoundsPlanResult::Stop;
+                return Ok(StaticBoundsPlanResult::Stop);
             }
         }
         StaticBoundsAction::Move {
@@ -446,20 +467,20 @@ fn plan_static_bounds_change(
         }
         StaticBoundsAction::Move { .. } => {}
     }
-    StaticBoundsPlanResult::Continue(reference.translation)
+    Ok(StaticBoundsPlanResult::Continue(reference.translation))
 }
 
 fn plan_static_bounds_move_change(
     changes: &mut WriteReferenceChanges,
     input: StaticBoundsMovePlanInput<'_, '_>,
-) -> StaticBoundsPlanResult {
+) -> io::Result<StaticBoundsPlanResult> {
     let move_ = try_static_bounds_move(
         input.target,
         input.reference,
         input.corrected_translation,
         relocation_search_context(input.geometry, input.context),
         input.cause,
-    );
+    )?;
     let status = static_bounds_move_status(input.cause.reason, move_.is_some());
     changes.static_bounds_analysis = Some(static_bounds_analysis(
         input.target,
@@ -484,13 +505,15 @@ fn plan_static_bounds_move_change(
                 input.cause.ratio,
                 input.cause.occluder,
             ));
-            return StaticBoundsPlanResult::Stop;
+            return Ok(StaticBoundsPlanResult::Stop);
         }
-        return StaticBoundsPlanResult::FinishTerrainAndOrientation(input.reference.translation);
+        return Ok(StaticBoundsPlanResult::FinishTerrainAndOrientation(
+            input.reference.translation,
+        ));
     };
     let new_position = move_.new_position;
     changes.move_ = Some(move_);
-    StaticBoundsPlanResult::Continue(new_position)
+    Ok(StaticBoundsPlanResult::Continue(new_position))
 }
 
 fn corrected_static_bounds(
@@ -537,6 +560,7 @@ fn relocation_search_context<'a>(
         static_occluders: context.static_occluders,
         relocation: context.policy.relocation,
         generated_placement: context.generated_placement,
+        cancellation: Some(context.cancellation),
     }
 }
 
@@ -646,7 +670,7 @@ fn try_static_bounds_move(
     corrected_translation: [f32; 3],
     search: RelocationSearchContext<'_>,
     cause: StaticBoundsMoveCause<'_>,
-) -> Option<WriteStaticBoundsMove> {
+) -> io::Result<Option<WriteStaticBoundsMove>> {
     apply_static_bounds_move(
         target,
         reference,
@@ -697,11 +721,14 @@ fn apply_static_bounds_move(
     transform: RefTransform,
     search: RelocationSearchContext<'_>,
     cause: StaticBoundsMoveCause<'_>,
-) -> Option<WriteStaticBoundsMove> {
+) -> io::Result<Option<WriteStaticBoundsMove>> {
     let old_position = transform.translation;
-    let new_position = find_valid_relocation_transform(target.cell, transform, search)?;
+    let Some(new_position) = find_valid_relocation_transform(target.cell, transform, search)?
+    else {
+        return Ok(None);
+    };
 
-    Some(WriteStaticBoundsMove {
+    Ok(Some(WriteStaticBoundsMove {
         cell: [target.cell.0, target.cell.1],
         reference_key: [target.key.0, target.key.1],
         id: reference.id.clone(),
@@ -712,7 +739,7 @@ fn apply_static_bounds_move(
         occluder_id: cause.occluder.id.clone(),
         occluder_cell: cause.occluder.cell,
         occluder_reference_key: cause.occluder.reference_key,
-    })
+    }))
 }
 
 const fn static_bounds_block_reason(reason: StaticBoundsBlockReason) -> &'static str {
@@ -729,13 +756,14 @@ pub(crate) struct RelocationSearchContext<'a> {
     pub(crate) static_occluders: &'a StaticOccluderIndex,
     pub(crate) relocation: RelocationPolicy,
     pub(crate) generated_placement: Option<GeneratedPlacement>,
+    pub(crate) cancellation: Option<&'a CancellationToken>,
 }
 
 pub(crate) fn find_valid_relocation_transform(
     cell: CellCoord,
     transform: RefTransform,
     search: RelocationSearchContext<'_>,
-) -> Option<[f32; 3]> {
+) -> io::Result<Option<[f32; 3]>> {
     let RefTransform {
         translation,
         rotation,
@@ -752,8 +780,14 @@ pub(crate) fn find_valid_relocation_transform(
     );
 
     for step in 1..=search.relocation.steps {
+        if let Some(cancellation) = search.cancellation {
+            super::check_cancellation(cancellation)?;
+        }
         let radius = f32::from(step) * search.relocation.step;
         for direction in RELOCATION_DIRECTIONS {
+            if let Some(cancellation) = search.cancellation {
+                super::check_cancellation(cancellation)?;
+            }
             let candidate_xy = [
                 original[0] + direction[0] * radius,
                 original[1] + direction[1] * radius,
@@ -775,11 +809,13 @@ pub(crate) fn find_valid_relocation_transform(
             let mut candidate_translation = translation;
             candidate_translation[0] = candidate_xy[0];
             candidate_translation[1] = candidate_xy[1];
-            let terrain_z = origin_terrain_z(
+            let Some(terrain_z) = origin_terrain_z(
                 search.terrain,
                 candidate_translation,
                 search.generated_placement,
-            )?;
+            ) else {
+                continue;
+            };
             candidate_translation[2] -=
                 terrain_delta(candidate_translation, terrain_z, search.generated_placement);
             let final_collider = RapierCollider::from_mesh_bounds(
@@ -797,12 +833,12 @@ pub(crate) fn find_valid_relocation_transform(
             if !search.static_occluders.intersects_shape(&final_collider)
                 && !search.static_occluders.intersects_shape(&final_clearance)
             {
-                return Some(candidate_translation);
+                return Ok(Some(candidate_translation));
             }
         }
     }
 
-    None
+    Ok(None)
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -926,14 +962,17 @@ mod tests {
         plan_contact_adjustment, plan_reference_orientation, plan_static_bounds_change,
         record_reference_change,
     };
-    use crate::unclip::{
-        args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
-        generated_placement::GeneratedPlacement,
-        mesh::{MeshAabb, MeshContact, MeshGeometry, WorldAabb},
-        occlusion::{StaticOccluder, StaticOccluderIndex},
-        physics::RapierCollider,
-        terrain::TerrainIndex,
-        write_plan::{WriteOrientation, WritePlan, WriteStaticBoundsDeletion},
+    use crate::{
+        groundcover::CancellationToken,
+        unclip::{
+            args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
+            generated_placement::GeneratedPlacement,
+            mesh::{MeshAabb, MeshContact, MeshGeometry, WorldAabb},
+            occlusion::{StaticOccluder, StaticOccluderIndex},
+            physics::RapierCollider,
+            terrain::TerrainIndex,
+            write_plan::{WriteOrientation, WritePlan, WriteStaticBoundsDeletion},
+        },
     };
 
     #[test]
@@ -1111,6 +1150,7 @@ mod tests {
         }]);
         let policy = test_policy();
         let mut changes = WriteReferenceChanges::default();
+        let cancellation = CancellationToken::default();
 
         let result = plan_static_bounds_change(
             &mut changes,
@@ -1129,8 +1169,10 @@ mod tests {
                     z_offset: 0.0,
                     tolerance: 4.0,
                 }),
+                cancellation: &cancellation,
             },
-        );
+        )
+        .unwrap();
 
         let StaticBoundsPlanResult::Continue(new_position) = result else {
             panic!("relocatable fully occluded ref should continue with moved position");
@@ -1245,8 +1287,10 @@ mod tests {
                 static_occluders: &static_occluders,
                 policy: &policy,
                 generated_placement: None,
+                cancellation: &CancellationToken::default(),
             },
-        );
+        )
+        .unwrap();
 
         assert!(matches!(result, StaticBoundsPlanResult::Stop));
         assert!(changes.move_.is_none());
@@ -1293,12 +1337,51 @@ mod tests {
                     z_offset: 0.0,
                     tolerance: 4.0,
                 }),
+                cancellation: None,
             },
         )
+        .unwrap()
         .unwrap();
 
         assert_close(moved[0], 68.0);
         assert_close(moved[1], 100.0);
+    }
+
+    #[test]
+    fn relocation_search_returns_interrupted_when_cancelled() {
+        let terrain = flat_terrain();
+        let cancellation = CancellationToken::default();
+        cancellation.cancel();
+
+        let error = super::find_valid_relocation_transform(
+            (0, 0),
+            super::RefTransform {
+                translation: [100.0, 100.0, 0.0],
+                rotation: [0.0; 3],
+                scale: None,
+            },
+            super::RelocationSearchContext {
+                bounds: MeshAabb {
+                    min: [-1.0, -1.0, 0.0],
+                    max: [1.0, 1.0, 10.0],
+                },
+                terrain: &terrain,
+                static_occluders: &StaticOccluderIndex::new(Vec::new()),
+                relocation: RelocationPolicy {
+                    step: 32.0,
+                    steps: 8,
+                },
+                generated_placement: Some(GeneratedPlacement {
+                    z_offset: 0.0,
+                    tolerance: 4.0,
+                }),
+                cancellation: Some(&cancellation),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+        assert_eq!(error.to_string(), "unclip cancelled");
     }
 
     #[test]
@@ -1503,8 +1586,10 @@ mod tests {
                     z_offset: 0.0,
                     tolerance: 4.0,
                 }),
+                cancellation: &CancellationToken::default(),
             },
-        );
+        )
+        .unwrap();
         (result, changes)
     }
 

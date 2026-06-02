@@ -1,6 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+};
 
 use tes3::esp::{Cell, Plugin};
+
+use crate::groundcover::CancellationToken;
 
 use super::{
     args::IdFilter,
@@ -34,14 +39,16 @@ pub(crate) fn build_static_occluders(
     mesh_bounds: &mut MeshCache<'_>,
     target_static_ids: &BTreeSet<String>,
     occluder_filter: &IdFilter,
-) -> (StaticOccluderIndex, StaticOccluderBuildReport) {
+    cancellation: &CancellationToken,
+) -> io::Result<(StaticOccluderIndex, StaticOccluderBuildReport)> {
     let effective_refs = effective_static_occluder_refs(
         active_plugins,
         active_cells,
         static_index,
         target_static_ids,
         occluder_filter,
-    );
+        cancellation,
+    )?;
     let mut build_report = StaticOccluderBuildReport {
         active_refs_scanned: effective_refs.len(),
         target_refs_excluded: effective_refs
@@ -67,6 +74,7 @@ pub(crate) fn build_static_occluders(
     let mut occluders = Vec::new();
 
     for (key, state) in effective_refs {
+        super::check_cancellation(cancellation)?;
         let EffectiveRefState::Candidate {
             reference,
             static_mesh,
@@ -110,7 +118,7 @@ pub(crate) fn build_static_occluders(
         });
     }
 
-    (StaticOccluderIndex::new(occluders), build_report)
+    Ok((StaticOccluderIndex::new(occluders), build_report))
 }
 
 #[cfg(test)]
@@ -156,11 +164,14 @@ fn effective_static_occluder_refs<'a>(
     static_index: &'a StaticMeshIndex,
     target_static_ids: &BTreeSet<String>,
     occluder_filter: &IdFilter,
-) -> BTreeMap<EffectiveRefKey, EffectiveRefState<'a>> {
+    cancellation: &CancellationToken,
+) -> io::Result<BTreeMap<EffectiveRefKey, EffectiveRefState<'a>>> {
     let mut refs = BTreeMap::new();
 
     for plugin in active_plugins {
+        super::check_cancellation(cancellation)?;
         for cell in plugin.objects_of_type::<Cell>() {
+            super::check_cancellation(cancellation)?;
             if !cell.is_exterior() || !active_cells.contains(&cell.data.grid) {
                 continue;
             }
@@ -194,7 +205,7 @@ fn effective_static_occluder_refs<'a>(
         }
     }
 
-    refs
+    Ok(refs)
 }
 
 #[cfg(test)]
@@ -205,7 +216,6 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use glam::Vec3;
     use tes3::esp::{Cell, CellData, Plugin, Reference, Static, TES3Object};
     use tes3::nif::{
         NiAVObject, NiGeometry, NiGeometryData, NiLink, NiObjectNET, NiStream, NiTriBasedGeom,
@@ -214,6 +224,8 @@ mod tests {
     use vfstool_lib::VFS;
 
     use crate::unclip::{args::IdFilter, cells::CellCoord};
+
+    type NifVec3 = rapier3d::math::Vec3;
 
     use super::{
         EffectiveRefState, ExclusionReason, build_static_occluders, effective_static_occluder_refs,
@@ -361,7 +373,9 @@ mod tests {
             &mut mesh_bounds,
             &BTreeSet::new(),
             &IdFilter::new(&[], &[]).unwrap(),
-        );
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
 
         assert_eq!(report.active_refs_scanned, 2);
         assert_eq!(report.missing_bounds, 1);
@@ -394,7 +408,9 @@ mod tests {
             &mut mesh_bounds,
             &BTreeSet::from(["grass".to_owned()]),
             &IdFilter::new(&[], &[]).unwrap(),
-        );
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
 
         assert_eq!(report.active_refs_scanned, 1);
         assert_eq!(report.target_refs_excluded, 1);
@@ -428,7 +444,9 @@ mod tests {
             &mut mesh_bounds,
             &BTreeSet::new(),
             &IdFilter::new(&[], &["^tree_huge$".to_owned()]).unwrap(),
-        );
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
 
         assert_eq!(report.active_refs_scanned, 1);
         assert_eq!(report.regex_excluded, 1);
@@ -468,7 +486,9 @@ mod tests {
             &mut mesh_bounds,
             &BTreeSet::new(),
             &IdFilter::new(&[], &[]).unwrap(),
-        );
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
 
         assert_eq!(report.resolved_bounds, 2);
         assert_eq!(report.collision_source, 1);
@@ -501,7 +521,9 @@ mod tests {
             &mut mesh_bounds,
             &BTreeSet::new(),
             &IdFilter::new(&[], &[]).unwrap(),
-        );
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
 
         assert_eq!(report.active_refs_scanned, 1);
         assert_eq!(report.unresolved_static, 1);
@@ -643,7 +665,11 @@ mod tests {
         let geometry_data = NiTriShapeData {
             base: NiTriBasedGeomData {
                 base: NiGeometryData {
-                    vertices: vertices.iter().copied().map(Vec3::from).collect(),
+                    vertices: vertices
+                        .iter()
+                        .copied()
+                        .map(|vertex| NifVec3::new(vertex[0], vertex[1], vertex[2]))
+                        .collect(),
                     ..NiGeometryData::default()
                 },
             },
@@ -687,6 +713,8 @@ mod tests {
             static_index,
             target_static_ids,
             &IdFilter::new(&[], &[]).unwrap(),
+            &crate::groundcover::CancellationToken::default(),
         )
+        .unwrap()
     }
 }

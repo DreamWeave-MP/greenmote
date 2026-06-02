@@ -2,6 +2,8 @@ use std::{collections::BTreeMap, io, path::Path};
 
 use tes3::esp::Plugin;
 
+use crate::groundcover::CancellationToken;
+
 use super::{
     mesh::{StaticMesh, StaticMeshIndex},
     target::TargetRefIndex,
@@ -37,11 +39,18 @@ impl GeneratedPlacementIndex {
         target_refs: &TargetRefIndex,
         terrain: &TerrainIndex,
         static_index: &StaticMeshIndex,
+        cancellation: &CancellationToken,
     ) -> io::Result<Self> {
         let hints =
             meshgenerator_ini.map_or_else(|| Ok(BTreeMap::new()), read_meshgenerator_hints)?;
-        let samples =
-            OriginPlacementSamples::collect(plugin, target_refs, terrain, static_index, &hints);
+        let samples = OriginPlacementSamples::collect(
+            plugin,
+            target_refs,
+            terrain,
+            static_index,
+            &hints,
+            cancellation,
+        )?;
         let placements_by_mesh = samples
             .groups
             .iter()
@@ -108,9 +117,11 @@ impl OriginPlacementSamples {
         terrain: &TerrainIndex,
         static_index: &StaticMeshIndex,
         hints: &BTreeMap<String, f32>,
-    ) -> Self {
+        cancellation: &CancellationToken,
+    ) -> io::Result<Self> {
         let mut groups = BTreeMap::<String, OriginPlacementSampleGroup>::new();
         for (_, _, reference) in target_refs.iter_refs(plugin) {
+            super::check_cancellation(cancellation)?;
             if reference.deleted == Some(true) {
                 continue;
             }
@@ -134,7 +145,7 @@ impl OriginPlacementSamples {
                 .or_default() += 1;
         }
 
-        Self { groups }
+        Ok(Self { groups })
     }
 }
 

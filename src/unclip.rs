@@ -2,6 +2,8 @@
 
 use std::{io, io::Write, path::Path};
 
+use crate::groundcover::CancellationToken;
+
 mod app;
 mod args;
 mod cells;
@@ -58,8 +60,31 @@ pub fn run_with_output(
     args: &UnclipArgs,
     stdout: &mut dyn Write,
 ) -> io::Result<()> {
+    run_with_output_and_cancel(
+        openmw_cfg,
+        config_path,
+        args,
+        stdout,
+        &CancellationToken::default(),
+    )
+}
+
+pub(crate) fn run_with_output_and_cancel(
+    openmw_cfg: Option<&Path>,
+    config_path: Option<&Path>,
+    args: &UnclipArgs,
+    stdout: &mut dyn Write,
+    cancellation: &CancellationToken,
+) -> io::Result<()> {
     let mut stderr = io::stderr().lock();
-    run_with_output_and_prompt(openmw_cfg, config_path, args, stdout, &mut stderr)
+    run_with_output_and_prompt_and_cancel(
+        openmw_cfg,
+        config_path,
+        args,
+        stdout,
+        &mut stderr,
+        cancellation,
+    )
 }
 
 pub(crate) fn run_with_output_and_prompt(
@@ -69,7 +94,38 @@ pub(crate) fn run_with_output_and_prompt(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> io::Result<()> {
+    run_with_output_and_prompt_and_cancel(
+        openmw_cfg,
+        config_path,
+        args,
+        stdout,
+        stderr,
+        &CancellationToken::default(),
+    )
+}
+
+pub(crate) fn run_with_output_and_prompt_and_cancel(
+    openmw_cfg: Option<&Path>,
+    config_path: Option<&Path>,
+    args: &UnclipArgs,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    cancellation: &CancellationToken,
+) -> io::Result<()> {
+    check_cancellation(cancellation)?;
     let mut stdin = io::stdin().lock();
     let config = config::UnclipConfig::get(openmw_cfg, config_path, args, &mut stdin, stderr)?;
-    app::run(&config, stdout)
+    app::run(&config, stdout, cancellation)
+}
+
+pub(crate) fn check_cancellation(cancellation: &CancellationToken) -> io::Result<()> {
+    if cancellation.is_cancelled() {
+        Err(cancelled_error())
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn cancelled_error() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "unclip cancelled")
 }

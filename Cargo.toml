@@ -10,16 +10,16 @@ gui = ["dep:eframe", "dep:rfd"]
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.1"
-clap_mangen = "0.2.29"
-eframe = { version = "0.33.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
+clap_mangen = "0.3.0"
+eframe = { version = "0.34.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
 rfd = { version = "0.17.2", optional = true }
 rayon = "1.12.0"
 regex = "1.12.3"
-rapier3d = { version = "0.27.0", default-features = false, features = ["dim3", "f32"] }
+rapier3d = { version = "0.32.0", default-features = false, features = ["dim3", "f32"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 toml = "1.1.2"
-glam = "0.30.10"
+glam = "0.33.0"
 
 [dependencies.openmw-config]
 version = "1.0.4"
