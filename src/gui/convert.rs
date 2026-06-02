@@ -364,7 +364,10 @@ impl GreenmoteApp {
                             if ui
                                 .selectable_label(
                                     selected_target == Some(index),
-                                    format!("[{}] {target}", status.label()),
+                                    format!(
+                                        "[{}] {target}",
+                                        self.localizer.text(status.text_key())
+                                    ),
                                 )
                                 .clicked()
                             {
@@ -857,9 +860,9 @@ impl GreenmoteApp {
         self.convert.output.clear();
         self.convert.reset_unclip_target_statuses();
         if self.convert.unclip.run_options.write {
-            self.set_status("Writing Unclip batch...");
+            self.set_status(self.localizer.text(UiText::WritingUnclipBatch));
         } else {
-            self.set_status("Inspecting Unclip batch...");
+            self.set_status(self.localizer.text(UiText::InspectingUnclipBatch));
         }
 
         thread::spawn(move || {
@@ -1067,21 +1070,19 @@ impl GreenmoteApp {
         if let Some(error) = error {
             self.set_status(format!("Unclip failed: {error}"));
         } else if self.convert.unclip.run_options.write {
-            self.set_status(self.unclip_finished_status("Unclip write"));
+            self.set_status(self.unclip_finished_status(UiText::UnclipWrite));
         } else {
-            self.set_status(self.unclip_finished_status("Unclip inspection"));
+            self.set_status(self.unclip_finished_status(UiText::UnclipInspection));
         }
     }
 
-    fn unclip_finished_status(&self, label: &str) -> String {
+    fn unclip_finished_status(&self, label: UiText) -> String {
         let summary = summarize_unclip_statuses(&self.convert.unclip.target_statuses);
-        if summary.failed == 0 && summary.skipped == 0 {
-            return format!("{label} finished.");
-        }
-
-        format!(
-            "{label} finished: {} succeeded, {} failed, {} skipped.",
-            summary.succeeded, summary.failed, summary.skipped
+        self.localizer.unclip_finished_status(
+            self.localizer.text(label),
+            summary.succeeded,
+            summary.failed,
+            summary.skipped,
         )
     }
 
@@ -1235,13 +1236,13 @@ impl ProgressState {
 }
 
 impl UnclipTargetStatus {
-    const fn label(self) -> &'static str {
+    const fn text_key(self) -> UiText {
         match self {
-            Self::Pending => "Pending",
-            Self::Running => "Running",
-            Self::Succeeded => "Succeeded",
-            Self::Failed => "Failed",
-            Self::Skipped => "Skipped",
+            Self::Pending => UiText::UnclipTargetPending,
+            Self::Running => UiText::UnclipTargetRunning,
+            Self::Succeeded => UiText::UnclipTargetSucceeded,
+            Self::Failed => UiText::UnclipTargetFailed,
+            Self::Skipped => UiText::UnclipTargetSkipped,
         }
     }
 }

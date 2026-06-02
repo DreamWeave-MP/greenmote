@@ -74,6 +74,15 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::CopyOutput => "Kopiera utdata",
         UiText::OpenOutputDir => "Öppna utdatakatalog",
         UiText::OpenLog => "Öppna logg",
+        UiText::WritingUnclipBatch => "Skriver Unclip-batch...",
+        UiText::InspectingUnclipBatch => "Inspekterar Unclip-batch...",
+        UiText::UnclipWrite => "Unclip-skrivning",
+        UiText::UnclipInspection => "Unclip-inspektion",
+        UiText::UnclipTargetPending => "Väntar",
+        UiText::UnclipTargetRunning => "Körs",
+        UiText::UnclipTargetSucceeded => "Lyckades",
+        UiText::UnclipTargetFailed => "Misslyckades",
+        UiText::UnclipTargetSkipped => "Överhoppad",
         _ => unreachable!(),
     }
 }

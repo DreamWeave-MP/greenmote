@@ -46,7 +46,16 @@ macro_rules! route_text {
             | UiText::ClearOutput
             | UiText::CopyOutput
             | UiText::OpenOutputDir
-            | UiText::OpenLog => $convert($key),
+            | UiText::OpenLog
+            | UiText::WritingUnclipBatch
+            | UiText::InspectingUnclipBatch
+            | UiText::UnclipWrite
+            | UiText::UnclipInspection
+            | UiText::UnclipTargetPending
+            | UiText::UnclipTargetRunning
+            | UiText::UnclipTargetSucceeded
+            | UiText::UnclipTargetFailed
+            | UiText::UnclipTargetSkipped => $convert($key),
             UiText::ConfirmUnclipWriteTitle
             | UiText::ConfirmUnclipWriteMessage
             | UiText::EnabledWriteActions
@@ -193,6 +202,15 @@ pub(super) enum UiText {
     CopyOutput,
     OpenOutputDir,
     OpenLog,
+    WritingUnclipBatch,
+    InspectingUnclipBatch,
+    UnclipWrite,
+    UnclipInspection,
+    UnclipTargetPending,
+    UnclipTargetRunning,
+    UnclipTargetSucceeded,
+    UnclipTargetFailed,
+    UnclipTargetSkipped,
     ConfirmUnclipWriteTitle,
     ConfirmUnclipWriteMessage,
     EnabledWriteActions,
@@ -325,6 +343,48 @@ impl Localizer {
             UiLanguage::Swedish => swedish::unclip_target_overflow(count),
         }
     }
+
+    pub(super) fn unclip_finished_status(
+        self,
+        label: &str,
+        succeeded: usize,
+        failed: usize,
+        skipped: usize,
+    ) -> String {
+        if failed == 0 && skipped == 0 {
+            return match self.language {
+                UiLanguage::English => format!("{label} finished."),
+                UiLanguage::French => format!("{label} terminée."),
+                UiLanguage::German => format!("{label} abgeschlossen."),
+                UiLanguage::Russian => format!("{label} завершена."),
+                UiLanguage::Spanish => format!("{label} finalizada."),
+                UiLanguage::Swedish => format!("{label} slutförd."),
+            };
+        }
+
+        match self.language {
+            UiLanguage::English => {
+                format!(
+                    "{label} finished: {succeeded} succeeded, {failed} failed, {skipped} skipped."
+                )
+            }
+            UiLanguage::French => format!(
+                "{label} terminée : {succeeded} réussis, {failed} échoués, {skipped} ignorés."
+            ),
+            UiLanguage::German => format!(
+                "{label} abgeschlossen: {succeeded} erfolgreich, {failed} fehlgeschlagen, {skipped} übersprungen."
+            ),
+            UiLanguage::Russian => format!(
+                "{label} завершена: успешно: {succeeded}, с ошибкой: {failed}, пропущено: {skipped}."
+            ),
+            UiLanguage::Spanish => format!(
+                "{label} finalizada: {succeeded} correctos, {failed} fallidos, {skipped} omitidos."
+            ),
+            UiLanguage::Swedish => format!(
+                "{label} slutförd: {succeeded} lyckades, {failed} misslyckades, {skipped} hoppades över."
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -346,6 +406,11 @@ mod tests {
         assert_eq!(localizer.unclip_target_count(1), "Target: 1 plugin");
         assert_eq!(localizer.unclip_target_count(6), "Targets: 6 plugins");
         assert_eq!(localizer.unclip_target_overflow(2), "... and 2 more");
+        assert_eq!(localizer.text(UiText::UnclipTargetPending), "Pending");
+        assert_eq!(
+            localizer.unclip_finished_status("Unclip write", 2, 1, 1),
+            "Unclip write finished: 2 succeeded, 1 failed, 1 skipped."
+        );
 
         let mut french = Localizer::default();
         french.set_language(UiLanguage::French);
@@ -379,6 +444,12 @@ mod tests {
         assert_eq!(russian.unclip_target_count(5), "Цели: 5 плагинов");
         assert_eq!(russian.unclip_target_count(21), "Цели: 21 плагин");
         assert_eq!(russian.unclip_target_overflow(12), "... и еще 12 плагинов");
+        assert_eq!(russian.text(UiText::TargetPlugins), "Целевые плагины");
+        assert_eq!(russian.text(UiText::UnclipTargetSkipped), "Пропущено");
+        assert_eq!(
+            russian.unclip_finished_status("Запись Unclip", 2, 1, 1),
+            "Запись Unclip завершена: успешно: 2, с ошибкой: 1, пропущено: 1."
+        );
 
         let mut spanish = Localizer::default();
         spanish.set_language(UiLanguage::Spanish);

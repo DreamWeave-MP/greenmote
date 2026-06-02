@@ -80,6 +80,15 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::CopyOutput => "Copier la sortie",
         UiText::OpenOutputDir => "Ouvrir le dossier de sortie",
         UiText::OpenLog => "Ouvrir le journal",
+        UiText::WritingUnclipBatch => "Écriture du lot Unclip...",
+        UiText::InspectingUnclipBatch => "Inspection du lot Unclip...",
+        UiText::UnclipWrite => "Écriture Unclip",
+        UiText::UnclipInspection => "Inspection Unclip",
+        UiText::UnclipTargetPending => "En attente",
+        UiText::UnclipTargetRunning => "En cours",
+        UiText::UnclipTargetSucceeded => "Réussi",
+        UiText::UnclipTargetFailed => "Échoué",
+        UiText::UnclipTargetSkipped => "Ignoré",
         _ => unreachable!(),
     }
 }

@@ -59,24 +59,24 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Параметры запуска",
-        UiText::TargetPlugins => "Целевые plugins",
+        UiText::TargetPlugins => "Целевые плагины",
         UiText::AddFiles => "Добавить файлы...",
-        UiText::AddTargetPath => "Добавить цель/путь",
-        UiText::RemoveSelectedTarget => "Удалить выбранную цель",
-        UiText::ClearTargets => "Очистить цели",
-        UiText::EmptyTargetList => "Целевые plugins не добавлены.",
-        UiText::TargetPathEntry => "Имя plugin или путь",
-        UiText::WriteChangesToPlugin => "Записать изменения в plugin",
+        UiText::AddTargetPath => "Добавить плагин/путь",
+        UiText::RemoveSelectedTarget => "Удалить выбранный плагин",
+        UiText::ClearTargets => "Очистить список плагинов",
+        UiText::EmptyTargetList => "Целевые плагины не добавлены.",
+        UiText::TargetPathEntry => "Имя плагина или путь",
+        UiText::WriteChangesToPlugin => "Записать изменения в плагин",
         UiText::DetailedRefDiagnostics => "Подробный лог",
         UiText::DetailedRefDiagnosticsTooltip => {
             "Записывает полную диагностику Unclip по каждой ссылке в greenmote.log. Медленнее и может создавать очень большие файлы лога."
         }
         UiText::StartConversion => "Начать конвертацию",
         UiText::WriteChanges => "Записать изменения",
-        UiText::InspectPlugin => "Проверить plugin",
+        UiText::InspectPlugin => "Проверить плагин",
         UiText::DryRun => "Пробный запуск",
         UiText::DebugDiagnostics => "Отладочная диагностика",
-        UiText::AutoEnableGeneratedPlugins => "Автоматически включать созданные plugins",
+        UiText::AutoEnableGeneratedPlugins => "Автоматически включать созданные плагины",
         UiText::SaveAsDefaults => "Сохранить по умолчанию",
         UiText::ResetFromSaved => "Сбросить к сохраненному",
         UiText::RunOptionsDiffer => {
@@ -92,6 +92,15 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::CopyOutput => "Копировать вывод",
         UiText::OpenOutputDir => "Открыть папку вывода",
         UiText::OpenLog => "Открыть лог",
+        UiText::WritingUnclipBatch => "Запись пакета Unclip...",
+        UiText::InspectingUnclipBatch => "Проверка пакета Unclip...",
+        UiText::UnclipWrite => "Запись Unclip",
+        UiText::UnclipInspection => "Проверка Unclip",
+        UiText::UnclipTargetPending => "Ожидает",
+        UiText::UnclipTargetRunning => "Выполняется",
+        UiText::UnclipTargetSucceeded => "Успешно",
+        UiText::UnclipTargetFailed => "Ошибка",
+        UiText::UnclipTargetSkipped => "Пропущено",
         _ => unreachable!(),
     }
 }
@@ -119,7 +128,7 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Выберите допустимый путь к конфигурации OpenMW перед продолжением."
         }
         UiText::SelectOpenMwConfig => "Выбрать конфигурацию OpenMW",
-        UiText::SelectUnclipTargetPlugins => "Выбрать целевые plugins Unclip",
+        UiText::SelectUnclipTargetPlugins => "Выбрать целевые плагины Unclip",
         _ => unreachable!(),
     }
 }
@@ -127,7 +136,7 @@ const fn dialog_text(key: UiText) -> &'static str {
 const fn settings_text(key: UiText) -> &'static str {
     match key {
         UiText::OpenMwConfig => "Конфигурация OpenMW",
-        UiText::OpenMwPlugins => "Plugins OpenMW",
+        UiText::OpenMwPlugins => "Плагины OpenMW",
         UiText::UsingOpenMwAutodetection => "Используется автообнаружение OpenMW.",
         UiText::OpenMwConfigCannotChangeWhileRunning => {
             "Конфигурацию OpenMW нельзя менять во время выполнения."
@@ -142,8 +151,8 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::NoGrassIdPatterns => "Шаблоны Grass ID не настроены.",
         UiText::ExcludePatterns => "Шаблоны исключения",
         UiText::NoExcludePatterns => "Шаблоны исключения не настроены.",
-        UiText::IgnoredPlugins => "Игнорируемые plugins",
-        UiText::NoIgnoredPlugins => "Игнорируемые plugins не настроены.",
+        UiText::IgnoredPlugins => "Игнорируемые плагины",
+        UiText::NoIgnoredPlugins => "Игнорируемые плагины не настроены.",
         UiText::RunOptionsConfiguredOnConvert => {
             "Параметры запуска настраиваются на экране Конвертация."
         }
@@ -185,14 +194,14 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::NoExcludeOccluderIds => "Фильтры исключения ID occluders не настроены.",
         UiText::AddGrassIdPatternTitle => "Добавить шаблон Grass ID",
         UiText::AddExcludePatternTitle => "Добавить шаблон исключения",
-        UiText::AddIgnoredPluginTitle => "Добавить игнорируемый plugin",
+        UiText::AddIgnoredPluginTitle => "Добавить игнорируемый плагин",
         UiText::AddIncludeGrassIdRegexTitle => "Добавить regex включения Grass ID",
         UiText::AddExcludeGrassIdRegexTitle => "Добавить regex исключения Grass ID",
         UiText::AddIncludeOccluderIdRegexTitle => "Добавить regex включения ID occluders",
         UiText::AddExcludeOccluderIdRegexTitle => "Добавить regex исключения ID occluders",
         UiText::GrassIdPatternPrompt => "Шаблон Grass ID",
         UiText::ExcludePatternPrompt => "Шаблон исключения",
-        UiText::IgnoredPluginPrompt => "Игнорируемый plugin",
+        UiText::IgnoredPluginPrompt => "Игнорируемый плагин",
         UiText::IncludeGrassIdRegexPrompt => "Regex включения Grass ID",
         UiText::ExcludeGrassIdRegexPrompt => "Regex исключения Grass ID",
         UiText::IncludeOccluderIdRegexPrompt => "Regex включения ID occluders",
