@@ -22,7 +22,7 @@ use super::{
     occlusion::StaticOccluderIndex,
     report,
     setup::{
-        active_cells, build_static_index, load_context_plugins, load_target_plugin,
+        ContextPlugin, active_cells, build_static_index, load_context_plugins, load_target_plugin,
         path_matches_any, resolve_content_plugin_paths, resolve_target_plugin,
     },
     static_occluders::{StaticOccluderBuildReport, build_static_occluders},
@@ -67,20 +67,29 @@ pub fn run(
     super::check_cancellation(cancellation)?;
     let context_plugin_paths = context_plugin_paths(&openmw_config, &vfs)?;
     super::check_cancellation(cancellation)?;
-    let context_plugins = load_context_plugins(&context_plugin_paths, cancellation)?;
+    let context_plugins = load_context_plugins(
+        &context_plugin_paths,
+        &target_plugin.source_path,
+        &target_plugin_data,
+        cancellation,
+    )?;
     let target_is_active = path_matches_any(&target_plugin.source_path, &context_plugin_paths);
     super::check_cancellation(cancellation)?;
-    let active_static_index = build_static_index(&context_plugins, None);
+    let active_static_index =
+        build_static_index(context_plugins.iter().map(ContextPlugin::as_plugin), None);
     super::check_cancellation(cancellation)?;
     let target_static_index = target_static_index(
-        &context_plugins,
+        context_plugins.iter().map(ContextPlugin::as_plugin),
         &active_static_index,
         target_is_active,
         &target_plugin_data,
     );
     let active_cells = active_cells(&target_refs.target_cells)?;
     super::check_cancellation(cancellation)?;
-    let terrain = terrain_from_context_plugins(&context_plugins, &active_cells);
+    let terrain = terrain_from_context_plugins(
+        context_plugins.iter().map(ContextPlugin::as_plugin),
+        &active_cells,
+    );
     super::check_cancellation(cancellation)?;
     let mut mesh_cache = MeshCache::new(&vfs);
     let generated_placements = load_generated_placements(
@@ -100,7 +109,7 @@ pub fn run(
         cancellation,
     )?;
     let (static_occluders, static_occluder_report) = build_static_occluders(
-        &context_plugins,
+        context_plugins.iter().map(ContextPlugin::as_plugin),
         &active_cells,
         &active_static_index,
         &mut mesh_cache,
@@ -108,6 +117,7 @@ pub fn run(
         &policy.occluder_filter,
         cancellation,
     )?;
+    drop(context_plugins);
     let missing_active_terrain_cells = missing_active_terrain_cells(&active_cells, &terrain);
     let mut report_context = build_report_context(ReportContextBuildInput {
         target_plugin_path: &target_plugin.source_path,
@@ -274,11 +284,11 @@ fn build_report_context(input: ReportContextBuildInput<'_>) -> UnclipReportConte
     )
 }
 
-fn target_static_index<'a>(
-    context_plugins: &[Plugin],
+fn target_static_index<'a, 'p>(
+    context_plugins: impl IntoIterator<Item = &'p Plugin>,
     active_static_index: &'a StaticMeshIndex,
     target_is_active: bool,
-    target_plugin_data: &Plugin,
+    target_plugin_data: &'p Plugin,
 ) -> Cow<'a, StaticMeshIndex> {
     if target_is_active {
         Cow::Borrowed(active_static_index)
@@ -331,13 +341,13 @@ fn missing_active_terrain_cells(
         .collect()
 }
 
-fn terrain_from_context_plugins(
-    context_plugins: &[Plugin],
+fn terrain_from_context_plugins<'a>(
+    context_plugins: impl IntoIterator<Item = &'a Plugin>,
     active_cells: &BTreeSet<(i32, i32)>,
 ) -> TerrainIndex {
     TerrainIndex::from_landscapes_in_cells(
         context_plugins
-            .iter()
+            .into_iter()
             .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
         active_cells,
     )
@@ -486,18 +496,22 @@ mod tests {
 
     #[test]
     fn active_target_static_index_reuses_active_index_without_overlay() {
-        let context_plugins = vec![plugin_with_statics([static_record(
+        let context_plugins = [plugin_with_statics([static_record(
             "grass_shared",
             "meshes/active.nif",
         )])];
-        let active_static_index = build_static_index(&context_plugins, None);
+        let active_static_index = build_static_index(context_plugins.iter(), None);
         let target_plugin = plugin_with_statics([
             static_record("grass_shared", "meshes/target.nif"),
             static_record("grass_target_only", "meshes/target_only.nif"),
         ]);
 
-        let index =
-            target_static_index(&context_plugins, &active_static_index, true, &target_plugin);
+        let index = target_static_index(
+            context_plugins.iter(),
+            &active_static_index,
+            true,
+            &target_plugin,
+        );
 
         assert!(matches!(index, Cow::Borrowed(_)));
         assert_eq!(
@@ -511,18 +525,18 @@ mod tests {
 
     #[test]
     fn inactive_target_static_index_overlays_target_statics() {
-        let context_plugins = vec![plugin_with_statics([
+        let context_plugins = [plugin_with_statics([
             static_record("grass_context", "meshes/context.nif"),
             static_record("grass_shared", "meshes/context_shared.nif"),
         ])];
-        let active_static_index = build_static_index(&context_plugins, None);
+        let active_static_index = build_static_index(context_plugins.iter(), None);
         let target_plugin = plugin_with_statics([
             static_record("grass_shared", "meshes/target_shared.nif"),
             static_record("grass_target_only", "meshes/target_only.nif"),
         ]);
 
         let index = target_static_index(
-            &context_plugins,
+            context_plugins.iter(),
             &active_static_index,
             false,
             &target_plugin,

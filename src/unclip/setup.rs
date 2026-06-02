@@ -104,14 +104,34 @@ pub(super) fn load_target_plugin(path: &std::path::Path) -> io::Result<Plugin> {
     })
 }
 
-pub(super) fn load_context_plugins(
+pub(super) enum ContextPlugin<'a> {
+    Borrowed(&'a Plugin),
+    Owned(Plugin),
+}
+
+impl ContextPlugin<'_> {
+    pub(super) fn as_plugin(&self) -> &Plugin {
+        match self {
+            Self::Borrowed(plugin) => plugin,
+            Self::Owned(plugin) => plugin,
+        }
+    }
+}
+
+pub(super) fn load_context_plugins<'a>(
     paths: &[PathBuf],
+    target_path: &std::path::Path,
+    target_plugin: &'a Plugin,
     cancellation: &CancellationToken,
-) -> io::Result<Vec<Plugin>> {
+) -> io::Result<Vec<ContextPlugin<'a>>> {
     paths
         .iter()
         .map(|path| {
             super::check_cancellation(cancellation)?;
+            if path_matches(path, target_path) {
+                return Ok(ContextPlugin::Borrowed(target_plugin));
+            }
+
             Plugin::from_path_filtered(path, |tag| {
                 &tag == Landscape::TAG || &tag == Static::TAG || &tag == Cell::TAG
             })
@@ -124,17 +144,18 @@ pub(super) fn load_context_plugins(
                     ),
                 )
             })
+            .map(ContextPlugin::Owned)
         })
         .collect()
 }
 
-pub(super) fn build_static_index(
-    active_plugins: &[Plugin],
-    extra_target_plugin: Option<&Plugin>,
+pub(super) fn build_static_index<'a>(
+    active_plugins: impl IntoIterator<Item = &'a Plugin>,
+    extra_target_plugin: Option<&'a Plugin>,
 ) -> StaticMeshIndex {
     StaticMeshIndex::from_statics(
         active_plugins
-            .iter()
+            .into_iter()
             .flat_map(tes3::esp::Plugin::objects_of_type::<Static>)
             .chain(
                 extra_target_plugin
@@ -145,15 +166,16 @@ pub(super) fn build_static_index(
 }
 
 pub(super) fn path_matches_any(path: &std::path::Path, candidates: &[PathBuf]) -> bool {
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     candidates
         .iter()
-        .map(|candidate| {
-            candidate
-                .canonicalize()
-                .unwrap_or_else(|_| candidate.clone())
-        })
-        .any(|candidate| candidate == path)
+        .any(|candidate| path_matches(candidate, path))
+}
+
+fn path_matches(left: &std::path::Path, right: &std::path::Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+
+    left == right
 }
 
 pub(super) fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTreeSet<CellCoord>> {
@@ -164,4 +186,52 @@ pub(super) fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTr
     }
 
     Ok(cells)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use tes3::esp::Plugin;
+
+    use super::{ContextPlugin, load_context_plugins};
+
+    #[test]
+    fn active_target_context_slot_borrows_loaded_target_without_reloading() {
+        let target_plugin = Plugin::default();
+        let paths = ["target.omwaddon".into()];
+
+        let context_plugins = load_context_plugins(
+            &paths,
+            Path::new("target.omwaddon"),
+            &target_plugin,
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
+
+        assert_eq!(context_plugins.len(), 1);
+        assert!(matches!(context_plugins[0], ContextPlugin::Borrowed(_)));
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(context_plugins[0].as_plugin()),
+            std::ptr::from_ref(&target_plugin),
+        ));
+    }
+
+    #[test]
+    fn inactive_context_path_still_loads_owned_plugin() {
+        let target_plugin = Plugin::default();
+        let paths = ["missing-context.omwaddon".into()];
+
+        let Err(error) = load_context_plugins(
+            &paths,
+            Path::new("target.omwaddon"),
+            &target_plugin,
+            &crate::groundcover::CancellationToken::default(),
+        ) else {
+            panic!("inactive context path should be loaded from disk");
+        };
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("missing-context.omwaddon"));
+    }
 }
