@@ -479,7 +479,7 @@ mod tests {
             id: "grass".to_owned(),
             old_z: 10.0,
             new_z: -2.0,
-            water_level: -1.0,
+            water_level: 0.0,
         }
     }
 

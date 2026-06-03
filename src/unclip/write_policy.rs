@@ -26,7 +26,7 @@ use super::{
 };
 
 const CELL_SIZE: f32 = 8192.0;
-pub(crate) const EXTERIOR_WATER_LEVEL: f32 = -1.0;
+pub(crate) const EXTERIOR_WATER_LEVEL: f32 = 0.0;
 const RELOCATION_DIRECTIONS: &[[f32; 2]] = &[
     [1.0, 0.0],
     [-1.0, 0.0],
@@ -1625,7 +1625,7 @@ mod tests {
                     id: "grass".to_owned(),
                     old_z: 10.0,
                     new_z: -2.0,
-                    water_level: -1.0,
+                    water_level: 0.0,
                 }),
                 ..WriteReferenceChanges::default()
             })),
@@ -1669,7 +1669,7 @@ mod tests {
         let deletion = deletion.expect("crossing the exterior water plane should delete");
         assert!((deletion.old_z - 4.0).abs() < f32::EPSILON);
         assert!((deletion.new_z - -2.0).abs() < f32::EPSILON);
-        assert!((deletion.water_level - -1.0).abs() < f32::EPSILON);
+        assert!(deletion.water_level.abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1687,7 +1687,7 @@ mod tests {
         ));
         let on_plane_adjustment = plan_contact_adjustment(test_contact_adjustment_input(
             &reference,
-            -1.0,
+            0.0,
             &policy,
             Some(GeneratedPlacement {
                 z_offset: 0.0,
@@ -1722,11 +1722,11 @@ mod tests {
 
     #[test]
     fn water_delete_change_ignores_crossing_within_terrain_tolerance() {
-        let reference = reference_at_z(0.0);
+        let reference = reference_at_z(1.0);
         let policy = test_policy();
         let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
             &reference,
-            -2.0,
+            -1.0,
             &policy,
             Some(GeneratedPlacement {
                 z_offset: 0.0,
