@@ -138,7 +138,7 @@ Inspection mode:
 
 - Selects a target plugin by `--plugin PLUGIN` or `[unclip].plugin` in `greenmote.toml`.
 - Accepts a filesystem path or a VFS plugin name.
-- Uses `--dry-run` or `[unclip].dry_run = true` for read-only planning without modifying the target plugin.
+- Uses `--dry-run` for read-only planning without modifying the target plugin.
 - Reports aggregate diagnostics by default.
 - Writes detailed per-reference diagnostics to `greenmote.log` with `--verbose`.
 - Treats static occluders as blockers when they overlap either target mesh volume or bounded placement-clearance probes around the target origin.
@@ -149,7 +149,7 @@ Inspection mode:
 
 Write mode:
 
-- Enabled by default. Use `--dry-run` or `[unclip].dry_run = true` for read-only inspection.
+- Enabled by default. Use `--dry-run` for read-only inspection.
 - Creates a backup before replacing the target plugin, or before writing the explicit `--output-plugin PATH` destination.
 - Defaults to writing back to the resolved source plugin when no output override is provided.
 - In the GUI, write mode requires a confirmation dialog before modifying the target plugin.
@@ -165,7 +165,7 @@ Write actions:
 
 - `terrain-z` adjusts reference Z placement toward terrain.
 - `water-delete` deletes references that a terrain-Z adjustment would move across the exterior water plane.
-- `road-delete` deletes references on matching `LAND` texture paths, with built-in road filters plus optional include/exclude regexes.
+- `road-delete` deletes references on `LAND` texture paths matching `[unclip].road_texture_paths`.
 - `static-delete` deletes references that cannot be safely moved away from static occluders.
 - `static-move` searches for nearby positions outside static occluders and placement-clearance blockers.
 - `orient` aligns groundcover orientation to terrain within policy limits.
@@ -215,16 +215,11 @@ exclude = [
 ignored_plugins = [
   "^example-disabled-plugin\\.esp$",
 ]
-dry_run = false
 debug = false
 auto_enable = false
 
 [unclip]
 plugin = "groundcover.omwaddon"
-meshgenerator_ini = "mesh_generator_ini_files/groundcover.ini"
-verbose = false
-structured = false
-dry_run = false
 write_actions = ["terrain-z", "water-delete", "road-delete", "static-delete", "static-move", "orient"]
 origin_epsilon = 2.0
 relocation_step = 32.0
@@ -261,13 +256,9 @@ Key notes:
 - `[convert].grass_ids` is the include list for `STAT` IDs and scriptless `ACTI` IDs.
 - `[convert].exclude` removes matching source record IDs from conversion.
 - `[convert].ignored_plugins` removes matching plugin file names from conversion.
-- `[convert].dry_run`, `[convert].debug`, and `[convert].auto_enable` persist their corresponding Convert toggles.
+- `[convert].debug` and `[convert].auto_enable` persist their corresponding Convert toggles. Convert dry-run is runtime-only via `--dry-run`.
 - `[unclip].plugin` is the default Unclip target plugin.
-- `[unclip].meshgenerator_ini` provides optional `mw-groundcover-generator` mesh-list hints for origin placement inference.
-- `[unclip].verbose` writes detailed per-reference diagnostics to `greenmote.log`; `[unclip].instances` is still accepted as a deprecated compatibility alias.
-- `[unclip].structured` switches the compact stdout summary to JSON.
-- `[unclip].dry_run` disables Unclip writes for read-only inspection.
-- Deprecated `[unclip].write` is accepted for compatibility and mapped inversely to `dry_run`; if both keys conflict, loading fails.
+- Unclip `--dry-run`, `--verbose`, `--structured`, and `--meshgenerator-ini` are runtime-only CLI options and are not read from or written to `greenmote.toml`.
 - `[unclip].write_actions` selects which write fixes are allowed.
 - `[unclip].*_epsilon`, `relocation_step`, and `relocation_steps` tune inspection/write policy.
 - Include/exclude ID filters are case-insensitive regex lists.

@@ -151,6 +151,7 @@ impl GroundcoverConfig {
     pub(crate) fn save_for_edit(&self, path: &Path) -> io::Result<Self> {
         let mut normalized = self.clone();
         normalized.compile_regex_sets()?;
+        normalized.clear_edit_save_runtime_only_fields();
         normalized.save_to(path)?;
         Ok(normalized)
     }
@@ -158,8 +159,14 @@ impl GroundcoverConfig {
     pub(crate) fn save_for_edit_new(&self, path: &Path) -> io::Result<Self> {
         let mut normalized = self.clone();
         normalized.compile_regex_sets()?;
+        normalized.clear_edit_save_runtime_only_fields();
         normalized.save_to_new(path)?;
         Ok(normalized)
+    }
+
+    fn clear_edit_save_runtime_only_fields(&mut self) {
+        self.dry_run = false;
+        self.validate_config = false;
     }
 
     /// Loads, merges, validates, and optionally initializes `greenmote.toml`.

@@ -103,11 +103,7 @@ impl UnclipRunOptions {
 
         Self {
             targets,
-            dry_run: if config.unclip.is_generated_default() {
-                false
-            } else {
-                config.unclip.dry_run.unwrap_or(false)
-            },
+            dry_run: false,
         }
     }
 
@@ -344,17 +340,14 @@ mod tests {
     }
 
     #[test]
-    fn unclip_run_options_prefill_visible_plugin_and_dry_run_only() {
+    fn unclip_run_options_prefill_visible_plugin_only() {
         let mut config = GroundcoverConfig::default();
         config.unclip.plugin = Some("groundcover.omwaddon".into());
-        config.unclip.meshgenerator_ini = Some("groundcover.ini".into());
-        config.unclip.verbose = Some(true);
-        config.unclip.dry_run = Some(true);
 
         let options = UnclipRunOptions::from_config(&config);
 
         assert_eq!(options.targets, [target("groundcover.omwaddon")]);
-        assert!(options.dry_run);
+        assert!(!options.dry_run);
     }
 
     #[test]
@@ -365,17 +358,6 @@ mod tests {
     #[test]
     fn unclip_run_options_config_default_dry_run_disabled() {
         assert!(!UnclipRunOptions::from_config(&GroundcoverConfig::default()).dry_run);
-    }
-
-    #[test]
-    fn unclip_run_options_preserves_saved_dry_run_true() {
-        let mut config = GroundcoverConfig::default();
-        config.unclip = crate::unclip::config::PersistedUnclipConfig::default();
-        config.unclip.dry_run = Some(true);
-
-        let options = UnclipRunOptions::from_config(&config);
-
-        assert!(options.dry_run);
     }
 
     #[test]

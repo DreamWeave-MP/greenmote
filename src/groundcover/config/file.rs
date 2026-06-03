@@ -41,9 +41,6 @@ struct ConvertConfigFile {
     ignored_plugins: Option<Vec<String>>,
 
     #[serde(default)]
-    dry_run: bool,
-
-    #[serde(default)]
     debug: bool,
 
     #[serde(default)]
@@ -58,7 +55,6 @@ impl GroundcoverConfigFile {
                 grass_ids: Some(config.grass_ids.clone()),
                 exclude: Some(config.exclude.clone()),
                 ignored_plugins: Some(config.ignored_plugins.clone()),
-                dry_run: config.dry_run,
                 debug: config.debug,
                 auto_enable: config.auto_enable,
             },
@@ -78,8 +74,7 @@ impl GroundcoverConfigFile {
         } else {
             file.unclip
                 .normalize_legacy_write()
-                .map(PersistedUnclipConfig::with_generated_default_road_texture_paths)
-                .map_err(to_io_error)?
+                .with_generated_default_road_texture_paths()
         };
 
         Ok(GroundcoverConfig {
@@ -91,7 +86,7 @@ impl GroundcoverConfigFile {
             ignored_plugins: convert
                 .ignored_plugins
                 .unwrap_or_else(default::ignored_plugins),
-            dry_run: convert.dry_run,
+            dry_run: false,
             validate_config: false,
             debug: convert.debug,
             auto_enable: convert.auto_enable,
@@ -105,11 +100,6 @@ impl GroundcoverConfigFile {
 
 fn is_empty_unclip_config(config: &PersistedUnclipConfig) -> bool {
     config.plugin.is_none()
-        && config.meshgenerator_ini.is_none()
-        && config.instances.is_none()
-        && config.verbose.is_none()
-        && config.structured.is_none()
-        && config.dry_run.is_none()
         && config.legacy_write.is_none()
         && config.write_actions.is_none()
         && config.origin_epsilon.is_none()

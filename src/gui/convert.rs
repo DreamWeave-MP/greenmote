@@ -188,6 +188,7 @@ impl ConvertUiState {
         self.saved_run_options = options;
     }
 
+    #[cfg(test)]
     pub(super) fn sync_unclip_dry_run_from_settings(&mut self, dry_run: bool) {
         self.unclip.run_options.dry_run = dry_run;
         self.unclip.pending_write_confirmation = false;
@@ -203,8 +204,18 @@ impl ConvertUiState {
     }
 
     #[cfg(test)]
+    pub(super) fn set_convert_dry_run_for_test(&mut self, dry_run: bool) {
+        self.run_options.set_dry_run(dry_run);
+    }
+
+    #[cfg(test)]
     pub(super) fn unclip_dry_run_for_test(&self) -> bool {
         self.unclip.run_options.dry_run
+    }
+
+    #[cfg(test)]
+    pub(super) fn saved_run_options_for_test(&self) -> ConvertRunOptions {
+        self.saved_run_options
     }
 
     #[cfg(test)]

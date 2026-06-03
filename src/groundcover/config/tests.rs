@@ -84,7 +84,7 @@ fn missing_config_default_initializes_next_to_user_config() {
     assert!(contents.contains("[unclip]"));
     assert!(!contents.contains("openmw_cfg"));
     assert!(!contents.contains("plugin ="));
-    assert!(contents.contains("dry_run = false"));
+    assert!(!contents.contains("dry_run"));
     assert!(!contents.contains("write = false"));
     assert!(!contents.contains("validate_config"));
     assert!(!contents.contains("fallback_output_directory"));
@@ -121,11 +121,25 @@ include_grass_ids = ["flora_.*"]
     let contents = read_to_string(config_path).unwrap();
 
     assert!(contents.contains("plugin = \"custom-groundcover.omwaddon\""));
-    assert!(contents.contains("dry_run = true"));
+    assert!(!contents.contains("dry_run"));
     assert!(!contents.contains("write = true"));
     assert!(contents.contains("include_grass_ids = [\"flora_.*\"]"));
     assert!(contents.contains("road_texture_paths = ["));
     assert!(!contents.contains("road_texture_paths = []"));
+}
+
+#[test]
+fn save_for_edit_returns_persistent_convert_dry_run_state() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    let mut config = GroundcoverConfig::with_output_directory(dir.path.join("data-local"));
+    config.dry_run = true;
+
+    let saved = config.save_for_edit_new(&config_path).unwrap();
+    let contents = read_to_string(config_path).unwrap();
+
+    assert!(!saved.dry_run);
+    assert!(!contents.contains("dry_run"));
 }
 
 #[test]
@@ -177,7 +191,7 @@ fn load_for_edit_creates_missing_config_with_defaults() {
 }
 
 #[test]
-fn load_for_edit_maps_legacy_unclip_write_to_dry_run() {
+fn load_for_edit_ignores_legacy_unclip_write() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
@@ -197,12 +211,11 @@ write = false
     )
     .unwrap();
 
-    assert_eq!(config.unclip.dry_run, Some(true));
     assert_eq!(config.unclip.legacy_write, None);
 }
 
 #[test]
-fn load_for_edit_rejects_conflicting_unclip_write_and_dry_run() {
+fn load_for_edit_ignores_conflicting_stale_unclip_write_and_dry_run() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
     std::fs::write(
@@ -215,15 +228,48 @@ dry_run = true
     )
     .unwrap();
 
-    let error = GroundcoverConfig::load_for_edit(
+    let config = GroundcoverConfig::load_for_edit(
         &config_path,
         resolved_output_directory(dir.path.join("data-local")),
         None,
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert!(error.to_string().contains("conflicts"));
+    assert_eq!(config.unclip.legacy_write, None);
+}
+
+#[test]
+fn load_save_removes_stale_unclip_runtime_keys() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[unclip]
+plugin = "custom-groundcover.omwaddon"
+meshgenerator_ini = "meshgenerator.ini"
+verbose = true
+structured = true
+dry_run = true
+instances = true
+"#,
+    )
+    .unwrap();
+
+    let config = GroundcoverConfig::load_for_edit(
+        &config_path,
+        resolved_output_directory(dir.path.join("data-local")),
+        None,
+    )
+    .unwrap();
+    config.save_for_edit(&config_path).unwrap();
+    let contents = read_to_string(config_path).unwrap();
+
+    assert!(!contents.contains("meshgenerator_ini"));
+    assert!(!contents.contains("verbose"));
+    assert!(!contents.contains("structured"));
+    assert!(!contents.contains("dry_run"));
+    assert!(!contents.contains("instances"));
 }
 
 #[test]
@@ -306,7 +352,7 @@ old_option = "unused"
 
     let config = get_config(args, &dir, dir.path.join("data-local")).unwrap();
 
-    assert!(config.dry_run);
+    assert!(!config.dry_run);
     assert!(!config.validate_config);
 }
 

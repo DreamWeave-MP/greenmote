@@ -831,9 +831,7 @@ impl GreenmoteApp {
                 );
                 self.convert
                     .sync_saved_run_options_from_settings(ConvertRunOptions::from_config(&config));
-                self.convert.sync_unclip_dry_run_from_settings(
-                    UnclipRunOptions::from_config(&config).dry_run,
-                );
+                self.convert.cancel_pending_unclip_write_confirmation();
                 true
             }
             Err(error) => {
@@ -1640,7 +1638,6 @@ mod tests {
     fn unclip_policy_save_serializes_concrete_actions_and_preserves_run_keys() {
         let mut draft = SettingsDraft::default();
         draft.unclip.plugin = Some("groundcover.omwaddon".into());
-        draft.unclip.dry_run = Some(true);
         draft.unclip_policy.write_actions = [true, false, false, false, true, false];
         draft.unclip_policy.include_grass_ids = vec!["flora_.*".to_owned()];
         draft.unclip_policy.road_texture_paths = vec![".*custom_road.*".to_owned()];
@@ -1648,7 +1645,6 @@ mod tests {
         let config = draft.validate_and_to_config().unwrap();
 
         assert_eq!(config.unclip.plugin, Some("groundcover.omwaddon".into()));
-        assert_eq!(config.unclip.dry_run, Some(true));
         assert_eq!(
             config.unclip.write_actions,
             Some(vec![WriteActionArg::TerrainZ, WriteActionArg::StaticMove])
@@ -1706,7 +1702,7 @@ mod tests {
     }
 
     #[test]
-    fn save_settings_syncs_unclip_dry_run_from_saved_config() {
+    fn save_settings_preserves_runtime_unclip_dry_run() {
         let directory = unique_temp_directory("greenmote-gui-settings-save");
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("greenmote.toml");
@@ -1718,8 +1714,29 @@ mod tests {
 
         assert!(app.save_settings());
 
-        assert!(!app.convert.unclip_dry_run_for_test());
+        assert!(app.convert.unclip_dry_run_for_test());
         assert!(!app.convert.pending_unclip_write_confirmation_for_test());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn save_settings_keeps_convert_dry_run_runtime_only() {
+        let directory = unique_temp_directory("greenmote-gui-settings-convert-dry-run-save");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("greenmote.toml");
+        let mut app = GreenmoteApp::default();
+        app.settings.config_path = Some(path.clone());
+        app.convert.set_convert_dry_run_for_test(true);
+        app.settings.draft.dry_run = true;
+
+        assert!(app.save_settings());
+
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(!contents.contains("dry_run"));
+        assert!(app.convert.current_run_options().dry_run);
+        assert!(!app.convert.saved_run_options_for_test().dry_run);
+        assert!(!app.settings.draft.dry_run);
 
         fs::remove_dir_all(directory).unwrap();
     }

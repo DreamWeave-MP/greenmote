@@ -45,21 +45,6 @@ pub(crate) struct PersistedUnclipConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) plugin: Option<PathBuf>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) meshgenerator_ini: Option<PathBuf>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) instances: Option<bool>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) verbose: Option<bool>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) structured: Option<bool>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) dry_run: Option<bool>,
-
     #[serde(default, rename = "write", skip_serializing)]
     pub(crate) legacy_write: Option<bool>,
 
@@ -145,18 +130,11 @@ impl UnclipConfig {
             meshgenerator_ini: if args.ignore_meshgenerator_ini {
                 None
             } else {
-                args.meshgenerator_ini
-                    .clone()
-                    .or(persisted.meshgenerator_ini)
+                args.meshgenerator_ini.clone()
             },
-            verbose: args
-                .verbose
-                .or(args.instances)
-                .or(persisted.verbose)
-                .or(persisted.instances)
-                .unwrap_or(false),
-            structured: args.structured.or(persisted.structured).unwrap_or(false),
-            dry_run: args.dry_run.or(persisted.dry_run).unwrap_or(false),
+            verbose: args.verbose.or(args.instances).unwrap_or(false),
+            structured: args.structured.unwrap_or(false),
+            dry_run: args.dry_run.unwrap_or(false),
             write_actions: if args.write_actions.is_empty() {
                 persisted
                     .write_actions
@@ -218,9 +196,6 @@ impl UnclipConfig {
 impl PersistedUnclipConfig {
     pub(crate) fn generated_default() -> Self {
         Self {
-            verbose: Some(false),
-            structured: Some(false),
-            dry_run: Some(false),
             write_actions: Some(default_write_actions()),
             origin_epsilon: Some(ORIGIN_TERRAIN_EPSILON),
             relocation_step: Some(DEFAULT_RELOCATION_STEP),
@@ -235,33 +210,18 @@ impl PersistedUnclipConfig {
         }
     }
 
-    pub(crate) fn is_generated_default(&self) -> bool {
-        self == &Self::generated_default()
-    }
-
     pub(crate) fn from_toml(contents: &str) -> io::Result<Self> {
         let root = toml::from_str::<UnclipConfigRoot>(contents).map_err(invalid_config)?;
-        root.unclip
+        Ok(root
+            .unclip
             .normalize_legacy_write()
-            .map(Self::with_generated_default_road_texture_paths)
+            .with_generated_default_road_texture_paths())
     }
 
-    pub(crate) fn normalize_legacy_write(mut self) -> io::Result<Self> {
-        let Some(write) = self.legacy_write.take() else {
-            return Ok(self);
-        };
-        let legacy_dry_run = !write;
-        if let Some(dry_run) = self.dry_run {
-            if dry_run != legacy_dry_run {
-                return Err(invalid_config(
-                    "[unclip].write conflicts with [unclip].dry_run; remove the deprecated write key",
-                ));
-            }
-        } else {
-            self.dry_run = Some(legacy_dry_run);
-        }
+    pub(crate) fn normalize_legacy_write(mut self) -> Self {
+        self.legacy_write = None;
 
-        Ok(self)
+        self
     }
 
     pub(crate) fn with_generated_default_road_texture_paths(mut self) -> Self {
@@ -456,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_meshgenerator_ini_overrides_persisted_path() {
+    fn cli_meshgenerator_ini_sets_runtime_path() {
         let args = unclip_args(&[
             "greenmote",
             "unclip",
@@ -465,51 +425,38 @@ mod tests {
             "--meshgenerator-ini",
             "cli.ini",
         ]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                meshgenerator_ini: Some(PathBuf::from("persisted.ini")),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
+        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
 
         assert_eq!(config.meshgenerator_ini, Some(PathBuf::from("cli.ini")));
     }
 
     #[test]
-    fn persisted_meshgenerator_ini_satisfies_missing_cli_path() {
+    fn stale_persisted_meshgenerator_ini_is_ignored() {
         let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                meshgenerator_ini: Some(PathBuf::from("persisted.ini")),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
+        let persisted = PersistedUnclipConfig::from_toml(
+            r#"
+[unclip]
+meshgenerator_ini = "persisted.ini"
+"#,
         )
         .unwrap();
+        let config = UnclipConfig::merge(&args, persisted, None).unwrap();
 
-        assert_eq!(
-            config.meshgenerator_ini,
-            Some(PathBuf::from("persisted.ini"))
-        );
+        assert_eq!(config.meshgenerator_ini, None);
     }
 
     #[test]
-    fn internal_ignore_meshgenerator_ini_suppresses_persisted_path() {
-        let mut args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
+    fn internal_ignore_meshgenerator_ini_suppresses_cli_path() {
+        let mut args = unclip_args(&[
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "cli.omwaddon",
+            "--meshgenerator-ini",
+            "cli.ini",
+        ]);
         args.ignore_meshgenerator_ini = true;
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                meshgenerator_ini: Some(PathBuf::from("persisted.ini")),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
+        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
 
         assert_eq!(config.meshgenerator_ini, None);
     }
@@ -544,7 +491,7 @@ origin_epsilon = 2.5
     }
 
     #[test]
-    fn cli_dry_run_false_overrides_persisted_dry_run_true() {
+    fn cli_dry_run_false_ignores_stale_persisted_dry_run_true() {
         let args = unclip_args(&[
             "greenmote",
             "unclip",
@@ -552,15 +499,14 @@ origin_epsilon = 2.5
             "cli.omwaddon",
             "--dry-run=false",
         ]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                dry_run: Some(true),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
+        let persisted = PersistedUnclipConfig::from_toml(
+            r"
+[unclip]
+dry_run = true
+",
         )
         .unwrap();
+        let config = UnclipConfig::merge(&args, persisted, None).unwrap();
 
         assert!(!config.dry_run);
     }
@@ -585,31 +531,33 @@ origin_epsilon = 2.5
     }
 
     #[test]
-    fn persisted_dry_run_true_applies_when_cli_omits_it() {
+    fn stale_persisted_dry_run_true_is_ignored() {
         let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                dry_run: Some(true),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
+        let persisted = PersistedUnclipConfig::from_toml(
+            r"
+[unclip]
+dry_run = true
+",
         )
         .unwrap();
+        let config = UnclipConfig::merge(&args, persisted, None).unwrap();
 
-        assert!(config.dry_run);
+        assert!(!config.dry_run);
     }
 
     #[test]
-    fn generated_default_toml_uses_dry_run_not_write() {
+    fn generated_default_toml_omits_runtime_keys() {
         let contents = toml::to_string(&PersistedUnclipConfig::generated_default()).unwrap();
 
-        assert!(contents.contains("dry_run = false"));
+        assert!(!contents.contains("dry_run"));
+        assert!(!contents.contains("meshgenerator_ini"));
+        assert!(!contents.contains("verbose"));
+        assert!(!contents.contains("structured"));
         assert!(!contents.contains("write = false"));
     }
 
     #[test]
-    fn legacy_persisted_write_maps_to_dry_run() {
+    fn legacy_persisted_write_is_ignored() {
         let inspect = PersistedUnclipConfig::from_toml(
             r"
 [unclip]
@@ -625,25 +573,22 @@ write = true
         )
         .unwrap();
 
-        assert_eq!(inspect.dry_run, Some(true));
-        assert_eq!(write.dry_run, Some(false));
         assert_eq!(inspect.legacy_write, None);
         assert_eq!(write.legacy_write, None);
     }
 
     #[test]
-    fn conflicting_legacy_write_and_dry_run_fails() {
-        let error = PersistedUnclipConfig::from_toml(
+    fn conflicting_legacy_write_and_stale_dry_run_is_ignored() {
+        let config = PersistedUnclipConfig::from_toml(
             r"
 [unclip]
 write = false
 dry_run = false
 ",
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("conflicts"));
+        assert_eq!(config.legacy_write, None);
     }
 
     #[test]
@@ -655,7 +600,7 @@ dry_run = false
     }
 
     #[test]
-    fn cli_verbose_overrides_persisted_instances_alias() {
+    fn cli_verbose_sets_runtime_verbose() {
         let args = unclip_args(&[
             "greenmote",
             "unclip",
@@ -663,16 +608,7 @@ dry_run = false
             "cli.omwaddon",
             "--verbose=false",
         ]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                instances: Some(true),
-                verbose: Some(true),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
+        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
 
         assert!(!config.verbose);
     }
@@ -692,19 +628,18 @@ dry_run = false
     }
 
     #[test]
-    fn persisted_instances_alias_sets_verbose_for_compatibility() {
+    fn stale_persisted_instances_alias_is_ignored() {
         let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                instances: Some(true),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
+        let persisted = PersistedUnclipConfig::from_toml(
+            r"
+[unclip]
+instances = true
+",
         )
         .unwrap();
+        let config = UnclipConfig::merge(&args, persisted, None).unwrap();
 
-        assert!(config.verbose);
+        assert!(!config.verbose);
     }
 
     #[test]
