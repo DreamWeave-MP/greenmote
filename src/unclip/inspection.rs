@@ -298,6 +298,9 @@ struct ReferenceInspectionInput<'a, 'b> {
 
 impl ReferenceInspectionInput<'_, '_> {
     fn water_crossing(&self) -> Option<bool> {
+        if !matches!(self.mesh_resolution, MeshContactResolution::Resolved { .. }) {
+            return None;
+        }
         let terrain_z = self.origin.terrain_z?;
         let placement = self.generated_placement?;
         let old_z = self.reference.translation[2];
@@ -964,17 +967,19 @@ mod tests {
     use tes3::esp::Reference;
 
     use super::{
-        MeshContactResolution, StaticBoundsContext, StaticBoundsEvidence,
-        StaticBoundsOcclusionInput, classify_static_bounds_occlusion, deleted_reference_inspection,
+        MeshContactResolution, OriginDetails, ReferenceInspectionInput, StaticBoundsContext,
+        StaticBoundsEvidence, StaticBoundsOcclusionInput, classify_static_bounds_occlusion,
+        deleted_reference_inspection,
     };
     use crate::unclip::{
         args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
-        generated_placement::GeneratedPlacementIndex,
+        generated_placement::{GeneratedPlacement, GeneratedPlacementIndex},
         mesh::{MeshAabb, MeshContact, StaticMesh, WorldAabb},
         model::TerrainInspectionReport,
         occlusion::StaticOccluderIndex,
         terrain::TerrainIndex,
         write_plan::{WritePlan, WriteStaticBoundsAnalysis, WriteStatusIndex},
+        write_status::{MeshResolutionStatus, WritePlanEvidence, WriteStatusEvidence},
     };
 
     #[test]
@@ -1133,6 +1138,46 @@ mod tests {
         assert!(details.is_none());
         assert_eq!(report.refs_static_bounds_occluded, 1);
         assert_eq!(report.refs_static_bounds_blocked, 1);
+    }
+
+    #[test]
+    fn water_crossing_requires_resolved_mesh_geometry() {
+        let mesh = static_mesh();
+        let reference = reference_at_z(1.0);
+        let origin = OriginDetails {
+            terrain_z: Some(-1.0),
+            delta: Some(2.0),
+            classification: "origin_above_terrain",
+        };
+        let resolution = MeshContactResolution::MissingContact {
+            static_mesh: &mesh,
+            error: "missing contact geometry".to_owned(),
+        };
+        let input = ReferenceInspectionInput {
+            cell: (1, 2),
+            key: (3, 4),
+            reference: &reference,
+            origin: &origin,
+            mesh_resolution: &resolution,
+            contact_details: None,
+            static_bounds_occlusion: None,
+            generated_placement: Some(GeneratedPlacement {
+                z_offset: 0.0,
+                tolerance: 0.0,
+            }),
+            write: WriteStatusEvidence {
+                plan: WritePlanEvidence::NotPlanned,
+                actions: WriteActions::all(),
+            },
+            contact_epsilon: 0.5,
+            orientation_epsilon_degrees: 1.0,
+        };
+
+        assert!(matches!(
+            resolution.write_status_mesh_status(),
+            MeshResolutionStatus::MissingContact
+        ));
+        assert!(input.water_crossing().is_none());
     }
 
     fn reference_at_z(z: f32) -> Reference {
