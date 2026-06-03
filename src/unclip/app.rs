@@ -2,9 +2,11 @@
 
 use std::{
     borrow::Cow,
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    env,
     fs::File,
     io::{self, BufWriter, Write},
+    time::{Duration, Instant},
 };
 
 use tes3::esp::{Landscape, Plugin};
@@ -39,20 +41,33 @@ pub fn run(
     stdout: &mut dyn Write,
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
+    let mut profiler = UnclipProfiler::from_env();
     super::check_cancellation(cancellation)?;
     let policy = config
         .policy()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     super::check_cancellation(cancellation)?;
-    let openmw_config = openmw::load_config_from_path(config.openmw_cfg.as_deref())?;
-    let vfs = openmw::build_vfs(&openmw_config);
-    let target_plugin = resolve_target_plugin(&config.plugin, &openmw_config, &vfs)?;
-    super::check_cancellation(cancellation)?;
-    let mut target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
-    let target_refs = TargetRefIndex::build(&target_plugin_data, &policy, cancellation)?;
+    let openmw_config = profiler.measure("openmw_config_load", || {
+        openmw::load_config_from_path(config.openmw_cfg.as_deref())
+    })?;
+    let vfs = profiler.measure("vfs_build", || openmw::build_vfs(&openmw_config));
+    let (target_plugin, mut target_plugin_data) =
+        profiler.measure("target_plugin_resolve_load", || {
+            let target_plugin = resolve_target_plugin(&config.plugin, &openmw_config, &vfs)?;
+            super::check_cancellation(cancellation)?;
+            let target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
+            Ok::<_, io::Error>((target_plugin, target_plugin_data))
+        })?;
+    let target_refs = profiler.measure("target_ref_index_build", || {
+        TargetRefIndex::build(&target_plugin_data, &policy, cancellation)
+    })?;
+    profiler.counter("target_exterior_ref_count", target_refs.exterior_ref_count);
+    profiler.counter("target_cells", target_refs.target_cells.len());
+    profiler.counter("target_static_ids", target_refs.target_static_ids.len());
     if target_refs.target_cells.is_empty() {
-        return write_no_target_report(
+        write_no_target_report(
             stdout,
+            &mut profiler,
             NoTargetReportInput {
                 config,
                 openmw_config: &openmw_config,
@@ -62,61 +77,83 @@ pub fn run(
                 policy: &policy,
                 cancellation,
             },
-        );
+        )?;
+        profiler.write_stderr();
+        return Ok(());
     }
     super::check_cancellation(cancellation)?;
-    let context_plugin_paths = context_plugin_paths(&openmw_config, &vfs)?;
-    super::check_cancellation(cancellation)?;
-    let context_plugins = load_context_plugins(
-        &context_plugin_paths,
-        &target_plugin.source_path,
-        &target_plugin_data,
-        cancellation,
-    )?;
+    let (context_plugin_paths, context_plugins) =
+        profiler.measure("context_path_resolve_load", || {
+            let context_plugin_paths = context_plugin_paths(&openmw_config, &vfs)?;
+            super::check_cancellation(cancellation)?;
+            let context_plugins = load_context_plugins(
+                &context_plugin_paths,
+                &target_plugin.source_path,
+                &target_plugin_data,
+                cancellation,
+            )?;
+            Ok::<_, io::Error>((context_plugin_paths, context_plugins))
+        })?;
     let target_is_active = path_matches_any(&target_plugin.source_path, &context_plugin_paths);
     super::check_cancellation(cancellation)?;
-    let active_static_index =
-        build_static_index(context_plugins.iter().map(ContextPlugin::as_plugin), None);
+    let active_static_index = profiler.measure("active_static_index_build", || {
+        build_static_index(context_plugins.iter().map(ContextPlugin::as_plugin), None)
+    });
     super::check_cancellation(cancellation)?;
-    let target_static_index = target_static_index(
-        context_plugins.iter().map(ContextPlugin::as_plugin),
-        &active_static_index,
-        target_is_active,
-        &target_plugin_data,
-    );
-    let active_cells = active_cells(&target_refs.target_cells)?;
-    super::check_cancellation(cancellation)?;
-    let terrain = terrain_from_context_plugins(
-        context_plugins.iter().map(ContextPlugin::as_plugin),
-        &active_cells,
-    );
+    let target_static_index = profiler.measure("target_static_index_preparation", || {
+        target_static_index(
+            context_plugins.iter().map(ContextPlugin::as_plugin),
+            &active_static_index,
+            target_is_active,
+            &target_plugin_data,
+        )
+    });
+    let (active_cells, terrain) = profiler.measure("active_cells_terrain_build", || {
+        let active_cells = active_cells(&target_refs.target_cells)?;
+        super::check_cancellation(cancellation)?;
+        let terrain = terrain_from_context_plugins(
+            context_plugins.iter().map(ContextPlugin::as_plugin),
+            &active_cells,
+        );
+        Ok::<_, io::Error>((active_cells, terrain))
+    })?;
+    profiler.counter("active_cells", active_cells.len());
+    profiler.counter("loaded_terrain_cells", terrain.len());
     super::check_cancellation(cancellation)?;
     let mut mesh_cache = MeshCache::new(&vfs);
-    let generated_placements = load_generated_placements(
-        config,
-        &target_plugin_data,
-        &target_refs,
-        &terrain,
-        &target_static_index,
-        cancellation,
-    )?;
-    let contact_baselines = build_contact_baselines(
-        &target_plugin_data,
-        &target_refs,
-        &terrain,
-        &target_static_index,
-        &mut mesh_cache,
-        cancellation,
-    )?;
-    let (static_occluders, static_occluder_report) = build_static_occluders(
-        context_plugins.iter().map(ContextPlugin::as_plugin),
-        &active_cells,
-        &active_static_index,
-        &mut mesh_cache,
-        &target_refs.target_static_ids,
-        &policy.occluder_filter,
-        cancellation,
-    )?;
+    let generated_placements = profiler.measure("generated_placement_build", || {
+        load_generated_placements(
+            config,
+            &target_plugin_data,
+            &target_refs,
+            &terrain,
+            &target_static_index,
+            cancellation,
+        )
+    })?;
+    let contact_baselines = profiler.measure("contact_baseline_build", || {
+        build_contact_baselines(
+            &target_plugin_data,
+            &target_refs,
+            &terrain,
+            &target_static_index,
+            &mut mesh_cache,
+            cancellation,
+        )
+    })?;
+    let (static_occluders, static_occluder_report) =
+        profiler.measure("static_occluder_build", || {
+            build_static_occluders(
+                context_plugins.iter().map(ContextPlugin::as_plugin),
+                &active_cells,
+                &active_static_index,
+                &mut mesh_cache,
+                &target_refs.target_static_ids,
+                &policy.occluder_filter,
+                cancellation,
+            )
+        })?;
+    profiler.static_occluder_counters(&static_occluder_report);
     drop(context_plugins);
     let missing_active_terrain_cells = missing_active_terrain_cells(&active_cells, &terrain);
     let mut report_context = build_report_context(ReportContextBuildInput {
@@ -130,23 +167,30 @@ pub fn run(
         policy: &policy,
     });
     let write_actions_enabled = policy.write_actions.any_enabled();
-    let write_plan = Some(plan_requested_unclip_adjustments(
-        UnclipWritePlanningInput {
-            plugin: &target_plugin_data,
-            target_refs: &target_refs,
-            terrain: &terrain,
-            static_index: &target_static_index,
-            mesh_contacts: &mut mesh_cache,
-            static_occluders: &static_occluders,
-            policy: &policy,
-            generated_placements: &generated_placements,
-            retain_static_bounds_details: config.verbose,
-            cancellation,
-        },
-        write_actions_enabled,
-    )?);
+    let write_plan = Some(profiler.measure("write_plan", || {
+        plan_requested_unclip_adjustments(
+            UnclipWritePlanningInput {
+                plugin: &target_plugin_data,
+                target_refs: &target_refs,
+                terrain: &terrain,
+                static_index: &target_static_index,
+                mesh_contacts: &mut mesh_cache,
+                static_occluders: &static_occluders,
+                policy: &policy,
+                generated_placements: &generated_placements,
+                retain_static_bounds_details: config.verbose,
+                cancellation,
+            },
+            write_actions_enabled,
+        )
+    })?);
+    if let Some(write_plan) = &write_plan {
+        profiler.write_plan_counters(write_plan);
+    }
     super::check_cancellation(cancellation)?;
-    let write_status = write_plan.as_ref().map(WriteStatusIndex::from_plan);
+    let write_status = profiler.measure("write_status_index", || {
+        write_plan.as_ref().map(WriteStatusIndex::from_plan)
+    });
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
     let mut log = BufWriter::new(File::create(log_path)?);
     super::check_cancellation(cancellation)?;
@@ -162,31 +206,38 @@ pub fn run(
         contact_baselines: &contact_baselines,
         generated_placements: &generated_placements,
     };
-    let inspection = inspect_refs_and_write_optional_log(
-        &mut log,
-        config,
-        &mut output,
-        write_status.as_ref(),
-        cancellation,
-    )?;
+    let inspection = profiler.measure("inspection_log", || {
+        inspect_refs_and_write_optional_log(
+            &mut log,
+            config,
+            &mut output,
+            write_status.as_ref(),
+            cancellation,
+        )
+    })?;
     super::check_cancellation(cancellation)?;
-    report_context.write = save_write_plan(
-        &mut target_plugin_data,
-        &target_plugin.source_path,
-        &target_plugin.destination_path,
-        write_plan,
-        config.write,
-        (!write_actions_enabled).then_some("all_write_actions_disabled"),
-    )?;
+    report_context.write = profiler.measure("save_write_plan", || {
+        save_write_plan(
+            &mut target_plugin_data,
+            &target_plugin.source_path,
+            &target_plugin.destination_path,
+            write_plan,
+            config.write,
+            (!write_actions_enabled).then_some("all_write_actions_disabled"),
+        )
+    })?;
     super::check_cancellation(cancellation)?;
-    write_reports(
-        stdout,
-        config,
-        &mut log,
-        &report_context,
-        &inspection,
-        &contact_baselines,
-    )?;
+    profiler.measure("report_writing", || {
+        write_reports(
+            stdout,
+            config,
+            &mut log,
+            &report_context,
+            &inspection,
+            &contact_baselines,
+        )
+    })?;
+    profiler.write_stderr();
     Ok(())
 }
 
@@ -202,6 +253,7 @@ struct NoTargetReportInput<'a> {
 
 fn write_no_target_report(
     stdout: &mut dyn Write,
+    profiler: &mut UnclipProfiler,
     input: NoTargetReportInput<'_>,
 ) -> io::Result<()> {
     let NoTargetReportInput {
@@ -226,28 +278,156 @@ fn write_no_target_report(
         policy,
     });
     let write_actions_enabled = policy.write_actions.any_enabled();
-    report_context.write = save_write_plan(
-        target_plugin_data,
-        &target_plugin.source_path,
-        &target_plugin.destination_path,
-        Some(WritePlan::default()),
-        config.write,
-        (!write_actions_enabled).then_some("all_write_actions_disabled"),
-    )?;
+    let write_plan = WritePlan::default();
+    profiler.write_plan_counters(&write_plan);
+    report_context.write = profiler.measure("save_write_plan", || {
+        save_write_plan(
+            target_plugin_data,
+            &target_plugin.source_path,
+            &target_plugin.destination_path,
+            Some(write_plan),
+            config.write,
+            (!write_actions_enabled).then_some("all_write_actions_disabled"),
+        )
+    })?;
     let log_path = openmw_config.user_config_path().join(LOG_NAME);
     let mut log = BufWriter::new(File::create(log_path)?);
     super::check_cancellation(cancellation)?;
-    if config.verbose {
-        report::write_instance_header(&mut log, &report_context)?;
+    profiler.measure("inspection_log", || {
+        if config.verbose {
+            report::write_instance_header(&mut log, &report_context)?;
+        }
+        Ok::<_, io::Error>(())
+    })?;
+    profiler.measure("report_writing", || {
+        write_reports(
+            stdout,
+            config,
+            &mut log,
+            &report_context,
+            &TerrainInspectionReport::default(),
+            &ContactBaselineIndex::default(),
+        )
+    })
+}
+
+const UNCLIP_PROFILE_ENV: &str = "GREENMOTE_PROFILE";
+
+struct UnclipProfiler {
+    enabled: bool,
+    phases: Vec<ProfilePhase>,
+    counters: BTreeMap<&'static str, usize>,
+}
+
+struct ProfilePhase {
+    name: &'static str,
+    duration: Duration,
+}
+
+impl UnclipProfiler {
+    fn from_env() -> Self {
+        Self {
+            enabled: profile_enabled_from_var(env::var_os(UNCLIP_PROFILE_ENV).as_deref()),
+            phases: Vec::new(),
+            counters: BTreeMap::new(),
+        }
     }
-    write_reports(
-        stdout,
-        config,
-        &mut log,
-        &report_context,
-        &TerrainInspectionReport::default(),
-        &ContactBaselineIndex::default(),
-    )
+
+    fn measure<T>(&mut self, name: &'static str, operation: impl FnOnce() -> T) -> T {
+        if !self.enabled {
+            return operation();
+        }
+
+        let start = Instant::now();
+        let output = operation();
+        self.phases.push(ProfilePhase {
+            name,
+            duration: start.elapsed(),
+        });
+        output
+    }
+
+    fn counter(&mut self, name: &'static str, value: usize) {
+        if self.enabled {
+            self.counters.insert(name, value);
+        }
+    }
+
+    fn static_occluder_counters(&mut self, report: &StaticOccluderBuildReport) {
+        self.counter(
+            "static_occluder_active_refs_scanned",
+            report.active_refs_scanned,
+        );
+        self.counter(
+            "static_occluder_target_refs_excluded",
+            report.target_refs_excluded,
+        );
+        self.counter("static_occluder_regex_excluded", report.regex_excluded);
+        self.counter(
+            "static_occluder_unresolved_static",
+            report.unresolved_static,
+        );
+        self.counter("static_occluder_missing_bounds", report.missing_bounds);
+        self.counter("static_occluder_resolved_bounds", report.resolved_bounds);
+        self.counter("static_occluder_collision_source", report.collision_source);
+        self.counter(
+            "static_occluder_visible_fallback_source",
+            report.visible_fallback_source,
+        );
+        self.counter(
+            "static_occluder_collider_part_fallbacks",
+            report.collider_part_fallbacks,
+        );
+        self.counter("static_occluder_huge_footprint", report.huge_footprint);
+    }
+
+    fn write_plan_counters(&mut self, write_plan: &WritePlan) {
+        self.counter("write_changed_refs", write_plan.changed_refs());
+        self.counter("write_adjusted_refs", write_plan.adjusted_refs);
+        self.counter("write_deleted_refs", write_plan.deleted_refs);
+        self.counter("write_moved_refs", write_plan.moved_refs);
+        self.counter("write_oriented_refs", write_plan.oriented_refs);
+    }
+
+    fn write_stderr(&self) {
+        if !self.enabled {
+            return;
+        }
+
+        let mut stderr = io::stderr().lock();
+        self.write_best_effort_to(&mut stderr);
+    }
+
+    fn write_best_effort_to(&self, output: &mut dyn Write) {
+        let _ = self.write_to(output);
+    }
+
+    fn write_to(&self, output: &mut dyn Write) -> io::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        writeln!(output, "greenmote_unclip_profile env={UNCLIP_PROFILE_ENV}")?;
+        for phase in &self.phases {
+            writeln!(
+                output,
+                "greenmote_unclip_profile phase={} duration_us={}",
+                phase.name,
+                phase.duration.as_micros()
+            )?;
+        }
+        for (name, value) in &self.counters {
+            writeln!(
+                output,
+                "greenmote_unclip_profile counter={name} value={value}"
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn profile_enabled_from_var(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == "1")
 }
 
 fn context_plugin_paths(
@@ -479,7 +659,7 @@ fn write_log_footer(
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
+    use std::{borrow::Cow, time::Duration};
 
     use crate::unclip::{
         args::WriteActionArg,
@@ -492,7 +672,10 @@ mod tests {
 
     use tes3::esp::{Plugin, Static, TES3Object};
 
-    use super::{target_static_index, write_log_footer, write_output_footer};
+    use super::{
+        ProfilePhase, UnclipProfiler, profile_enabled_from_var, target_static_index,
+        write_log_footer, write_output_footer,
+    };
 
     #[test]
     fn active_target_static_index_reuses_active_index_without_overlay() {
@@ -561,6 +744,74 @@ mod tests {
                 .map(|static_| static_.mesh_path.as_str()),
             Some("meshes/target_only.nif")
         );
+    }
+
+    #[test]
+    fn unclip_profile_gate_only_accepts_one() {
+        assert!(profile_enabled_from_var(Some(std::ffi::OsStr::new("1"))));
+        assert!(!profile_enabled_from_var(None));
+        assert!(!profile_enabled_from_var(Some(std::ffi::OsStr::new(
+            "true"
+        ))));
+        assert!(!profile_enabled_from_var(Some(std::ffi::OsStr::new("0"))));
+    }
+
+    #[test]
+    fn unclip_profile_output_is_line_oriented_and_counter_sorted() {
+        let profiler = UnclipProfiler {
+            enabled: true,
+            phases: vec![ProfilePhase {
+                name: "openmw_config_load",
+                duration: Duration::from_micros(42),
+            }],
+            counters: std::collections::BTreeMap::from([
+                ("write_changed_refs", 3),
+                ("active_cells", 2),
+            ]),
+        };
+        let mut output = Vec::new();
+
+        profiler.write_to(&mut output).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            concat!(
+                "greenmote_unclip_profile env=GREENMOTE_PROFILE\n",
+                "greenmote_unclip_profile phase=openmw_config_load duration_us=42\n",
+                "greenmote_unclip_profile counter=active_cells value=2\n",
+                "greenmote_unclip_profile counter=write_changed_refs value=3\n",
+            )
+        );
+    }
+
+    #[test]
+    fn unclip_profile_best_effort_output_ignores_write_errors() {
+        struct FailingWriter;
+
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "stderr closed",
+                ))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let profiler = UnclipProfiler {
+            enabled: true,
+            phases: vec![ProfilePhase {
+                name: "openmw_config_load",
+                duration: Duration::from_micros(42),
+            }],
+            counters: std::collections::BTreeMap::new(),
+        };
+        let mut output = FailingWriter;
+
+        profiler.write_best_effort_to(&mut output);
     }
 
     #[test]
