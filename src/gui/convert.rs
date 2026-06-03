@@ -239,25 +239,6 @@ impl ConvertUiState {
         added
     }
 
-    fn add_unclip_target_with_output(
-        &mut self,
-        target: impl Into<String>,
-        output_plugin: Option<String>,
-    ) -> bool {
-        let added = self
-            .unclip
-            .run_options
-            .add_target_with_output(target, output_plugin);
-        if added {
-            self.unclip.selected_target = self.unclip.run_options.targets.len().checked_sub(1);
-            self.unclip
-                .target_statuses
-                .push(UnclipTargetStatus::Pending);
-        }
-
-        added
-    }
-
     fn set_selected_unclip_output(&mut self, output_plugin: Option<String>) -> bool {
         let Some(selected) = self.selected_unclip_target() else {
             return false;
@@ -433,11 +414,7 @@ impl GreenmoteApp {
                 && let Some(paths) = select_plugin_files(self.localizer)
             {
                 for path in paths {
-                    let output_plugin = select_unclip_output_plugin(self.localizer, &path)
-                        .filter(|output_path| output_path != &path)
-                        .map(|path| path.display().to_string());
-                    self.convert
-                        .add_unclip_target_with_output(path.display().to_string(), output_plugin);
+                    self.convert.add_unclip_target(path.display().to_string());
                 }
             }
 
