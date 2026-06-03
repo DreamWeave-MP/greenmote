@@ -6,16 +6,14 @@ Greenmote is a Rust 2024 tool for Morrowind and `OpenMW` groundcover workflows. 
 - `greenmote unclip`, an inspector and optional fixer for generated groundcover references that clip into terrain or static occluders.
 - A desktop GUI, enabled by default, that exposes Convert, Unclip, and shared settings without requiring command-line use.
 
-Greenmote is primarily an application, not a stable library API. The Rust public surface exists to support the binary, GUI, tests, and documentation.
-
 ## Quick Start
 
 ### GUI
 
-Build and run the default application:
+Launch the default application:
 
 ```sh
-cargo run --release
+greenmote
 ```
 
 Launching Greenmote without arguments opens the GUI when the default `gui` feature is enabled.
@@ -25,67 +23,55 @@ Typical GUI flow:
 1. Open Greenmote.
 2. Review or regenerate settings if prompted.
 3. Use the Convert tab to run a dry run or conversion.
-4. Use the Unclip tab to inspect a generated plugin.
-5. Enable Unclip write mode only when you are ready to create a backup and modify the target plugin.
+4. Use the Unclip tab to inspect generated plugins or select explicit output plugins.
+5. Enable Unclip dry run when you want read-only inspection; leave it off only when you are ready to confirm a backup and write.
 
 ### CLI
 
 Run Convert with discovered `OpenMW` settings:
 
 ```sh
-cargo run --release -- convert
+greenmote convert
 ```
 
 Run Convert without writing output:
 
 ```sh
-cargo run --release -- convert --dry-run
+greenmote convert --dry-run
 ```
 
 Inspect generated groundcover clipping:
 
 ```sh
-cargo run --release -- unclip --plugin groundcover.omwaddon --verbose
+greenmote unclip --plugin groundcover.omwaddon --dry-run --verbose
 ```
 
-Write Unclip fixes after inspection:
+Write Unclip fixes after inspection with the default write actions:
 
 ```sh
-cargo run --release -- unclip --plugin groundcover.omwaddon --write-actions terrain-z,static-move,orient
+greenmote unclip --plugin groundcover.omwaddon
 ```
 
 Top-level options such as `--openmw-cfg`, `--config`, `--generate-completion`, and `--generate-manpage` must appear before the subcommand.
 
 ## Installation And Builds
 
-Install or build from the repository root:
+Build from the repository root:
 
 ```sh
 cargo build --release
 ```
 
-Install from a checked-out source tree:
+Install from the checked-out source tree:
 
 ```sh
 cargo install --path .
-```
-
-The default feature set includes the GUI:
-
-```sh
-cargo build --release --all-features
 ```
 
 Build a CLI-only binary without GUI dependencies:
 
 ```sh
 cargo build --release --no-default-features
-```
-
-Run the CLI-only binary directly:
-
-```sh
-cargo run --release --no-default-features -- convert --dry-run
 ```
 
 The binary is written under `target/release/greenmote` unless you use Cargo installation or packaging commands.
@@ -102,7 +88,7 @@ Greenmote reads `OpenMW` configuration so it can discover configured data direct
 - If `OpenMW` does not provide `data-local`, Greenmote falls back to `OpenMW`'s default data-local path helper.
 - CLI `convert --output PATH` overrides `[convert].output_directory` behavior for that run.
 
-Generated defaults are meant to be editable. Greenmote validates regular expressions and schema keys before using the file.
+Generated defaults are meant to be editable. Greenmote validates regular expressions and numeric policy values before using the file.
 
 ## Convert Workflow
 
@@ -152,6 +138,7 @@ Inspection mode:
 
 - Selects a target plugin by `--plugin PLUGIN` or `[unclip].plugin` in `greenmote.toml`.
 - Accepts a filesystem path or a VFS plugin name.
+- Uses `--dry-run` or `[unclip].dry_run = true` for read-only planning without modifying the target plugin.
 - Reports aggregate diagnostics by default.
 - Writes detailed per-reference diagnostics to `greenmote.log` with `--verbose`.
 - Treats static occluders as blockers when they overlap either target mesh volume or bounded placement-clearance probes around the target origin.
@@ -163,13 +150,22 @@ Inspection mode:
 Write mode:
 
 - Enabled by default. Use `--dry-run` or `[unclip].dry_run = true` for read-only inspection.
-- Creates a backup before replacing the target plugin.
+- Creates a backup before replacing the target plugin, or before writing the explicit `--output-plugin PATH` destination.
+- Defaults to writing back to the resolved source plugin when no output override is provided.
 - In the GUI, write mode requires a confirmation dialog before modifying the target plugin.
-- The GUI exposes Unclip dry-run as a localized runtime option.
+- The GUI exposes Unclip dry-run as a localized runtime option and lets each target choose an explicit output plugin.
+
+Useful Unclip flags:
+
+- `--dry-run[=BOOL]` plans and reports without writing plugin changes.
+- `--output-plugin PATH` writes to an explicit destination instead of replacing the resolved source plugin.
+- `--write-actions ACTION[,ACTION...]` limits the enabled write fixes; when omitted, all concrete write actions are enabled.
 
 Write actions:
 
 - `terrain-z` adjusts reference Z placement toward terrain.
+- `water-delete` deletes references that a terrain-Z adjustment would move across the exterior water plane.
+- `road-delete` deletes references on matching `LAND` texture paths, with built-in road filters plus optional include/exclude regexes.
 - `static-delete` deletes references that cannot be safely moved away from static occluders.
 - `static-move` searches for nearby positions outside static occluders and placement-clearance blockers.
 - `orient` aligns groundcover orientation to terrain within policy limits.
@@ -185,20 +181,19 @@ Policy knobs:
 - `--meshgenerator-ini` reads `mw-groundcover-generator` mesh lists as optional hints for origin-offset inference; measured target-plugin residuals remain the source of truth, and inferred refs preserve `ref.z = terrain_z_at_origin + offset` within the generator-style 4-unit tolerance.
 - `--include-grass-id` and `--exclude-grass-id` filter target groundcover reference IDs with case-insensitive regexes.
 - `--include-occluder-id` and `--exclude-occluder-id` filter static occluder IDs with case-insensitive regexes.
+- `--include-road-texture-path` and `--exclude-road-texture-path` tune road-delete texture path matching.
 
 ## GUI Features
 
 The default GUI provides:
 
 - A Convert main view with run controls, progress, status output, and generated-output safeguards.
-- An Unclip main view with inspection and guarded write-mode controls.
-- Settings sections for OpenMW/config paths, Convert options, Unclip options, filters, and write policy.
+- An Unclip main view with batch targets, selectable output plugins, dry-run inspection, and guarded write controls.
+- Settings sections for OpenMW/config paths, Convert options, Unclip options, filters, road texture filters, and write policy.
 - Runtime-only localization for English, Swedish, Russian, Spanish, German, and French.
 - Non-persistent language selection. Changing the GUI language affects the current GUI session only.
 
 Localization applies to runtime GUI text only. CLI output, structured Unclip output, generated reports, and `greenmote.log` remain English-only.
-
-Controller support is deferred. `PortMaster` GUI builds are also deferred.
 
 ## `greenmote.toml`
 
@@ -230,7 +225,7 @@ meshgenerator_ini = "mesh_generator_ini_files/groundcover.ini"
 verbose = false
 structured = false
 dry_run = false
-write_actions = ["terrain-z", "static-delete", "static-move", "orient"]
+write_actions = ["terrain-z", "water-delete", "road-delete", "static-delete", "static-move", "orient"]
 origin_epsilon = 2.0
 relocation_step = 32.0
 relocation_steps = 8
@@ -247,6 +242,8 @@ exclude_occluder_ids = [
   "t_.*flora.*(tree|branch|root|stump|log|palm).*",
   "t_cyr_flora(gc|str)_bush_.*",
 ]
+include_road_texture_paths = []
+exclude_road_texture_paths = []
 ```
 
 Key notes:
@@ -260,11 +257,13 @@ Key notes:
 - `[unclip].verbose` writes detailed per-reference diagnostics to `greenmote.log`; `[unclip].instances` is still accepted as a deprecated compatibility alias.
 - `[unclip].structured` switches the compact stdout summary to JSON.
 - `[unclip].dry_run` disables Unclip writes for read-only inspection.
+- Deprecated `[unclip].write` is accepted for compatibility and mapped inversely to `dry_run`; if both keys conflict, loading fails.
 - `[unclip].write_actions` selects which write fixes are allowed.
 - `[unclip].*_epsilon`, `relocation_step`, and `relocation_steps` tune inspection/write policy.
 - Include/exclude ID filters are case-insensitive regex lists.
+- Road texture path filters are case-insensitive regex lists used by the `road-delete` write action.
 - Default occluder excludes skip common vanilla, Bloodmoon, and `Tamriel_Data` tree statics whose broad canopy bounds often produce false static-occlusion hits. Set `exclude_occluder_ids = []` to opt back into treating them as blockers.
-- Unknown TOML keys are rejected.
+- Unknown TOML keys are ignored for stale-config compatibility.
 
 ## Generated Shell Completions And Manpage
 
@@ -283,11 +282,7 @@ These flags are top-level application flags. Place them before any subcommand an
 
 - BSA-backed mesh lookup is incomplete until archive handling is wired to VFS fallback archives.
 - Convert intentionally processes exterior `CELL` records only; interiors are not supported.
-- Static-only source plugins should not become generated plugin masters unless references from those plugins are actually used.
 - `--auto-enable` requires the output directory to be visible to `OpenMW` as `data-local` or a configured `data=` directory.
-- Controller support is deferred.
-- `PortMaster` GUI builds are deferred.
-- CI is intentionally not included in this repository batch; validation commands are listed below.
 
 ## Troubleshooting
 
