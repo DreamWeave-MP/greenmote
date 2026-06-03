@@ -447,8 +447,11 @@ impl GreenmoteApp {
                 && let Some(target) = self.convert.unclip.run_options.targets.get(selected)
             {
                 let input_plugin = target.plugin.clone();
-                let input_path = Path::new(&input_plugin);
-                if let Some(output_path) = select_unclip_output_plugin(self.localizer, input_path) {
+                let output_plugin = target.output_plugin.clone();
+                let default_path = output_plugin.as_deref().unwrap_or(&input_plugin);
+                if let Some(output_path) =
+                    select_unclip_output_plugin(self.localizer, Path::new(default_path))
+                {
                     self.convert
                         .set_selected_unclip_output(Some(output_path.display().to_string()));
                 }
@@ -1501,10 +1504,14 @@ fn write_unclip_batch_summary(
 }
 
 fn unclip_target_label(args: &UnclipArgs) -> String {
-    args.plugin.as_ref().map_or_else(
+    let input = args.plugin.as_ref().map_or_else(
         || "(no target plugin)".to_owned(),
         |plugin| plugin.display().to_string(),
-    )
+    );
+
+    args.output_plugin.as_ref().map_or(input.clone(), |output| {
+        format!("{input} -> {}", output.display())
+    })
 }
 
 fn summarize_unclip_statuses(statuses: &[UnclipTargetStatus]) -> UnclipBatchSummary {
@@ -1684,6 +1691,7 @@ mod tests {
     use super::{
         ConvertRunOptions, ConvertUiState, UnclipRunOptions, UnclipTargetRunOption,
         UnclipTargetStatus, egui, loaded_openmw_config_status, run_unclip_batch,
+        unclip_target_label,
     };
     use crate::{
         groundcover::CancellationToken,
@@ -1915,6 +1923,43 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("=== Unclip: first.omwaddon ==="));
         assert!(output.contains("Unclip batch summary: 2 succeeded, 0 failed, 0 skipped."));
+    }
+
+    #[test]
+    fn unclip_target_label_shows_output_override_only_when_present() {
+        let mut args = test_unclip_args(["input.omwaddon"], true).remove(0);
+
+        assert_eq!(unclip_target_label(&args), "input.omwaddon");
+
+        args.output_plugin = Some("output.omwaddon".into());
+
+        assert_eq!(
+            unclip_target_label(&args),
+            "input.omwaddon -> output.omwaddon"
+        );
+    }
+
+    #[test]
+    fn unclip_batch_output_uses_output_override_labels() {
+        let mut args = test_unclip_args(["input.omwaddon"], true);
+        args[0].output_plugin = Some("output.omwaddon".into());
+        let mut output = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        run_unclip_batch(
+            None,
+            &args,
+            true,
+            &mut output,
+            &cancellation,
+            |_index, _status| {},
+            |_openmw_cfg, _args, _stdout, _cancellation| Ok(()),
+        )
+        .unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("=== Unclip: input.omwaddon -> output.omwaddon ==="));
+        assert!(output.contains("Unclip target succeeded: input.omwaddon -> output.omwaddon"));
     }
 
     #[test]

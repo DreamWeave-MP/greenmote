@@ -307,7 +307,7 @@ fn invalid_config<E: std::fmt::Display>(error: E) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     use clap::Parser;
 
@@ -377,6 +377,41 @@ mod tests {
                 .unwrap()
                 .contains("output_plugin")
         );
+    }
+
+    #[test]
+    fn output_plugin_validation_rejects_existing_directory() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "greenmote-output-plugin-dir-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&output_dir).unwrap();
+
+        let mut args = unclip_args(&["greenmote", "unclip", "--plugin", "input.omwaddon"]);
+        args.output_plugin = Some(output_dir.clone());
+        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
+
+        let error = config.validate().unwrap_err();
+
+        fs::remove_dir(&output_dir).unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("must not be an existing directory")
+        );
+    }
+
+    #[test]
+    fn output_plugin_validation_rejects_path_without_filename() {
+        let mut args = unclip_args(&["greenmote", "unclip", "--plugin", "input.omwaddon"]);
+        args.output_plugin = Some(PathBuf::new());
+        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
+
+        let error = config.validate().unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("must include a filename"));
     }
 
     #[test]

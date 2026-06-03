@@ -445,6 +445,16 @@ mod tests {
     }
 
     #[test]
+    fn unclip_run_options_target_label_shows_output_override() {
+        assert_eq!(target("input.omwaddon").label(), "input.omwaddon");
+        assert_eq!(
+            UnclipTargetRunOption::new("input.omwaddon", Some("output.omwaddon".to_owned()))
+                .label(),
+            "input.omwaddon -> output.omwaddon"
+        );
+    }
+
+    #[test]
     fn unclip_run_options_reject_empty_plugin() {
         assert!(UnclipRunOptions::default().to_args_list().is_err());
     }
