@@ -285,6 +285,9 @@ fn normalize_texture_path(path: &str) -> String {
 }
 
 fn corrected_texture_sample_position(world_x: f32, world_y: f32) -> (f32, f32) {
+    // OpenMW applies a quarter-tile offset when sampling LAND textures to align
+    // texture coordinates with the visual terrain grid. Shift world position by
+    // one vertex spacing (128 units) to match OpenMW's VTEX sampling behavior.
     (world_x - LAND_VERTEX_SPACING, world_y + LAND_VERTEX_SPACING)
 }
 
