@@ -126,7 +126,9 @@ impl TargetRefIndex {
 mod tests {
     use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
-    use crate::unclip::args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions};
+    use crate::unclip::args::{
+        IdFilter, RelocationPolicy, RoadTextureFilter, UnclipPolicy, WriteActions,
+    };
 
     use super::TargetRefIndex;
 
@@ -313,6 +315,7 @@ mod tests {
             )
             .unwrap(),
             occluder_filter: IdFilter::new(&[], &[]).unwrap(),
+            road_texture_filter: RoadTextureFilter::new(&[], &[]).unwrap(),
         }
     }
 

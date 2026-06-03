@@ -37,6 +37,8 @@ pub(crate) struct UnclipConfig {
     pub(crate) exclude_grass_ids: Vec<String>,
     pub(crate) include_occluder_ids: Vec<String>,
     pub(crate) exclude_occluder_ids: Vec<String>,
+    pub(crate) include_road_texture_paths: Vec<String>,
+    pub(crate) exclude_road_texture_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -85,6 +87,12 @@ pub(crate) struct PersistedUnclipConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) exclude_occluder_ids: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) include_road_texture_paths: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exclude_road_texture_paths: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -184,6 +192,14 @@ impl UnclipConfig {
                 persisted.exclude_occluder_ids,
                 default_tree_occluder_exclude_ids(),
             ),
+            include_road_texture_paths: merge_list(
+                &args.include_road_texture_paths,
+                persisted.include_road_texture_paths,
+            ),
+            exclude_road_texture_paths: merge_list(
+                &args.exclude_road_texture_paths,
+                persisted.exclude_road_texture_paths,
+            ),
         })
     }
 
@@ -218,6 +234,8 @@ impl PersistedUnclipConfig {
             exclude_grass_ids: Some(Vec::new()),
             include_occluder_ids: Some(Vec::new()),
             exclude_occluder_ids: Some(default_tree_occluder_exclude_ids()),
+            include_road_texture_paths: Some(Vec::new()),
+            exclude_road_texture_paths: Some(Vec::new()),
             ..Self::default()
         }
     }
@@ -321,7 +339,7 @@ mod tests {
         let Some(Command::Unclip(args)) = cli.command else {
             panic!("expected unclip command");
         };
-        args
+        *args
     }
 
     #[test]
@@ -684,6 +702,22 @@ origin_epsilon = 2.5
             &args,
             PersistedUnclipConfig {
                 include_grass_ids: Some(vec!["(".to_owned()]),
+                ..PersistedUnclipConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_persisted_road_texture_regex_fails_validation() {
+        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
+        let config = UnclipConfig::merge(
+            &args,
+            PersistedUnclipConfig {
+                include_road_texture_paths: Some(vec!["(".to_owned()]),
                 ..PersistedUnclipConfig::default()
             },
             None,

@@ -11,8 +11,8 @@ use super::{
         UnclipSummary,
     },
     write_plan::{
-        WriteAdjustment, WriteOrientation, WriteReport, WriteStaticBoundsDeletion,
-        WriteStaticBoundsMove, WriteSummary, WriteWaterDeletion,
+        WriteAdjustment, WriteOrientation, WriteReport, WriteRoadDeletion,
+        WriteStaticBoundsDeletion, WriteStaticBoundsMove, WriteSummary, WriteWaterDeletion,
     },
 };
 
@@ -65,6 +65,7 @@ pub(crate) fn write_instance_header(
         && (!write.adjustments.is_empty()
             || !write.deletions.is_empty()
             || !write.water_deletions.is_empty()
+            || !write.road_deletions.is_empty()
             || !write.moves.is_empty()
             || !write.orientations.is_empty())
     {
@@ -198,6 +199,12 @@ fn baseline_action_counts(write: &WriteReport) -> BTreeMap<String, BaselineActio
             .or_default()
             .deleted += 1;
     }
+    for deletion in &write.road_deletions {
+        counts
+            .entry(deletion.id.to_lowercase())
+            .or_default()
+            .deleted += 1;
+    }
     for move_ in &write.moves {
         counts.entry(move_.id.to_lowercase()).or_default().moved += 1;
     }
@@ -232,6 +239,7 @@ fn write_write_summary_text(
         writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
         writeln!(stdout, "Static-deleted refs: {}", write.deleted_refs)?;
         writeln!(stdout, "Water-deleted refs: {}", write.water_deleted_refs)?;
+        writeln!(stdout, "Road-deleted refs: {}", write.road_deleted_refs)?;
         writeln!(stdout, "Moved refs: {}", write.moved_refs)?;
         writeln!(stdout, "Oriented refs: {}", write.oriented_refs)?;
         if include_adjustments {
@@ -250,6 +258,9 @@ fn write_change_lines(stdout: &mut dyn Write, write: &WriteReport) -> io::Result
     }
     for deletion in &write.water_deletions {
         write_water_deletion_text(stdout, deletion)?;
+    }
+    for deletion in &write.road_deletions {
+        write_road_deletion_text(stdout, deletion)?;
     }
     for move_ in &write.moves {
         write_static_bounds_move_text(stdout, move_)?;
@@ -419,6 +430,20 @@ fn write_policy_summary_text(
         )?;
     } else {
         writeln!(stdout, "  occluder id filter: none")?;
+    }
+    if policy.has_road_texture_filter_overrides() {
+        writeln!(
+            stdout,
+            "  include road texture paths: {}",
+            pattern_list(&policy.include_road_texture_paths)
+        )?;
+        writeln!(
+            stdout,
+            "  exclude road texture paths: {}",
+            pattern_list(&policy.exclude_road_texture_paths)
+        )?;
+    } else {
+        writeln!(stdout, "  road texture path filter: built-in defaults")?;
     }
     writeln!(
         stdout,
@@ -647,6 +672,17 @@ fn write_water_deletion_text(
         deletion.old_z,
         deletion.new_z,
         deletion.water_level
+    )
+}
+
+fn write_road_deletion_text(
+    stdout: &mut dyn Write,
+    deletion: &WriteRoadDeletion,
+) -> io::Result<()> {
+    writeln!(
+        stdout,
+        "DELETE_ROAD CELL {:?} REF {:?} {} texture={}",
+        deletion.cell, deletion.reference_key, deletion.id, deletion.texture_path
     )
 }
 

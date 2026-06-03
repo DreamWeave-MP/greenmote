@@ -4,19 +4,25 @@ use std::collections::BTreeSet;
 
 use glam::Vec3;
 use rustc_hash::FxHashMap;
-use tes3::esp::{Landscape, LandscapeFlags};
+use tes3::esp::{Landscape, LandscapeFlags, LandscapeTexture, ObjectFlags, Plugin};
 
-use super::cells::CellCoord;
+use super::{args::RoadTextureFilter, cells::CellCoord};
 
 const CELL_SIZE: f32 = 8192.0;
 const LAND_VERTEX_SPACING: f32 = 128.0;
 const LAND_VERTEX_MAX: usize = 64;
+const LAND_TEXTURE_GRID: usize = 16;
+const LAND_TEXTURE_GRID_F32: f32 = 16.0;
+const LAND_TEXTURE_SPACING: f32 = CELL_SIZE / LAND_TEXTURE_GRID_F32;
+const DEFAULT_LAND_TEXTURE: &str = "_land_default.dds";
 
 pub struct TerrainIndex {
     lands: TerrainLandMap,
 }
 
 type TerrainLandMap = FxHashMap<CellCoord, Box<[[f32; 65]; 65]>>;
+type TerrainTextureLandMap = FxHashMap<CellCoord, TerrainTextureLand>;
+type LtexPathMap = FxHashMap<(usize, u32), String>;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TerrainSample {
@@ -29,6 +35,22 @@ pub(crate) struct TerrainSample {
 pub(crate) struct TerrainAngle {
     pub(crate) xrot: f32,
     pub(crate) yrot: f32,
+}
+
+pub(crate) struct TerrainTextureIndex {
+    lands: TerrainTextureLandMap,
+    ltex_paths: LtexPathMap,
+}
+
+#[derive(Clone, Copy)]
+struct TerrainTextureLand {
+    plugin_index: usize,
+    indices: [[u16; LAND_TEXTURE_GRID]; LAND_TEXTURE_GRID],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TerrainTextureSample {
+    pub(crate) path: String,
 }
 
 impl TerrainIndex {
@@ -149,6 +171,102 @@ impl TerrainIndex {
     }
 }
 
+impl TerrainTextureIndex {
+    #[must_use]
+    pub(crate) fn from_plugins_in_cells<'a>(
+        plugins: impl IntoIterator<Item = &'a Plugin>,
+        cells: &BTreeSet<CellCoord>,
+    ) -> Self {
+        let mut lands = TerrainTextureLandMap::default();
+        let mut ltex_paths = LtexPathMap::default();
+
+        for (plugin_index, plugin) in plugins.into_iter().enumerate() {
+            for texture in plugin.objects_of_type::<LandscapeTexture>() {
+                let key = (plugin_index, texture.index);
+                if texture.flags.contains(ObjectFlags::DELETED) {
+                    ltex_paths.remove(&key);
+                } else {
+                    ltex_paths.insert(key, normalize_texture_path(&texture.file_name));
+                }
+            }
+            for landscape in plugin.objects_of_type::<Landscape>() {
+                if !cells.contains(&landscape.grid) {
+                    continue;
+                }
+                if landscape.flags.contains(ObjectFlags::DELETED) {
+                    lands.remove(&landscape.grid);
+                } else if landscape
+                    .landscape_flags
+                    .intersects(LandscapeFlags::USES_TEXTURES)
+                {
+                    lands.insert(
+                        landscape.grid,
+                        TerrainTextureLand {
+                            plugin_index,
+                            indices: *landscape.texture_indices.data,
+                        },
+                    );
+                }
+            }
+        }
+
+        Self { lands, ltex_paths }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_parts(
+        lands: impl IntoIterator<Item = (CellCoord, usize, [[u16; 16]; 16])>,
+        ltex_paths: impl IntoIterator<Item = ((usize, u32), String)>,
+    ) -> Self {
+        Self {
+            lands: lands
+                .into_iter()
+                .map(|(cell, plugin_index, indices)| {
+                    (
+                        cell,
+                        TerrainTextureLand {
+                            plugin_index,
+                            indices,
+                        },
+                    )
+                })
+                .collect(),
+            ltex_paths: ltex_paths
+                .into_iter()
+                .map(|(key, path)| (key, normalize_texture_path(&path)))
+                .collect(),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn sample_at(&self, world_x: f32, world_y: f32) -> Option<TerrainTextureSample> {
+        let (sample_x, sample_y) = corrected_texture_sample_position(world_x, world_y);
+        let cell = world_cell(sample_x, sample_y);
+        let land = self.lands.get(&cell)?;
+        let (grid_x, grid_y) = texture_grid_coord(sample_x, sample_y, cell);
+        let vtex = land.indices[grid_y][grid_x];
+        let path = if vtex == 0 {
+            DEFAULT_LAND_TEXTURE.to_owned()
+        } else {
+            self.ltex_paths
+                .get(&(land.plugin_index, u32::from(vtex - 1)))?
+                .clone()
+        };
+        Some(TerrainTextureSample { path })
+    }
+
+    #[must_use]
+    pub(crate) fn matches_road_at(
+        &self,
+        world_x: f32,
+        world_y: f32,
+        filter: &RoadTextureFilter,
+    ) -> Option<TerrainTextureSample> {
+        let sample = self.sample_at(world_x, world_y)?;
+        filter.includes(&sample.path).then_some(sample)
+    }
+}
+
 #[allow(clippy::cast_possible_truncation)]
 fn world_cell(coord: f32, other: f32) -> CellCoord {
     (
@@ -160,6 +278,34 @@ fn world_cell(coord: f32, other: f32) -> CellCoord {
 #[allow(clippy::cast_precision_loss)]
 fn local_cell_coord(world_coord: f32, cell_coord: i32) -> f32 {
     (world_coord - cell_coord as f32 * CELL_SIZE).clamp(0.0, CELL_SIZE)
+}
+
+fn normalize_texture_path(path: &str) -> String {
+    path.replace('\\', "/").to_lowercase()
+}
+
+fn corrected_texture_sample_position(world_x: f32, world_y: f32) -> (f32, f32) {
+    // OpenMW applies a quarter-tile offset when sampling LAND textures to align
+    // texture coordinates with the visual terrain grid. Shift world position by
+    // one vertex spacing (128 units) to match OpenMW's VTEX sampling behavior.
+    (world_x - LAND_VERTEX_SPACING, world_y + LAND_VERTEX_SPACING)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn texture_grid_coord(world_x: f32, world_y: f32, cell: CellCoord) -> (usize, usize) {
+    let local_x = local_cell_coord(world_x, cell.0);
+    let local_y = local_cell_coord(world_y, cell.1);
+    let grid_x = (local_x / LAND_TEXTURE_SPACING)
+        .floor()
+        .min((LAND_TEXTURE_GRID - 1) as f32) as usize;
+    let grid_y = (local_y / LAND_TEXTURE_SPACING)
+        .floor()
+        .min((LAND_TEXTURE_GRID - 1) as f32) as usize;
+    (grid_x, grid_y)
 }
 
 #[allow(
@@ -397,6 +543,7 @@ fn interpolate_triangle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tes3::esp::TES3Object;
 
     #[allow(clippy::cast_precision_loss)]
     fn patterned_heights(offset: f32) -> Box<[[f32; 65]; 65]> {
@@ -410,6 +557,135 @@ mod tests {
             }
         }
         heights
+    }
+
+    fn texture_grid(vtex: u16) -> [[u16; 16]; 16] {
+        [[vtex; 16]; 16]
+    }
+
+    #[test]
+    fn samples_texture_with_openmw_corrected_position() {
+        let mut indices = [[0; 16]; 16];
+        indices[0][0] = 5;
+        indices[0][1] = 7;
+        let textures = TerrainTextureIndex::from_parts(
+            [((0, 0), 0, indices)],
+            [
+                ((0, 4), "Textures\\Landscape\\tx_road_01.dds".to_owned()),
+                ((0, 6), "Textures\\Landscape\\tx_grass_01.dds".to_owned()),
+            ],
+        );
+
+        let sample = textures.sample_at(512.0, -128.0).unwrap();
+
+        assert_eq!(sample.path, "textures/landscape/tx_road_01.dds");
+    }
+
+    #[test]
+    fn samples_texture_across_negative_cells_and_borders() {
+        let mut negative = [[0; 16]; 16];
+        negative[15][15] = 2;
+        let mut positive_border = [[0; 16]; 16];
+        positive_border[0][0] = 3;
+        let textures = TerrainTextureIndex::from_parts(
+            [((-1, -1), 0, negative), ((1, 0), 0, positive_border)],
+            [
+                ((0, 1), "Textures\\Landscape\\neg_road.dds".to_owned()),
+                ((0, 2), "Textures\\Landscape\\border_road.dds".to_owned()),
+            ],
+        );
+
+        assert_eq!(
+            textures.sample_at(0.0, -129.0).unwrap().path,
+            "textures/landscape/neg_road.dds"
+        );
+        assert_eq!(
+            textures.sample_at(8_320.0, -128.0).unwrap().path,
+            "textures/landscape/border_road.dds"
+        );
+    }
+
+    #[test]
+    fn texture_index_resolves_default_and_vtex_minus_one_ltex() {
+        let mut indices = [[0; 16]; 16];
+        indices[1][0] = 1;
+        let textures = TerrainTextureIndex::from_parts(
+            [((0, 0), 0, indices)],
+            [((0, 0), "Textures\\Landscape\\tx_dirtroad_01.dds".to_owned())],
+        );
+
+        assert_eq!(
+            textures.sample_at(128.0, -128.0).unwrap().path,
+            DEFAULT_LAND_TEXTURE
+        );
+        assert_eq!(
+            textures.sample_at(128.0, 512.0).unwrap().path,
+            "textures/landscape/tx_dirtroad_01.dds"
+        );
+    }
+
+    #[test]
+    fn missing_land_or_ltex_returns_no_texture_sample() {
+        let mut indices = [[0; 16]; 16];
+        indices[0][0] = 2;
+        let textures = TerrainTextureIndex::from_parts([((0, 0), 0, indices)], []);
+
+        assert!(textures.sample_at(128.0, -128.0).is_none());
+        assert!(textures.sample_at(8_320.0, -128.0).is_none());
+    }
+
+    #[test]
+    fn ltex_records_override_and_delete_within_plugin() {
+        let mut land = Landscape {
+            landscape_flags: LandscapeFlags::USES_TEXTURES,
+            ..Landscape::default()
+        };
+        land.texture_indices.data = Box::new(texture_grid(4));
+        let mut deleted_texture = LandscapeTexture {
+            index: 3,
+            file_name: "Textures\\Landscape\\tx_road_deleted.dds".to_owned(),
+            ..LandscapeTexture::default()
+        };
+        deleted_texture.flags.insert(ObjectFlags::DELETED);
+        let plugin = Plugin {
+            objects: vec![
+                TES3Object::LandscapeTexture(LandscapeTexture {
+                    index: 3,
+                    file_name: "Textures\\Landscape\\tx_road_old.dds".to_owned(),
+                    ..LandscapeTexture::default()
+                }),
+                TES3Object::LandscapeTexture(LandscapeTexture {
+                    index: 3,
+                    file_name: "Textures\\Landscape\\tx_road_new.dds".to_owned(),
+                    ..LandscapeTexture::default()
+                }),
+                TES3Object::Landscape(land.clone()),
+            ],
+        };
+        let deleted_plugin = Plugin {
+            objects: vec![
+                TES3Object::LandscapeTexture(LandscapeTexture {
+                    index: 3,
+                    file_name: "Textures\\Landscape\\tx_road_old.dds".to_owned(),
+                    ..LandscapeTexture::default()
+                }),
+                TES3Object::LandscapeTexture(deleted_texture),
+                TES3Object::Landscape(land),
+            ],
+        };
+
+        let textures =
+            TerrainTextureIndex::from_plugins_in_cells([&plugin], &BTreeSet::from([(0, 0)]));
+        let deleted = TerrainTextureIndex::from_plugins_in_cells(
+            [&deleted_plugin],
+            &BTreeSet::from([(0, 0)]),
+        );
+
+        assert_eq!(
+            textures.sample_at(128.0, -128.0).unwrap().path,
+            "textures/landscape/tx_road_new.dds"
+        );
+        assert!(deleted.sample_at(128.0, -128.0).is_none());
     }
 
     #[test]

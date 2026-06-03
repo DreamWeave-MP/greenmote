@@ -97,7 +97,7 @@ fn unclip_args(target: &Path) -> greenmote::unclip::UnclipArgs {
     let Command::Unclip(args) = cli.command_or_default() else {
         panic!("expected unclip args");
     };
-    args
+    *args
 }
 
 fn write_target_plugin(path: &Path) {

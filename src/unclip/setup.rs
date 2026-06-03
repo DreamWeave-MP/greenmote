@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeSet, io, path::PathBuf};
 
-use tes3::esp::{Cell, Landscape, Plugin, Static};
+use tes3::esp::{Cell, Landscape, LandscapeTexture, Plugin, Static};
 
 use crate::groundcover::CancellationToken;
 
@@ -105,7 +105,10 @@ pub(super) fn load_context_plugins<'a>(
             }
 
             Plugin::from_path_filtered(path, |tag| {
-                &tag == Landscape::TAG || &tag == Static::TAG || &tag == Cell::TAG
+                &tag == LandscapeTexture::TAG
+                    || &tag == Landscape::TAG
+                    || &tag == Static::TAG
+                    || &tag == Cell::TAG
             })
             .map_err(|error| {
                 io::Error::new(

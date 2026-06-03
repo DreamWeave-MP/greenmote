@@ -14,12 +14,13 @@ use super::{
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
 const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
-const UNCLIP_WRITE_ACTION_COUNT: usize = 5;
+const UNCLIP_WRITE_ACTION_COUNT: usize = 6;
 const UNCLIP_TERRAIN_Z_INDEX: usize = 0;
 const UNCLIP_WATER_DELETE_INDEX: usize = 1;
-const UNCLIP_STATIC_DELETE_INDEX: usize = 2;
-const UNCLIP_STATIC_MOVE_INDEX: usize = 3;
-const UNCLIP_ORIENT_INDEX: usize = 4;
+const UNCLIP_ROAD_DELETE_INDEX: usize = 2;
+const UNCLIP_STATIC_DELETE_INDEX: usize = 3;
+const UNCLIP_STATIC_MOVE_INDEX: usize = 4;
+const UNCLIP_ORIENT_INDEX: usize = 5;
 
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsUiState {
@@ -45,6 +46,8 @@ pub(super) struct SettingsUiState {
     exclude_grass_ids_viewport_start: usize,
     include_occluder_ids_viewport_start: usize,
     exclude_occluder_ids_viewport_start: usize,
+    include_road_texture_paths_viewport_start: usize,
+    exclude_road_texture_paths_viewport_start: usize,
 }
 
 #[derive(Default)]
@@ -73,6 +76,8 @@ struct UnclipPolicyDraft {
     exclude_grass_ids: Vec<String>,
     include_occluder_ids: Vec<String>,
     exclude_occluder_ids: Vec<String>,
+    include_road_texture_paths: Vec<String>,
+    exclude_road_texture_paths: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +89,8 @@ enum SettingsListKind {
     ExcludeGrassIds,
     IncludeOccluderIds,
     ExcludeOccluderIds,
+    IncludeRoadTexturePaths,
+    ExcludeRoadTexturePaths,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +138,8 @@ impl Default for SettingsUiState {
             exclude_grass_ids_viewport_start: 0,
             include_occluder_ids_viewport_start: 0,
             exclude_occluder_ids_viewport_start: 0,
+            include_road_texture_paths_viewport_start: 0,
+            exclude_road_texture_paths_viewport_start: 0,
         }
     }
 }
@@ -278,6 +287,8 @@ impl SettingsUiState {
         self.exclude_grass_ids_viewport_start = 0;
         self.include_occluder_ids_viewport_start = 0;
         self.exclude_occluder_ids_viewport_start = 0;
+        self.include_road_texture_paths_viewport_start = 0;
+        self.exclude_road_texture_paths_viewport_start = 0;
     }
 }
 
@@ -478,6 +489,10 @@ impl GreenmoteApp {
                     self.localizer.text(UiText::WaterDeleteAction),
                 );
                 ui.checkbox(
+                    &mut policy.write_actions[UNCLIP_ROAD_DELETE_INDEX],
+                    self.localizer.text(UiText::RoadDeleteAction),
+                );
+                ui.checkbox(
                     &mut policy.write_actions[UNCLIP_STATIC_DELETE_INDEX],
                     self.localizer.text(UiText::StaticDeleteAction),
                 );
@@ -592,6 +607,26 @@ impl GreenmoteApp {
             self.localizer.text(UiText::NoExcludeOccluderIds),
             SettingsListKind::ExcludeOccluderIds,
             &mut self.settings.draft.unclip_policy.exclude_occluder_ids,
+            &mut list_control,
+        );
+        list_control.viewport_start = &mut self.settings.include_road_texture_paths_viewport_start;
+        setting_editable_list(
+            ui,
+            self.localizer,
+            self.localizer.text(UiText::IncludeRoadTexturePaths),
+            self.localizer.text(UiText::NoIncludeRoadTexturePaths),
+            SettingsListKind::IncludeRoadTexturePaths,
+            &mut self.settings.draft.unclip_policy.include_road_texture_paths,
+            &mut list_control,
+        );
+        list_control.viewport_start = &mut self.settings.exclude_road_texture_paths_viewport_start;
+        setting_editable_list(
+            ui,
+            self.localizer,
+            self.localizer.text(UiText::ExcludeRoadTexturePaths),
+            self.localizer.text(UiText::NoExcludeRoadTexturePaths),
+            SettingsListKind::ExcludeRoadTexturePaths,
+            &mut self.settings.draft.unclip_policy.exclude_road_texture_paths,
             &mut list_control,
         );
     }
@@ -873,6 +908,12 @@ impl SettingsDraft {
             SettingsListKind::ExcludeGrassIds => &mut self.unclip_policy.exclude_grass_ids,
             SettingsListKind::IncludeOccluderIds => &mut self.unclip_policy.include_occluder_ids,
             SettingsListKind::ExcludeOccluderIds => &mut self.unclip_policy.exclude_occluder_ids,
+            SettingsListKind::IncludeRoadTexturePaths => {
+                &mut self.unclip_policy.include_road_texture_paths
+            }
+            SettingsListKind::ExcludeRoadTexturePaths => {
+                &mut self.unclip_policy.exclude_road_texture_paths
+            }
         }
     }
 }
@@ -894,6 +935,7 @@ impl UnclipPolicyDraft {
             write_actions: [
                 has_action(WriteActionArg::TerrainZ),
                 has_action(WriteActionArg::WaterDelete),
+                has_action(WriteActionArg::RoadDelete),
                 has_action(WriteActionArg::StaticDelete),
                 has_action(WriteActionArg::StaticMove),
                 has_action(WriteActionArg::Orient),
@@ -922,6 +964,14 @@ impl UnclipPolicyDraft {
             exclude_grass_ids: config.exclude_grass_ids.clone().unwrap_or_default(),
             include_occluder_ids: config.include_occluder_ids.clone().unwrap_or_default(),
             exclude_occluder_ids: config.exclude_occluder_ids.clone().unwrap_or_default(),
+            include_road_texture_paths: config
+                .include_road_texture_paths
+                .clone()
+                .unwrap_or_default(),
+            exclude_road_texture_paths: config
+                .exclude_road_texture_paths
+                .clone()
+                .unwrap_or_default(),
         }
     }
 
@@ -937,6 +987,14 @@ impl UnclipPolicyDraft {
         validate_regex_list("exclude_grass_ids", &self.exclude_grass_ids)?;
         validate_regex_list("include_occluder_ids", &self.include_occluder_ids)?;
         validate_regex_list("exclude_occluder_ids", &self.exclude_occluder_ids)?;
+        validate_regex_list(
+            "include_road_texture_paths",
+            &self.include_road_texture_paths,
+        )?;
+        validate_regex_list(
+            "exclude_road_texture_paths",
+            &self.exclude_road_texture_paths,
+        )?;
 
         config.write_actions = Some(self.write_actions());
         config.origin_epsilon = Some(parse_non_negative_f32(
@@ -956,6 +1014,8 @@ impl UnclipPolicyDraft {
         config.exclude_grass_ids = Some(self.exclude_grass_ids.clone());
         config.include_occluder_ids = Some(self.include_occluder_ids.clone());
         config.exclude_occluder_ids = Some(self.exclude_occluder_ids.clone());
+        config.include_road_texture_paths = Some(self.include_road_texture_paths.clone());
+        config.exclude_road_texture_paths = Some(self.exclude_road_texture_paths.clone());
 
         Ok(())
     }
@@ -967,6 +1027,9 @@ impl UnclipPolicyDraft {
         }
         if self.write_actions[UNCLIP_WATER_DELETE_INDEX] {
             actions.push(WriteActionArg::WaterDelete);
+        }
+        if self.write_actions[UNCLIP_ROAD_DELETE_INDEX] {
+            actions.push(WriteActionArg::RoadDelete);
         }
         if self.write_actions[UNCLIP_STATIC_DELETE_INDEX] {
             actions.push(WriteActionArg::StaticDelete);
@@ -987,6 +1050,9 @@ impl UnclipPolicyDraft {
         }
         if self.write_actions[UNCLIP_WATER_DELETE_INDEX] {
             actions.push("water-delete");
+        }
+        if self.write_actions[UNCLIP_ROAD_DELETE_INDEX] {
+            actions.push("road-delete");
         }
         if self.write_actions[UNCLIP_STATIC_DELETE_INDEX] {
             actions.push("static-delete");
@@ -1017,6 +1083,12 @@ impl SettingsUiState {
             SettingsListKind::ExcludeGrassIds => &mut self.exclude_grass_ids_viewport_start,
             SettingsListKind::IncludeOccluderIds => &mut self.include_occluder_ids_viewport_start,
             SettingsListKind::ExcludeOccluderIds => &mut self.exclude_occluder_ids_viewport_start,
+            SettingsListKind::IncludeRoadTexturePaths => {
+                &mut self.include_road_texture_paths_viewport_start
+            }
+            SettingsListKind::ExcludeRoadTexturePaths => {
+                &mut self.exclude_road_texture_paths_viewport_start
+            }
         }
     }
 }
@@ -1469,6 +1541,12 @@ impl SettingsListKind {
             Self::ExcludeGrassIds => localizer.text(UiText::AddExcludeGrassIdRegexTitle),
             Self::IncludeOccluderIds => localizer.text(UiText::AddIncludeOccluderIdRegexTitle),
             Self::ExcludeOccluderIds => localizer.text(UiText::AddExcludeOccluderIdRegexTitle),
+            Self::IncludeRoadTexturePaths => {
+                localizer.text(UiText::AddIncludeRoadTexturePathRegexTitle)
+            }
+            Self::ExcludeRoadTexturePaths => {
+                localizer.text(UiText::AddExcludeRoadTexturePathRegexTitle)
+            }
         }
     }
 
@@ -1481,6 +1559,12 @@ impl SettingsListKind {
             Self::ExcludeGrassIds => localizer.text(UiText::ExcludeGrassIdRegexPrompt),
             Self::IncludeOccluderIds => localizer.text(UiText::IncludeOccluderIdRegexPrompt),
             Self::ExcludeOccluderIds => localizer.text(UiText::ExcludeOccluderIdRegexPrompt),
+            Self::IncludeRoadTexturePaths => {
+                localizer.text(UiText::IncludeRoadTexturePathRegexPrompt)
+            }
+            Self::ExcludeRoadTexturePaths => {
+                localizer.text(UiText::ExcludeRoadTexturePathRegexPrompt)
+            }
         }
     }
 }
@@ -1602,8 +1686,10 @@ mod tests {
         let mut draft = SettingsDraft::default();
         draft.unclip.plugin = Some("groundcover.omwaddon".into());
         draft.unclip.write = Some(true);
-        draft.unclip_policy.write_actions = [true, false, false, true, false];
+        draft.unclip_policy.write_actions = [true, false, false, false, true, false];
         draft.unclip_policy.include_grass_ids = vec!["flora_.*".to_owned()];
+        draft.unclip_policy.include_road_texture_paths = vec![".*custom_road.*".to_owned()];
+        draft.unclip_policy.exclude_road_texture_paths = vec![".*custom_bad.*".to_owned()];
 
         let config = draft.validate_and_to_config().unwrap();
 
@@ -1616,6 +1702,14 @@ mod tests {
         assert_eq!(
             config.unclip.include_grass_ids,
             Some(vec!["flora_.*".to_owned()])
+        );
+        assert_eq!(
+            config.unclip.include_road_texture_paths,
+            Some(vec![".*custom_road.*".to_owned()])
+        );
+        assert_eq!(
+            config.unclip.exclude_road_texture_paths,
+            Some(vec![".*custom_bad.*".to_owned()])
         );
     }
 

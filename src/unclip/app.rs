@@ -29,7 +29,7 @@ use super::{
     },
     static_occluders::{StaticOccluderBuildReport, build_static_occluders},
     target::TargetRefIndex,
-    terrain::TerrainIndex,
+    terrain::{TerrainIndex, TerrainTextureIndex},
     write_plan::{WritePlan, WriteReport, WriteStatusIndex},
     write_policy::{UnclipWritePlanningInput, apply_unclip_write_plan, plan_unclip_adjustments},
     writer::save_plugin_with_backup,
@@ -109,15 +109,20 @@ pub fn run(
             &target_plugin_data,
         )
     });
-    let (active_cells, terrain) = profiler.measure("active_cells_terrain_build", || {
-        let active_cells = active_cells(&target_refs.target_cells)?;
-        super::check_cancellation(cancellation)?;
-        let terrain = terrain_from_context_plugins(
-            context_plugins.iter().map(ContextPlugin::as_plugin),
-            &active_cells,
-        );
-        Ok::<_, io::Error>((active_cells, terrain))
-    })?;
+    let (active_cells, terrain, terrain_textures) =
+        profiler.measure("active_cells_terrain_build", || {
+            let active_cells = active_cells(&target_refs.target_cells)?;
+            super::check_cancellation(cancellation)?;
+            let terrain = terrain_from_context_plugins(
+                context_plugins.iter().map(ContextPlugin::as_plugin),
+                &active_cells,
+            );
+            let terrain_textures = terrain_textures_from_context_plugins(
+                context_plugins.iter().map(ContextPlugin::as_plugin),
+                &active_cells,
+            );
+            Ok::<_, io::Error>((active_cells, terrain, terrain_textures))
+        })?;
     profiler.counter("active_cells", active_cells.len());
     profiler.counter("loaded_terrain_cells", terrain.len());
     super::check_cancellation(cancellation)?;
@@ -174,6 +179,7 @@ pub fn run(
                 plugin: &target_plugin_data,
                 target_refs: &target_refs,
                 terrain: &terrain,
+                terrain_textures: &terrain_textures,
                 static_index: &target_static_index,
                 mesh_contacts: &mut mesh_cache,
                 static_occluders: &static_occluders,
@@ -199,6 +205,7 @@ pub fn run(
         plugin: &target_plugin_data,
         target_refs: &target_refs,
         terrain: &terrain,
+        terrain_textures: &terrain_textures,
         static_index: &target_static_index,
         mesh_contacts: &mut mesh_cache,
         static_occluders: &static_occluders,
@@ -387,6 +394,7 @@ impl UnclipProfiler {
         self.counter("write_adjusted_refs", write_plan.adjusted_refs);
         self.counter("write_deleted_refs", write_plan.deleted_refs);
         self.counter("write_water_deleted_refs", write_plan.water_deleted_refs);
+        self.counter("write_road_deleted_refs", write_plan.road_deleted_refs);
         self.counter("write_moved_refs", write_plan.moved_refs);
         self.counter("write_oriented_refs", write_plan.oriented_refs);
     }
@@ -535,6 +543,13 @@ fn terrain_from_context_plugins<'a>(
     )
 }
 
+fn terrain_textures_from_context_plugins<'a>(
+    context_plugins: impl IntoIterator<Item = &'a Plugin>,
+    active_cells: &BTreeSet<(i32, i32)>,
+) -> TerrainTextureIndex {
+    TerrainTextureIndex::from_plugins_in_cells(context_plugins, active_cells)
+}
+
 fn save_write_plan(
     plugin: &mut Plugin,
     source_path: &std::path::Path,
@@ -568,6 +583,7 @@ struct OutputContext<'a, 'b> {
     plugin: &'a Plugin,
     target_refs: &'a TargetRefIndex,
     terrain: &'a TerrainIndex,
+    terrain_textures: &'a TerrainTextureIndex,
     static_index: &'a StaticMeshIndex,
     mesh_contacts: &'a mut MeshCache<'b>,
     static_occluders: &'a StaticOccluderIndex,
@@ -586,6 +602,7 @@ fn inspect_refs_and_write_optional_log(
 ) -> io::Result<TerrainInspectionReport> {
     let mut context = ReferenceInspectionContext {
         terrain: output.terrain,
+        terrain_textures: output.terrain_textures,
         static_index: output.static_index,
         mesh_contacts: output.mesh_contacts,
         static_occluders: output.static_occluders,
@@ -841,6 +858,8 @@ mod tests {
             exclude_grass_ids: Vec::new(),
             include_occluder_ids: Vec::new(),
             exclude_occluder_ids: Vec::new(),
+            include_road_texture_paths: Vec::new(),
+            exclude_road_texture_paths: Vec::new(),
         };
         let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
         context.write = Some(WriteReport::not_written(
@@ -893,6 +912,8 @@ mod tests {
             exclude_grass_ids: Vec::new(),
             include_occluder_ids: Vec::new(),
             exclude_occluder_ids: Vec::new(),
+            include_road_texture_paths: Vec::new(),
+            exclude_road_texture_paths: Vec::new(),
         };
         let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
         context.write = Some(WriteReport::not_written(

@@ -94,6 +94,7 @@ macro_rules! route_text {
             | UiText::WriteActions
             | UiText::TerrainZAction
             | UiText::WaterDeleteAction
+            | UiText::RoadDeleteAction
             | UiText::StaticDeleteAction
             | UiText::StaticMoveAction
             | UiText::OrientAction
@@ -116,6 +117,10 @@ macro_rules! route_text {
             | UiText::NoIncludeOccluderIds
             | UiText::ExcludeOccluderIds
             | UiText::NoExcludeOccluderIds
+            | UiText::IncludeRoadTexturePaths
+            | UiText::NoIncludeRoadTexturePaths
+            | UiText::ExcludeRoadTexturePaths
+            | UiText::NoExcludeRoadTexturePaths
             | UiText::AddGrassIdPatternTitle
             | UiText::AddExcludePatternTitle
             | UiText::AddIgnoredPluginTitle
@@ -123,13 +128,17 @@ macro_rules! route_text {
             | UiText::AddExcludeGrassIdRegexTitle
             | UiText::AddIncludeOccluderIdRegexTitle
             | UiText::AddExcludeOccluderIdRegexTitle
+            | UiText::AddIncludeRoadTexturePathRegexTitle
+            | UiText::AddExcludeRoadTexturePathRegexTitle
             | UiText::GrassIdPatternPrompt
             | UiText::ExcludePatternPrompt
             | UiText::IgnoredPluginPrompt
             | UiText::IncludeGrassIdRegexPrompt
             | UiText::ExcludeGrassIdRegexPrompt
             | UiText::IncludeOccluderIdRegexPrompt
-            | UiText::ExcludeOccluderIdRegexPrompt => $settings($key),
+            | UiText::ExcludeOccluderIdRegexPrompt
+            | UiText::IncludeRoadTexturePathRegexPrompt
+            | UiText::ExcludeRoadTexturePathRegexPrompt => $settings($key),
         }
     };
 }
@@ -252,6 +261,7 @@ pub(super) enum UiText {
     WriteActions,
     TerrainZAction,
     WaterDeleteAction,
+    RoadDeleteAction,
     StaticDeleteAction,
     StaticMoveAction,
     OrientAction,
@@ -274,6 +284,10 @@ pub(super) enum UiText {
     NoIncludeOccluderIds,
     ExcludeOccluderIds,
     NoExcludeOccluderIds,
+    IncludeRoadTexturePaths,
+    NoIncludeRoadTexturePaths,
+    ExcludeRoadTexturePaths,
+    NoExcludeRoadTexturePaths,
     AddGrassIdPatternTitle,
     AddExcludePatternTitle,
     AddIgnoredPluginTitle,
@@ -281,6 +295,8 @@ pub(super) enum UiText {
     AddExcludeGrassIdRegexTitle,
     AddIncludeOccluderIdRegexTitle,
     AddExcludeOccluderIdRegexTitle,
+    AddIncludeRoadTexturePathRegexTitle,
+    AddExcludeRoadTexturePathRegexTitle,
     GrassIdPatternPrompt,
     ExcludePatternPrompt,
     IgnoredPluginPrompt,
@@ -288,6 +304,8 @@ pub(super) enum UiText {
     ExcludeGrassIdRegexPrompt,
     IncludeOccluderIdRegexPrompt,
     ExcludeOccluderIdRegexPrompt,
+    IncludeRoadTexturePathRegexPrompt,
+    ExcludeRoadTexturePathRegexPrompt,
     Up,
     Down,
     ShowPreviousItems,
