@@ -827,6 +827,7 @@ mod tests {
             write: true,
             write_actions: vec![
                 WriteActionArg::TerrainZ,
+                WriteActionArg::WaterDelete,
                 WriteActionArg::StaticDelete,
                 WriteActionArg::StaticMove,
                 WriteActionArg::Orient,
@@ -878,6 +879,7 @@ mod tests {
             write: true,
             write_actions: vec![
                 WriteActionArg::TerrainZ,
+                WriteActionArg::WaterDelete,
                 WriteActionArg::StaticDelete,
                 WriteActionArg::StaticMove,
                 WriteActionArg::Orient,

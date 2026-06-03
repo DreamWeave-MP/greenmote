@@ -247,7 +247,7 @@ mod tests {
             "--plugin",
             "groundcover.omwaddon",
             "--write-actions",
-            "terrain-z,static-move,orient",
+            "terrain-z,water-delete,static-move,orient",
             "--origin-epsilon",
             "2.5",
             "--relocation-step",
@@ -273,6 +273,7 @@ mod tests {
         let policy = args.policy().unwrap();
         assert!(policy.write_actions.terrain_z());
         assert!(!policy.write_actions.static_delete());
+        assert!(policy.write_actions.water_delete());
         assert!(policy.write_actions.static_move());
         assert!(policy.write_actions.orient());
         assert_close(policy.origin_epsilon, 2.5);

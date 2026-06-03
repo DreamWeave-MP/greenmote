@@ -147,7 +147,13 @@ impl UnclipReportContext {
             missing_active_terrain_cells: Vec::new(),
             static_occluder_report: StaticOccluderBuildReport::default(),
             policy: UnclipPolicySummary {
-                write_actions: vec!["terrain-z", "static-delete", "static-move", "orient"],
+                write_actions: vec![
+                    "terrain-z",
+                    "water-delete",
+                    "static-delete",
+                    "static-move",
+                    "orient",
+                ],
                 origin_terrain_epsilon: ORIGIN_TERRAIN_EPSILON,
                 orientation_epsilon_degrees: 1.0,
                 relocation_step: 32.0,

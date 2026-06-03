@@ -21,11 +21,12 @@ use super::{
     terrain::TerrainIndex,
     write_plan::{
         WriteAdjustment, WriteOrientation, WritePlan, WriteStaticBoundsAnalysis,
-        WriteStaticBoundsDeletion, WriteStaticBoundsMove,
+        WriteStaticBoundsDeletion, WriteStaticBoundsMove, WriteWaterDeletion,
     },
 };
 
 const CELL_SIZE: f32 = 8192.0;
+pub(crate) const EXTERIOR_WATER_LEVEL: f32 = -1.0;
 const RELOCATION_DIRECTIONS: &[[f32; 2]] = &[
     [1.0, 0.0],
     [-1.0, 0.0],
@@ -120,6 +121,10 @@ pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
             cell.references
                 .remove(&(deletion.reference_key[0], deletion.reference_key[1]));
         }
+        for deletion in &changes.water_deletions {
+            cell.references
+                .remove(&(deletion.reference_key[0], deletion.reference_key[1]));
+        }
 
         for adjustment in &changes.adjustments {
             if let Some(reference) = cell
@@ -154,6 +159,7 @@ pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
 struct CellWriteChanges<'a> {
     adjustments: Vec<&'a WriteAdjustment>,
     deletions: Vec<&'a WriteStaticBoundsDeletion>,
+    water_deletions: Vec<&'a WriteWaterDeletion>,
     moves: Vec<&'a WriteStaticBoundsMove>,
     orientations: Vec<&'a WriteOrientation>,
 }
@@ -177,6 +183,13 @@ impl<'a> WriteChangesByCell<'a> {
                 .entry(deletion.cell)
                 .or_default()
                 .deletions
+                .push(deletion);
+        }
+        for deletion in &plan.water_deletions {
+            cells
+                .entry(deletion.cell)
+                .or_default()
+                .water_deletions
                 .push(deletion);
         }
         for move_ in &plan.moves {
@@ -217,6 +230,11 @@ fn record_reference_change(change: WriteReferenceChange, plan: &mut WritePlan) {
                 plan.deleted_refs += 1;
                 plan.deletions.push(deletion);
             }
+            if let Some(deletion) = changes.water_deletion {
+                plan.deleted_refs += 1;
+                plan.water_deleted_refs += 1;
+                plan.water_deletions.push(deletion);
+            }
             if let Some(move_) = changes.move_ {
                 plan.moved_refs += 1;
                 plan.moves.push(move_);
@@ -238,6 +256,7 @@ enum WriteReferenceChange {
 struct WriteReferenceChanges {
     adjustment: Option<WriteAdjustment>,
     deletion: Option<WriteStaticBoundsDeletion>,
+    water_deletion: Option<WriteWaterDeletion>,
     move_: Option<WriteStaticBoundsMove>,
     orientation: Option<WriteOrientation>,
     static_bounds_analysis: Option<WriteStaticBoundsAnalysis>,
@@ -313,6 +332,21 @@ fn adjust_reference_for_terrain_and_static_bounds(
         corrected_translation[2] -=
             terrain_delta(reference.translation, terrain_z, generated_placement);
     }
+
+    if let Some(water_deletion) = plan_water_delete_change(
+        target,
+        reference,
+        reference.translation[2],
+        corrected_translation[2],
+        policy,
+    ) {
+        let changes = WriteReferenceChanges {
+            water_deletion: Some(water_deletion),
+            ..WriteReferenceChanges::default()
+        };
+        return Ok(changes_to_result(changes));
+    }
+
     let mut changes = WriteReferenceChanges::default();
     let final_translation = match plan_static_bounds_change(
         &mut changes,
@@ -349,6 +383,35 @@ fn adjust_reference_for_terrain_and_static_bounds(
         orientation_context,
     );
     Ok(changes_to_result(changes))
+}
+
+fn plan_water_delete_change(
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    old_z: f32,
+    new_z: f32,
+    policy: &UnclipPolicy,
+) -> Option<WriteWaterDeletion> {
+    if !policy.write_actions.water_delete() || !policy.write_actions.terrain_z() {
+        return None;
+    }
+    if !water_crosses_exterior_plane(old_z, new_z) {
+        return None;
+    }
+
+    Some(WriteWaterDeletion {
+        cell: [target.cell.0, target.cell.1],
+        reference_key: [target.key.0, target.key.1],
+        id: reference.id.clone(),
+        old_z,
+        new_z,
+        water_level: EXTERIOR_WATER_LEVEL,
+    })
+}
+
+const fn water_crosses_exterior_plane(old_z: f32, new_z: f32) -> bool {
+    (old_z > EXTERIOR_WATER_LEVEL && new_z < EXTERIOR_WATER_LEVEL)
+        || (old_z < EXTERIOR_WATER_LEVEL && new_z > EXTERIOR_WATER_LEVEL)
 }
 
 enum StaticBoundsPlanResult {
@@ -758,6 +821,7 @@ fn apply_terrain_adjustment_to_changes(
 fn changes_to_result(changes: WriteReferenceChanges) -> WriteReferenceChange {
     if changes.adjustment.is_none()
         && changes.deletion.is_none()
+        && changes.water_deletion.is_none()
         && changes.move_.is_none()
         && changes.orientation.is_none()
     {
@@ -1010,9 +1074,9 @@ mod tests {
 
     use super::{
         StaticBoundsPlanResult, StaticBoundsPlanningContext, WriteReferenceChange,
-        WriteReferenceChanges, apply_unclip_write_plan, orientation_sample_position,
-        plan_contact_adjustment, plan_reference_orientation, plan_static_bounds_change,
-        record_reference_change,
+        WriteReferenceChanges, WriteWaterDeletion, apply_unclip_write_plan,
+        orientation_sample_position, plan_contact_adjustment, plan_reference_orientation,
+        plan_static_bounds_change, record_reference_change,
     };
     use crate::{
         groundcover::CancellationToken,
@@ -1523,6 +1587,92 @@ mod tests {
         assert_eq!(plan.deleted_refs, 1);
         assert!(!cell.references.contains_key(&(3, 4)));
         assert!(cell.references.contains_key(&(7, 8)));
+    }
+
+    #[test]
+    fn water_deleted_write_changes_physically_remove_local_refs() {
+        let mut plugin = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([
+                ((3, 4), reference_at_z(10.0)),
+                ((7, 8), reference_with_id("non_target")),
+            ]))],
+        };
+        let mut plan = WritePlan::default();
+
+        record_reference_change(
+            WriteReferenceChange::Changes(Box::new(WriteReferenceChanges {
+                water_deletion: Some(WriteWaterDeletion {
+                    cell: [1, 2],
+                    reference_key: [3, 4],
+                    id: "grass".to_owned(),
+                    old_z: 10.0,
+                    new_z: -2.0,
+                    water_level: -1.0,
+                }),
+                ..WriteReferenceChanges::default()
+            })),
+            &mut plan,
+        );
+
+        apply_unclip_write_plan(&mut plugin, &plan);
+        let TES3Object::Cell(cell) = &plugin.objects[0] else {
+            unreachable!("test plugin should contain a CELL")
+        };
+        assert_eq!(plan.deleted_refs, 1);
+        assert_eq!(plan.water_deleted_refs, 1);
+        assert!(!cell.references.contains_key(&(3, 4)));
+        assert!(cell.references.contains_key(&(7, 8)));
+    }
+
+    #[test]
+    fn water_delete_change_detects_crossing() {
+        let reference = reference_at_z(4.0);
+        let deletion = super::plan_water_delete_change(
+            super::WriteTarget {
+                cell: (1, 2),
+                key: (3, 4),
+            },
+            &reference,
+            4.0,
+            -2.0,
+            &test_policy(),
+        );
+
+        let deletion = deletion.expect("crossing the exterior water plane should delete");
+        assert!((deletion.old_z - 4.0).abs() < f32::EPSILON);
+        assert!((deletion.new_z - -2.0).abs() < f32::EPSILON);
+        assert!((deletion.water_level - -1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn water_delete_change_ignores_same_side_and_on_plane() {
+        let reference = reference_at_z(4.0);
+        assert!(
+            super::plan_water_delete_change(
+                super::WriteTarget {
+                    cell: (1, 2),
+                    key: (3, 4),
+                },
+                &reference,
+                4.0,
+                3.0,
+                &test_policy(),
+            )
+            .is_none()
+        );
+        assert!(
+            super::plan_water_delete_change(
+                super::WriteTarget {
+                    cell: (1, 2),
+                    key: (3, 4),
+                },
+                &reference,
+                4.0,
+                -1.0,
+                &test_policy(),
+            )
+            .is_none()
+        );
     }
 
     #[test]

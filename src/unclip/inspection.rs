@@ -26,7 +26,10 @@ use super::{
     target::TargetRefIndex,
     terrain::TerrainIndex,
     write_plan::{WriteStaticBoundsAnalysis, WriteStatusIndex},
-    write_policy::{RefTransform, RelocationSearchContext, find_valid_relocation_transform},
+    write_policy::{
+        EXTERIOR_WATER_LEVEL, RefTransform, RelocationSearchContext,
+        find_valid_relocation_transform,
+    },
     write_status::{
         MeshResolutionStatus, WriteStatusEvidence, WriteStatusInput, write_plan_evidence,
         write_status_label,
@@ -219,6 +222,9 @@ fn inspect_reference(
             evidence: StaticBoundsEvidence::Details,
         },
     );
+    let generated_placement = mesh_contact
+        .static_mesh()
+        .and_then(|static_mesh| context.generated_placements.get(static_mesh));
     let origin = classify_origin(
         report,
         context.terrain,
@@ -233,6 +239,7 @@ fn inspect_reference(
         mesh_resolution: &mesh_contact,
         contact_details: contact_details.as_ref(),
         static_bounds_occlusion: static_bounds_occlusion.as_ref(),
+        generated_placement,
         write: WriteStatusEvidence {
             plan: write_plan_evidence(context.write, cell, key),
             actions: context.policy.write_actions,
@@ -283,9 +290,20 @@ struct ReferenceInspectionInput<'a, 'b> {
     mesh_resolution: &'a MeshContactResolution<'b>,
     contact_details: Option<&'a ContactDetails>,
     static_bounds_occlusion: Option<&'a StaticBoundsOcclusionDetails>,
+    generated_placement: Option<GeneratedPlacement>,
     write: WriteStatusEvidence,
     contact_epsilon: f32,
     orientation_epsilon_degrees: f32,
+}
+
+impl ReferenceInspectionInput<'_, '_> {
+    fn water_crossing(&self) -> Option<bool> {
+        let terrain_z = self.origin.terrain_z?;
+        let placement = self.generated_placement?;
+        let old_z = self.reference.translation[2];
+        let new_z = terrain_z + placement.z_offset;
+        Some(water_crosses_exterior_plane(old_z, new_z))
+    }
 }
 
 fn reference_inspection(input: &ReferenceInspectionInput<'_, '_>) -> ReferenceInspection {
@@ -359,6 +377,7 @@ fn write_status_input(input: &ReferenceInspectionInput<'_, '_>) -> WriteStatusIn
         static_bounds_status: input
             .static_bounds_occlusion
             .map(|occlusion| occlusion.status),
+        water_crossing: input.water_crossing(),
         write: input.write,
         contact_epsilon: input.contact_epsilon,
         orientation_epsilon_degrees: input.orientation_epsilon_degrees,
@@ -571,6 +590,11 @@ fn terrain_delta(
     generated_placement.map_or(0.0, |placement| {
         translation[2] - terrain_z - placement.z_offset
     })
+}
+
+const fn water_crosses_exterior_plane(old_z: f32, new_z: f32) -> bool {
+    (old_z > EXTERIOR_WATER_LEVEL && new_z < EXTERIOR_WATER_LEVEL)
+        || (old_z < EXTERIOR_WATER_LEVEL && new_z > EXTERIOR_WATER_LEVEL)
 }
 
 fn static_bounds_details_from_write_analysis(
