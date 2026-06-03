@@ -409,7 +409,7 @@ fn plan_water_delete_change(
     })
 }
 
-const fn water_crosses_exterior_plane(old_z: f32, new_z: f32) -> bool {
+pub(super) const fn water_crosses_exterior_plane(old_z: f32, new_z: f32) -> bool {
     (old_z > EXTERIOR_WATER_LEVEL && new_z < EXTERIOR_WATER_LEVEL)
         || (old_z < EXTERIOR_WATER_LEVEL && new_z > EXTERIOR_WATER_LEVEL)
 }

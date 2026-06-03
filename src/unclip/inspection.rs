@@ -27,8 +27,8 @@ use super::{
     terrain::TerrainIndex,
     write_plan::{WriteStaticBoundsAnalysis, WriteStatusIndex},
     write_policy::{
-        EXTERIOR_WATER_LEVEL, RefTransform, RelocationSearchContext,
-        find_valid_relocation_transform,
+        RefTransform, RelocationSearchContext, find_valid_relocation_transform,
+        water_crosses_exterior_plane,
     },
     write_status::{
         MeshResolutionStatus, WriteStatusEvidence, WriteStatusInput, write_plan_evidence,
@@ -590,11 +590,6 @@ fn terrain_delta(
     generated_placement.map_or(0.0, |placement| {
         translation[2] - terrain_z - placement.z_offset
     })
-}
-
-const fn water_crosses_exterior_plane(old_z: f32, new_z: f32) -> bool {
-    (old_z > EXTERIOR_WATER_LEVEL && new_z < EXTERIOR_WATER_LEVEL)
-        || (old_z < EXTERIOR_WATER_LEVEL && new_z > EXTERIOR_WATER_LEVEL)
 }
 
 fn static_bounds_details_from_write_analysis(
