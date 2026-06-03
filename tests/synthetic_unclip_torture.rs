@@ -172,7 +172,7 @@ fn unclip_args(target: PathBuf) -> greenmote::unclip::UnclipArgs {
     let Command::Unclip(args) = cli.command_or_default() else {
         panic!("expected unclip args");
     };
-    args
+    *args
 }
 
 fn write_meshes(data_dir: &Path) {

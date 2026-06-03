@@ -40,7 +40,7 @@ pub enum Command {
     /// Convert vanilla-style static exterior refs into `OpenMW` groundcover.
     Convert(GroundcoverArgs),
     /// Find and optionally fix groundcover refs clipped into terrain or statics.
-    Unclip(UnclipArgs),
+    Unclip(Box<UnclipArgs>),
 }
 
 impl Cli {
@@ -247,7 +247,7 @@ mod tests {
             "--plugin",
             "groundcover.omwaddon",
             "--write-actions",
-            "terrain-z,water-delete,static-move,orient",
+            "terrain-z,water-delete,road-delete,static-move,orient",
             "--origin-epsilon",
             "2.5",
             "--relocation-step",
@@ -264,6 +264,10 @@ mod tests {
             "^terrain_.*$",
             "--exclude-occluder-id",
             "^terrain_tree_huge$",
+            "--include-road-texture-path",
+            "^textures/road/custom_.*\\.dds$",
+            "--exclude-road-texture-path",
+            "^textures/road/custom_bad\\.dds$",
         ]);
 
         let Some(Command::Unclip(args)) = cli.command else {
@@ -274,6 +278,7 @@ mod tests {
         assert!(policy.write_actions.terrain_z());
         assert!(!policy.write_actions.static_delete());
         assert!(policy.write_actions.water_delete());
+        assert!(policy.write_actions.road_delete());
         assert!(policy.write_actions.static_move());
         assert!(policy.write_actions.orient());
         assert_close(policy.origin_epsilon, 2.5);
@@ -284,6 +289,16 @@ mod tests {
         assert!(!policy.target_filter.includes("flora_grass_bad_01"));
         assert!(policy.occluder_filter.includes("terrain_rock_01"));
         assert!(!policy.occluder_filter.includes("terrain_tree_huge"));
+        assert!(
+            policy
+                .road_texture_filter
+                .includes("textures/road/custom_good.dds")
+        );
+        assert!(
+            !policy
+                .road_texture_filter
+                .includes("textures/road/custom_bad.dds")
+        );
     }
 
     #[test]
@@ -332,7 +347,12 @@ mod tests {
 
     #[test]
     fn unclip_policy_rejects_invalid_regex_filters() {
-        for flag in ["--include-grass-id", "--exclude-occluder-id"] {
+        for flag in [
+            "--include-grass-id",
+            "--exclude-occluder-id",
+            "--include-road-texture-path",
+            "--exclude-road-texture-path",
+        ] {
             let cli = Cli::parse_from([
                 "greenmote",
                 "unclip",

@@ -88,6 +88,14 @@ pub struct UnclipArgs {
     /// Exclude static occluders whose full IDs match this case-insensitive regex. May be repeated.
     #[arg(long = "exclude-occluder-id", value_name = "REGEX")]
     pub exclude_occluder_ids: Vec<String>,
+
+    /// Add road texture path regexes used by road-delete. May be repeated.
+    #[arg(long = "include-road-texture-path", value_name = "REGEX")]
+    pub include_road_texture_paths: Vec<String>,
+
+    /// Exclude road texture path regexes from built-in and included road-delete matches. May be repeated.
+    #[arg(long = "exclude-road-texture-path", value_name = "REGEX")]
+    pub exclude_road_texture_paths: Vec<String>,
 }
 
 /// Write actions accepted by `unclip --write-actions` and `[unclip].write_actions`.
@@ -103,6 +111,8 @@ pub enum WriteActionArg {
     TerrainZ,
     /// Delete refs that terrain adjustment would move across exterior water.
     WaterDelete,
+    /// Delete refs whose sampled LAND texture path matches road filters.
+    RoadDelete,
     /// Delete references that remain inside static occluders.
     StaticDelete,
     /// Move references horizontally away from static occluders when a nearby location is found.
@@ -119,6 +129,7 @@ pub(crate) struct UnclipPolicy {
     pub(crate) relocation: RelocationPolicy,
     pub(crate) target_filter: IdFilter,
     pub(crate) occluder_filter: IdFilter,
+    pub(crate) road_texture_filter: RoadTextureFilter,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -128,9 +139,10 @@ pub(crate) struct WriteActions {
 
 const WRITE_TERRAIN_Z: u8 = 1 << 0;
 const WRITE_WATER_DELETE: u8 = 1 << 1;
-const WRITE_STATIC_DELETE: u8 = 1 << 2;
-const WRITE_STATIC_MOVE: u8 = 1 << 3;
-const WRITE_ORIENT: u8 = 1 << 4;
+const WRITE_ROAD_DELETE: u8 = 1 << 2;
+const WRITE_STATIC_DELETE: u8 = 1 << 3;
+const WRITE_STATIC_MOVE: u8 = 1 << 4;
+const WRITE_ORIENT: u8 = 1 << 5;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RelocationPolicy {
@@ -140,6 +152,14 @@ pub(crate) struct RelocationPolicy {
 
 #[derive(Clone, Debug)]
 pub(crate) struct IdFilter {
+    include_patterns: Vec<String>,
+    exclude_patterns: Vec<String>,
+    includes: Vec<Regex>,
+    excludes: Vec<Regex>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RoadTextureFilter {
     include_patterns: Vec<String>,
     exclude_patterns: Vec<String>,
     includes: Vec<Regex>,
@@ -179,6 +199,8 @@ impl UnclipArgs {
             exclude_grass_ids: self.exclude_grass_ids.clone(),
             include_occluder_ids: self.include_occluder_ids.clone(),
             exclude_occluder_ids: self.exclude_occluder_ids.clone(),
+            include_road_texture_paths: self.include_road_texture_paths.clone(),
+            exclude_road_texture_paths: self.exclude_road_texture_paths.clone(),
         };
         resolved.policy()
     }
@@ -188,6 +210,7 @@ pub(crate) fn default_write_actions() -> Vec<WriteActionArg> {
     vec![
         WriteActionArg::TerrainZ,
         WriteActionArg::WaterDelete,
+        WriteActionArg::RoadDelete,
         WriteActionArg::StaticDelete,
         WriteActionArg::StaticMove,
         WriteActionArg::Orient,
@@ -209,6 +232,11 @@ impl crate::unclip::config::UnclipConfig {
                 .map_err(|error| format!("invalid grass id filter: {error}"))?,
             occluder_filter: IdFilter::new(&self.include_occluder_ids, &self.exclude_occluder_ids)
                 .map_err(|error| format!("invalid occluder id filter: {error}"))?,
+            road_texture_filter: RoadTextureFilter::new(
+                &self.include_road_texture_paths,
+                &self.exclude_road_texture_paths,
+            )
+            .map_err(|error| format!("invalid road texture path filter: {error}"))?,
         })
     }
 }
@@ -235,6 +263,7 @@ impl WriteActions {
                 }
                 WriteActionArg::TerrainZ => write_actions.enable(WRITE_TERRAIN_Z),
                 WriteActionArg::WaterDelete => write_actions.enable(WRITE_WATER_DELETE),
+                WriteActionArg::RoadDelete => write_actions.enable(WRITE_ROAD_DELETE),
                 WriteActionArg::StaticDelete => write_actions.enable(WRITE_STATIC_DELETE),
                 WriteActionArg::StaticMove => write_actions.enable(WRITE_STATIC_MOVE),
                 WriteActionArg::Orient => write_actions.enable(WRITE_ORIENT),
@@ -251,6 +280,7 @@ impl WriteActions {
         Self {
             flags: WRITE_TERRAIN_Z
                 | WRITE_WATER_DELETE
+                | WRITE_ROAD_DELETE
                 | WRITE_STATIC_DELETE
                 | WRITE_STATIC_MOVE
                 | WRITE_ORIENT,
@@ -269,6 +299,11 @@ impl WriteActions {
     #[cfg(test)]
     pub(crate) fn disable_water_delete(&mut self) {
         self.flags &= !WRITE_WATER_DELETE;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disable_road_delete(&mut self) {
+        self.flags &= !WRITE_ROAD_DELETE;
     }
 
     #[cfg(test)]
@@ -292,6 +327,10 @@ impl WriteActions {
 
     pub(crate) const fn water_delete(self) -> bool {
         self.flags & WRITE_WATER_DELETE != 0
+    }
+
+    pub(crate) const fn road_delete(self) -> bool {
+        self.flags & WRITE_ROAD_DELETE != 0
     }
 
     pub(crate) const fn static_delete(self) -> bool {
@@ -318,6 +357,9 @@ impl WriteActions {
         if self.water_delete() {
             names.push("water-delete");
         }
+        if self.road_delete() {
+            names.push("road-delete");
+        }
         if self.static_delete() {
             names.push("static-delete");
         }
@@ -329,6 +371,49 @@ impl WriteActions {
         }
         names
     }
+}
+
+impl RoadTextureFilter {
+    pub(crate) fn new(include_paths: &[String], exclude_paths: &[String]) -> Result<Self, String> {
+        let include_patterns = include_paths.to_vec();
+        let exclude_patterns = exclude_paths.to_vec();
+        let mut effective_includes = default_road_texture_path_patterns();
+        effective_includes.extend(include_paths.iter().cloned());
+        Ok(Self {
+            include_patterns,
+            exclude_patterns,
+            includes: compile_regexes(&effective_includes)?,
+            excludes: compile_regexes(exclude_paths)?,
+        })
+    }
+
+    pub(crate) fn includes(&self, path: &str) -> bool {
+        self.includes.iter().any(|pattern| pattern.is_match(path))
+            && !self.excludes.iter().any(|pattern| pattern.is_match(path))
+    }
+
+    pub(crate) fn include_paths(&self) -> &[String] {
+        &self.include_patterns
+    }
+
+    pub(crate) fn exclude_paths(&self) -> &[String] {
+        &self.exclude_patterns
+    }
+}
+
+pub(crate) fn default_road_texture_path_patterns() -> Vec<String> {
+    vec![
+        r".*(road|mainroad|dirtroad|gravelroad|beatenpath).*".to_owned(),
+        r".*(cobble|cobblestone).*".to_owned(),
+        r".*(street|whiteroad).*".to_owned(),
+        r".*t_.*_terrroad.*".to_owned(),
+        r".*t_imp_highway_txroad.*".to_owned(),
+        r".*t_hr_.*road.*".to_owned(),
+        r".*t_ham_.*road.*".to_owned(),
+        r".*tx_sky.*road.*".to_owned(),
+        r".*tr_alm_street.*".to_owned(),
+        r".*nec_whiteroad.*".to_owned(),
+    ]
 }
 
 impl IdFilter {
@@ -415,7 +500,7 @@ mod tests {
         let Some(Command::Unclip(args)) = cli.command else {
             panic!("expected unclip command");
         };
-        args
+        *args
     }
 
     #[test]
@@ -490,5 +575,28 @@ mod tests {
     #[test]
     fn target_filter_rejects_invalid_regex() {
         assert!(IdFilter::new(&["(".to_owned()], &[]).is_err());
+    }
+
+    #[test]
+    fn road_texture_filter_defaults_include_and_excludes_prune() {
+        let filter = super::RoadTextureFilter::new(&[], &[".*whiteroad.*".to_owned()]).unwrap();
+
+        assert!(filter.includes("textures/landscape/tx_bm_dirtroad_01.dds"));
+        assert!(!filter.includes("textures/landscape/nec_whiteroad_01.dds"));
+        assert!(!filter.includes("textures/landscape/tx_grass_01.dds"));
+    }
+
+    #[test]
+    fn road_texture_filter_includes_extend_defaults() {
+        let filter =
+            super::RoadTextureFilter::new(&[".*custom_path_tile.*".to_owned()], &[]).unwrap();
+
+        assert!(filter.includes("textures/custom/custom_path_tile_01.dds"));
+    }
+
+    #[test]
+    fn road_texture_filter_rejects_invalid_regex() {
+        assert!(super::RoadTextureFilter::new(&["(".to_owned()], &[]).is_err());
+        assert!(super::RoadTextureFilter::new(&[], &["(".to_owned()]).is_err());
     }
 }

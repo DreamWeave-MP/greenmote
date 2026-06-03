@@ -18,9 +18,9 @@ use super::{
     orientation::{OrientationResult, orientation_to_terrain},
     physics::RapierCollider,
     target::TargetRefIndex,
-    terrain::TerrainIndex,
+    terrain::{TerrainIndex, TerrainTextureIndex, TerrainTextureSample},
     write_plan::{
-        WriteAdjustment, WriteOrientation, WritePlan, WriteStaticBoundsAnalysis,
+        WriteAdjustment, WriteOrientation, WritePlan, WriteRoadDeletion, WriteStaticBoundsAnalysis,
         WriteStaticBoundsDeletion, WriteStaticBoundsMove, WriteWaterDeletion,
     },
 };
@@ -42,6 +42,7 @@ pub(crate) struct UnclipWritePlanningInput<'a, 'b> {
     pub(crate) plugin: &'a Plugin,
     pub(crate) target_refs: &'a TargetRefIndex,
     pub(crate) terrain: &'a TerrainIndex,
+    pub(crate) terrain_textures: &'a TerrainTextureIndex,
     pub(crate) static_index: &'a StaticMeshIndex,
     pub(crate) mesh_contacts: &'a mut MeshCache<'b>,
     pub(crate) static_occluders: &'a StaticOccluderIndex,
@@ -58,6 +59,7 @@ pub(crate) fn plan_unclip_adjustments(
         plugin,
         target_refs,
         terrain,
+        terrain_textures,
         static_index,
         mesh_contacts,
         static_occluders,
@@ -69,6 +71,7 @@ pub(crate) fn plan_unclip_adjustments(
     let mut plan = WritePlan::default();
     let mut context = WritePlanningContext {
         terrain,
+        terrain_textures,
         static_index,
         mesh_contacts,
         static_occluders,
@@ -94,6 +97,7 @@ pub(crate) fn plan_unclip_adjustments(
 
 struct WritePlanningContext<'a, 'b> {
     terrain: &'a TerrainIndex,
+    terrain_textures: &'a TerrainTextureIndex,
     static_index: &'a StaticMeshIndex,
     mesh_contacts: &'a mut MeshCache<'b>,
     static_occluders: &'a StaticOccluderIndex,
@@ -122,6 +126,10 @@ pub(crate) fn apply_unclip_write_plan(plugin: &mut Plugin, plan: &WritePlan) {
                 .remove(&(deletion.reference_key[0], deletion.reference_key[1]));
         }
         for deletion in &changes.water_deletions {
+            cell.references
+                .remove(&(deletion.reference_key[0], deletion.reference_key[1]));
+        }
+        for deletion in &changes.road_deletions {
             cell.references
                 .remove(&(deletion.reference_key[0], deletion.reference_key[1]));
         }
@@ -160,6 +168,7 @@ struct CellWriteChanges<'a> {
     adjustments: Vec<&'a WriteAdjustment>,
     deletions: Vec<&'a WriteStaticBoundsDeletion>,
     water_deletions: Vec<&'a WriteWaterDeletion>,
+    road_deletions: Vec<&'a WriteRoadDeletion>,
     moves: Vec<&'a WriteStaticBoundsMove>,
     orientations: Vec<&'a WriteOrientation>,
 }
@@ -190,6 +199,13 @@ impl<'a> WriteChangesByCell<'a> {
                 .entry(deletion.cell)
                 .or_default()
                 .water_deletions
+                .push(deletion);
+        }
+        for deletion in &plan.road_deletions {
+            cells
+                .entry(deletion.cell)
+                .or_default()
+                .road_deletions
                 .push(deletion);
         }
         for move_ in &plan.moves {
@@ -234,6 +250,10 @@ fn record_reference_change(change: WriteReferenceChange, plan: &mut WritePlan) {
                 plan.water_deleted_refs += 1;
                 plan.water_deletions.push(deletion);
             }
+            if let Some(deletion) = changes.road_deletion {
+                plan.road_deleted_refs += 1;
+                plan.road_deletions.push(deletion);
+            }
             if let Some(move_) = changes.move_ {
                 plan.moved_refs += 1;
                 plan.moves.push(move_);
@@ -256,6 +276,7 @@ struct WriteReferenceChanges {
     adjustment: Option<WriteAdjustment>,
     deletion: Option<WriteStaticBoundsDeletion>,
     water_deletion: Option<WriteWaterDeletion>,
+    road_deletion: Option<WriteRoadDeletion>,
     move_: Option<WriteStaticBoundsMove>,
     orientation: Option<WriteOrientation>,
     static_bounds_analysis: Option<WriteStaticBoundsAnalysis>,
@@ -292,6 +313,7 @@ fn adjust_reference_for_terrain_and_static_bounds(
         return Ok(WriteReferenceChange::None(None));
     }
     let terrain = context.terrain;
+    let terrain_textures = context.terrain_textures;
     let static_occluders = context.static_occluders;
     let policy = context.policy;
     let target = WriteTarget { cell, key };
@@ -315,6 +337,10 @@ fn adjust_reference_for_terrain_and_static_bounds(
     let Ok(geometry) = context.mesh_contacts.geometry(static_mesh) else {
         return Ok(WriteReferenceChange::None(None));
     };
+
+    if let Some(road_deletion) = road_deletion_change(target, reference, terrain_textures, policy) {
+        return Ok(road_deletion);
+    }
 
     let terrain_z = origin_terrain_z(terrain, reference.translation, generated_placement);
     let adjustment_context = AdjustmentOrientationContext {
@@ -385,6 +411,50 @@ fn adjust_reference_for_terrain_and_static_bounds(
         orientation_context,
     );
     Ok(changes_to_result(changes))
+}
+
+fn road_deletion_change(
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    terrain_textures: &TerrainTextureIndex,
+    policy: &UnclipPolicy,
+) -> Option<WriteReferenceChange> {
+    let road_deletion = plan_road_delete_change(target, reference, terrain_textures, policy)?;
+    let changes = WriteReferenceChanges {
+        road_deletion: Some(road_deletion),
+        ..WriteReferenceChanges::default()
+    };
+    Some(changes_to_result(changes))
+}
+
+pub(crate) fn road_texture_match(
+    terrain_textures: &TerrainTextureIndex,
+    reference: &tes3::esp::Reference,
+    policy: &UnclipPolicy,
+) -> Option<TerrainTextureSample> {
+    terrain_textures.matches_road_at(
+        reference.translation[0],
+        reference.translation[1],
+        &policy.road_texture_filter,
+    )
+}
+
+fn plan_road_delete_change(
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    terrain_textures: &TerrainTextureIndex,
+    policy: &UnclipPolicy,
+) -> Option<WriteRoadDeletion> {
+    if !policy.write_actions.road_delete() {
+        return None;
+    }
+    let sample = road_texture_match(terrain_textures, reference, policy)?;
+    Some(WriteRoadDeletion {
+        cell: [target.cell.0, target.cell.1],
+        reference_key: [target.key.0, target.key.1],
+        id: reference.id.clone(),
+        texture_path: sample.path,
+    })
 }
 
 fn plan_water_delete_change(
@@ -824,6 +894,7 @@ fn changes_to_result(changes: WriteReferenceChanges) -> WriteReferenceChange {
     if changes.adjustment.is_none()
         && changes.deletion.is_none()
         && changes.water_deletion.is_none()
+        && changes.road_deletion.is_none()
         && changes.move_.is_none()
         && changes.orientation.is_none()
     {
@@ -1099,13 +1170,15 @@ mod tests {
     use crate::{
         groundcover::CancellationToken,
         unclip::{
-            args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
+            args::{IdFilter, RelocationPolicy, RoadTextureFilter, UnclipPolicy, WriteActions},
             generated_placement::GeneratedPlacement,
             mesh::{MeshAabb, MeshContact, MeshGeometry, WorldAabb},
             occlusion::{StaticOccluder, StaticOccluderIndex},
             physics::RapierCollider,
-            terrain::TerrainIndex,
-            write_plan::{WriteOrientation, WritePlan, WriteStaticBoundsDeletion},
+            terrain::{TerrainIndex, TerrainTextureIndex},
+            write_plan::{
+                WriteOrientation, WritePlan, WriteRoadDeletion, WriteStaticBoundsDeletion,
+            },
         },
     };
 
@@ -1644,6 +1717,79 @@ mod tests {
     }
 
     #[test]
+    fn road_delete_change_detects_matching_texture() {
+        let reference = reference_at_z(0.0);
+        let terrain_textures = road_texture_index();
+        let policy = test_policy();
+
+        let deletion = super::plan_road_delete_change(
+            super::WriteTarget {
+                cell: (1, 2),
+                key: (3, 4),
+            },
+            &reference,
+            &terrain_textures,
+            &policy,
+        )
+        .unwrap();
+
+        assert_eq!(deletion.texture_path, "textures/landscape/tx_road_01.dds");
+    }
+
+    #[test]
+    fn road_delete_change_respects_disabled_action() {
+        let reference = reference_at_z(0.0);
+        let terrain_textures = road_texture_index();
+        let mut policy = test_policy();
+        policy.write_actions.disable_road_delete();
+
+        let deletion = super::plan_road_delete_change(
+            super::WriteTarget {
+                cell: (1, 2),
+                key: (3, 4),
+            },
+            &reference,
+            &terrain_textures,
+            &policy,
+        );
+
+        assert!(deletion.is_none());
+    }
+
+    #[test]
+    fn road_deleted_write_changes_physically_remove_local_refs() {
+        let mut plugin = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([
+                ((3, 4), reference_at_z(10.0)),
+                ((7, 8), reference_with_id("non_target")),
+            ]))],
+        };
+        let mut plan = WritePlan::default();
+
+        record_reference_change(
+            WriteReferenceChange::Changes(Box::new(WriteReferenceChanges {
+                road_deletion: Some(WriteRoadDeletion {
+                    cell: [1, 2],
+                    reference_key: [3, 4],
+                    id: "grass".to_owned(),
+                    texture_path: "textures/landscape/tx_road_01.dds".to_owned(),
+                }),
+                ..WriteReferenceChanges::default()
+            })),
+            &mut plan,
+        );
+
+        apply_unclip_write_plan(&mut plugin, &plan);
+        let TES3Object::Cell(cell) = &plugin.objects[0] else {
+            unreachable!("test plugin should contain a CELL")
+        };
+        assert_eq!(plan.road_deleted_refs, 1);
+        assert_eq!(plan.changed_refs(), 1);
+        assert!(!cell.references.contains_key(&(3, 4)));
+        assert!(cell.references.contains_key(&(7, 8)));
+    }
+
+    #[test]
     fn water_delete_change_detects_crossing() {
         let reference = reference_at_z(4.0);
         let policy = test_policy();
@@ -1962,6 +2108,15 @@ mod tests {
         TerrainIndex::from_landscapes([&landscape])
     }
 
+    fn road_texture_index() -> TerrainTextureIndex {
+        let mut indices = [[0; 16]; 16];
+        indices[0][15] = 1;
+        TerrainTextureIndex::from_parts(
+            [((-1, 0), 0, indices)],
+            [((0, 0), "Textures\\Landscape\\tx_road_01.dds".to_owned())],
+        )
+    }
+
     fn terrain_flat_at_origin_sloped_at_contact() -> TerrainIndex {
         let mut landscape = Landscape {
             landscape_flags: LandscapeFlags::USES_VERTEX_HEIGHTS_AND_NORMALS,
@@ -1999,6 +2154,7 @@ mod tests {
             },
             target_filter: IdFilter::new(&[], &[]).unwrap(),
             occluder_filter: IdFilter::new(&[], &[]).unwrap(),
+            road_texture_filter: RoadTextureFilter::new(&[], &[]).unwrap(),
         }
     }
 

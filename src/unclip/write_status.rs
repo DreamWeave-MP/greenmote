@@ -8,6 +8,7 @@ pub(crate) struct WriteStatusInput {
     pub(crate) contact_delta: Option<f32>,
     pub(crate) static_bounds_status: Option<&'static str>,
     pub(crate) water_crossing: Option<bool>,
+    pub(crate) road_texture_match: Option<bool>,
     pub(crate) orientation_angle_degrees: Option<f32>,
     pub(crate) write: WriteStatusEvidence,
     pub(crate) contact_epsilon: f32,
@@ -33,6 +34,7 @@ pub(crate) enum WritePlanEvidence {
     Unchanged,
     Adjusted,
     WaterDeleted,
+    RoadDeleted,
     Deleted,
     Moved,
     Oriented,
@@ -46,7 +48,9 @@ pub(crate) fn write_plan_evidence(
     let Some(write) = write else {
         return WritePlanEvidence::NotPlanned;
     };
-    if write.is_water_deleted(cell, key) {
+    if write.is_road_deleted(cell, key) {
+        WritePlanEvidence::RoadDeleted
+    } else if write.is_water_deleted(cell, key) {
         WritePlanEvidence::WaterDeleted
     } else if write.is_deleted(cell, key) {
         WritePlanEvidence::Deleted
@@ -64,6 +68,7 @@ pub(crate) fn write_plan_evidence(
 pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
     match input.write.plan {
         WritePlanEvidence::WaterDeleted => return "deleted_water_crossing",
+        WritePlanEvidence::RoadDeleted => return "deleted_road_texture",
         WritePlanEvidence::Deleted => return "deleted_static_bounds_occluded",
         WritePlanEvidence::Moved => return "moved_static_bounds_occluded",
         WritePlanEvidence::Adjusted => return "adjusted",
@@ -72,6 +77,9 @@ pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
     }
     if input.reference_deleted {
         return "skipped_deleted_ref";
+    }
+    if let Some(status) = road_write_status(input) {
+        return status;
     }
     if let Some(status) = water_write_status(input) {
         return status;
@@ -147,6 +155,7 @@ fn terrain_write_status(input: &WriteStatusInput) -> Option<&'static str> {
             WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
             WritePlanEvidence::Adjusted
             | WritePlanEvidence::WaterDeleted
+            | WritePlanEvidence::RoadDeleted
             | WritePlanEvidence::Deleted
             | WritePlanEvidence::Moved
             | WritePlanEvidence::Oriented => unreachable!("handled before terrain status"),
@@ -170,9 +179,31 @@ fn water_write_status(input: &WriteStatusInput) -> Option<&'static str> {
             WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
             WritePlanEvidence::Adjusted
             | WritePlanEvidence::WaterDeleted
+            | WritePlanEvidence::RoadDeleted
             | WritePlanEvidence::Deleted
             | WritePlanEvidence::Moved
             | WritePlanEvidence::Oriented => unreachable!("handled before water status"),
+        })
+    })
+}
+
+fn road_write_status(input: &WriteStatusInput) -> Option<&'static str> {
+    input.road_texture_match.and_then(|matches| {
+        if !matches {
+            return None;
+        }
+        if !input.write.actions.road_delete() {
+            return Some("skipped_road_delete_disabled");
+        }
+        Some(match input.write.plan {
+            WritePlanEvidence::NotPlanned => "would_delete_road_texture",
+            WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
+            WritePlanEvidence::Adjusted
+            | WritePlanEvidence::WaterDeleted
+            | WritePlanEvidence::RoadDeleted
+            | WritePlanEvidence::Deleted
+            | WritePlanEvidence::Moved
+            | WritePlanEvidence::Oriented => unreachable!("handled before road status"),
         })
     })
 }
@@ -193,6 +224,7 @@ fn orientation_write_status(input: &WriteStatusInput) -> Option<&'static str> {
             WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
             WritePlanEvidence::Adjusted
             | WritePlanEvidence::WaterDeleted
+            | WritePlanEvidence::RoadDeleted
             | WritePlanEvidence::Deleted
             | WritePlanEvidence::Moved
             | WritePlanEvidence::Oriented => unreachable!("handled before orientation status"),
@@ -281,6 +313,28 @@ mod tests {
     }
 
     #[test]
+    fn write_status_reports_road_texture_candidates() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.road_texture_match = Some(true);
+
+        assert_eq!(write_status_label(&input), "would_delete_road_texture");
+        input.write.actions.disable_road_delete();
+        assert_eq!(write_status_label(&input), "skipped_road_delete_disabled");
+    }
+
+    #[test]
+    fn write_status_reports_road_texture_before_other_candidates() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.contact_delta = Some(10.0);
+        input.water_crossing = Some(true);
+        input.static_bounds_status = Some("static_bounds_fully_occluded");
+        input.orientation_angle_degrees = Some(20.0);
+        input.road_texture_match = Some(true);
+
+        assert_eq!(write_status_label(&input), "would_delete_road_texture");
+    }
+
+    #[test]
     fn write_status_reports_terrain_disabled_for_water_crossing_prerequisite() {
         let mut input = base_input(MeshResolutionStatus::Resolved);
         input.contact_delta = Some(10.0);
@@ -337,6 +391,15 @@ mod tests {
         assert_eq!(write_status_label(&input), "deleted_water_crossing");
     }
 
+    #[test]
+    fn write_status_prefers_road_deleted_plan_evidence() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.road_texture_match = Some(true);
+        input.write.plan = WritePlanEvidence::RoadDeleted;
+
+        assert_eq!(write_status_label(&input), "deleted_road_texture");
+    }
+
     const fn test_write_actions() -> WriteActions {
         WriteActions::all()
     }
@@ -349,6 +412,7 @@ mod tests {
             orientation_angle_degrees: None,
             static_bounds_status: None,
             water_crossing: None,
+            road_texture_match: None,
             write: WriteStatusEvidence {
                 plan: WritePlanEvidence::NotPlanned,
                 actions: test_write_actions(),

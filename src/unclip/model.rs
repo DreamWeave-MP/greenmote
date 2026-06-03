@@ -109,6 +109,8 @@ pub(crate) struct UnclipPolicySummary {
     pub(crate) exclude_grass_ids: Vec<String>,
     pub(crate) include_occluder_ids: Vec<String>,
     pub(crate) exclude_occluder_ids: Vec<String>,
+    pub(crate) include_road_texture_paths: Vec<String>,
+    pub(crate) exclude_road_texture_paths: Vec<String>,
 }
 
 impl UnclipPolicySummary {
@@ -123,6 +125,8 @@ impl UnclipPolicySummary {
             exclude_grass_ids: policy.target_filter.exclude_ids().to_vec(),
             include_occluder_ids: policy.occluder_filter.include_ids().to_vec(),
             exclude_occluder_ids: policy.occluder_filter.exclude_ids().to_vec(),
+            include_road_texture_paths: policy.road_texture_filter.include_paths().to_vec(),
+            exclude_road_texture_paths: policy.road_texture_filter.exclude_paths().to_vec(),
         }
     }
 
@@ -132,6 +136,10 @@ impl UnclipPolicySummary {
 
     pub(crate) const fn has_occluder_filter(&self) -> bool {
         !self.include_occluder_ids.is_empty() || !self.exclude_occluder_ids.is_empty()
+    }
+
+    pub(crate) const fn has_road_texture_filter_overrides(&self) -> bool {
+        !self.include_road_texture_paths.is_empty() || !self.exclude_road_texture_paths.is_empty()
     }
 }
 
@@ -150,6 +158,7 @@ impl UnclipReportContext {
                 write_actions: vec![
                     "terrain-z",
                     "water-delete",
+                    "road-delete",
                     "static-delete",
                     "static-move",
                     "orient",
@@ -162,6 +171,8 @@ impl UnclipReportContext {
                 exclude_grass_ids: Vec::new(),
                 include_occluder_ids: Vec::new(),
                 exclude_occluder_ids: Vec::new(),
+                include_road_texture_paths: Vec::new(),
+                exclude_road_texture_paths: Vec::new(),
             },
             write_requested: false,
             write: None,

@@ -24,10 +24,10 @@ use super::{
     orientation::orientation_angle_degrees,
     physics::RapierCollider,
     target::TargetRefIndex,
-    terrain::TerrainIndex,
+    terrain::{TerrainIndex, TerrainTextureIndex},
     write_plan::{WriteStaticBoundsAnalysis, WriteStatusIndex},
     write_policy::{
-        RefTransform, RelocationSearchContext, find_valid_relocation_transform,
+        RefTransform, RelocationSearchContext, find_valid_relocation_transform, road_texture_match,
         water_crosses_exterior_plane,
     },
     write_status::{
@@ -142,6 +142,7 @@ fn count_reference(
 
 pub(super) struct ReferenceInspectionContext<'a, 'b> {
     pub(super) terrain: &'a TerrainIndex,
+    pub(super) terrain_textures: &'a TerrainTextureIndex,
     pub(super) static_index: &'a StaticMeshIndex,
     pub(super) mesh_contacts: &'a mut MeshCache<'b>,
     pub(super) static_occluders: &'a StaticOccluderIndex,
@@ -246,6 +247,8 @@ fn inspect_reference(
         },
         contact_epsilon: CONTACT_TERRAIN_EPSILON,
         orientation_epsilon_degrees: context.policy.orientation_epsilon_degrees,
+        terrain_textures: context.terrain_textures,
+        policy: context.policy,
     });
     reference_sink(&inspection)
 }
@@ -294,6 +297,8 @@ struct ReferenceInspectionInput<'a, 'b> {
     write: WriteStatusEvidence,
     contact_epsilon: f32,
     orientation_epsilon_degrees: f32,
+    terrain_textures: &'a TerrainTextureIndex,
+    policy: &'a UnclipPolicy,
 }
 
 impl ReferenceInspectionInput<'_, '_> {
@@ -309,6 +314,13 @@ impl ReferenceInspectionInput<'_, '_> {
             return None;
         }
         Some(water_crosses_exterior_plane(old_z, new_z))
+    }
+
+    fn road_texture_match(&self) -> Option<bool> {
+        if !matches!(self.mesh_resolution, MeshContactResolution::Resolved { .. }) {
+            return None;
+        }
+        Some(road_texture_match(self.terrain_textures, self.reference, self.policy).is_some())
     }
 }
 
@@ -384,6 +396,7 @@ fn write_status_input(input: &ReferenceInspectionInput<'_, '_>) -> WriteStatusIn
             .static_bounds_occlusion
             .map(|occlusion| occlusion.status),
         water_crossing: input.water_crossing(),
+        road_texture_match: input.road_texture_match(),
         write: input.write,
         contact_epsilon: input.contact_epsilon,
         orientation_epsilon_degrees: input.orientation_epsilon_degrees,
@@ -972,12 +985,12 @@ mod tests {
         deleted_reference_inspection,
     };
     use crate::unclip::{
-        args::{IdFilter, RelocationPolicy, UnclipPolicy, WriteActions},
+        args::{IdFilter, RelocationPolicy, RoadTextureFilter, UnclipPolicy, WriteActions},
         generated_placement::{GeneratedPlacement, GeneratedPlacementIndex},
         mesh::{MeshAabb, MeshContact, StaticMesh, WorldAabb},
         model::TerrainInspectionReport,
         occlusion::StaticOccluderIndex,
-        terrain::TerrainIndex,
+        terrain::{TerrainIndex, TerrainTextureIndex},
         write_plan::{WritePlan, WriteStaticBoundsAnalysis, WriteStatusIndex},
         write_status::{MeshResolutionStatus, WritePlanEvidence, WriteStatusEvidence},
     };
@@ -1153,6 +1166,11 @@ mod tests {
             static_mesh: &mesh,
             error: "missing contact geometry".to_owned(),
         };
+        let terrain_textures = TerrainTextureIndex::from_plugins_in_cells(
+            std::iter::empty(),
+            &std::collections::BTreeSet::new(),
+        );
+        let policy = test_policy();
         let input = ReferenceInspectionInput {
             cell: (1, 2),
             key: (3, 4),
@@ -1171,6 +1189,8 @@ mod tests {
             },
             contact_epsilon: 0.5,
             orientation_epsilon_degrees: 1.0,
+            terrain_textures: &terrain_textures,
+            policy: &policy,
         };
 
         assert!(matches!(
@@ -1178,6 +1198,7 @@ mod tests {
             MeshResolutionStatus::MissingContact
         ));
         assert!(input.water_crossing().is_none());
+        assert!(input.road_texture_match().is_none());
     }
 
     fn reference_at_z(z: f32) -> Reference {
@@ -1224,6 +1245,7 @@ mod tests {
             },
             target_filter: IdFilter::new(&[], &[]).unwrap(),
             occluder_filter: IdFilter::new(&[], &[]).unwrap(),
+            road_texture_filter: RoadTextureFilter::new(&[], &[]).unwrap(),
         }
     }
 }
