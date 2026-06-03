@@ -53,7 +53,8 @@ pub fn run(
     let vfs = profiler.measure("vfs_build", || openmw::build_vfs(&openmw_config));
     let (target_plugin, mut target_plugin_data) =
         profiler.measure("target_plugin_resolve_load", || {
-            let target_plugin = resolve_target_plugin(&config.plugin, &openmw_config, &vfs)?;
+            let target_plugin =
+                resolve_target_plugin(&config.plugin, config.output_plugin.as_deref(), &vfs)?;
             super::check_cancellation(cancellation)?;
             let target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
             Ok::<_, io::Error>((target_plugin, target_plugin_data))
@@ -819,6 +820,7 @@ mod tests {
         let config = UnclipConfig {
             openmw_cfg: None,
             plugin: "plugin.omwaddon".into(),
+            output_plugin: None,
             meshgenerator_ini: None,
             verbose: true,
             structured: true,
@@ -869,6 +871,7 @@ mod tests {
         let config = UnclipConfig {
             openmw_cfg: None,
             plugin: "plugin.omwaddon".into(),
+            output_plugin: None,
             meshgenerator_ini: None,
             verbose: false,
             structured: false,

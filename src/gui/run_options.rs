@@ -136,6 +136,7 @@ impl UnclipRunOptions {
         let args = plugins
             .map(|plugin| UnclipArgs {
                 plugin: Some(PathBuf::from(plugin)),
+                output_plugin: None,
                 meshgenerator_ini: None,
                 ignore_meshgenerator_ini: true,
                 instances: None,

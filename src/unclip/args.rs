@@ -26,6 +26,10 @@ pub struct UnclipArgs {
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
     pub plugin: Option<PathBuf>,
 
+    /// Plugin path to write when --write is set. Defaults to replacing the resolved source plugin.
+    #[arg(long = "output-plugin", value_name = "PATH")]
+    pub output_plugin: Option<PathBuf>,
+
     /// Deprecated alias for --verbose.
     #[arg(long = "instances", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
     pub instances: Option<bool>,
@@ -148,6 +152,7 @@ impl UnclipArgs {
         let resolved = crate::unclip::config::UnclipConfig {
             openmw_cfg: None,
             plugin: plugin.clone(),
+            output_plugin: self.output_plugin.clone(),
             meshgenerator_ini: if self.ignore_meshgenerator_ini {
                 None
             } else {
@@ -399,6 +404,23 @@ mod tests {
 
         let args = parse_unclip_args(&["greenmote", "unclip", "--verbose=false"]);
         assert_eq!(args.verbose, Some(false));
+    }
+
+    #[test]
+    fn output_plugin_flag_parses_path() {
+        let args = parse_unclip_args(&[
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "source.omwaddon",
+            "--output-plugin",
+            "patched/source.omwaddon",
+        ]);
+
+        assert_eq!(
+            args.output_plugin,
+            Some(std::path::PathBuf::from("patched/source.omwaddon"))
+        );
     }
 
     #[test]

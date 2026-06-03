@@ -34,14 +34,15 @@ pub(super) struct TargetPluginPath {
 
 pub(super) fn resolve_target_plugin(
     plugin: &std::path::Path,
-    openmw_config: &openmw_config::OpenMWConfiguration,
+    output_plugin: Option<&std::path::Path>,
     vfs: &vfstool_lib::VFS,
 ) -> io::Result<TargetPluginPath> {
     if plugin.is_file() {
-        let path = plugin.to_path_buf();
+        let source_path = plugin.to_path_buf();
+        let destination_path = output_plugin.map_or_else(|| source_path.clone(), PathBuf::from);
         return Ok(TargetPluginPath {
-            source_path: path.clone(),
-            destination_path: path,
+            source_path,
+            destination_path,
         });
     }
 
@@ -58,41 +59,12 @@ pub(super) fn resolve_target_plugin(
                 ),
             )
         })?;
-    let destination_path = vfs_target_destination(plugin, &source_path, openmw_config)?;
+    let destination_path = output_plugin.map_or_else(|| source_path.clone(), PathBuf::from);
 
     Ok(TargetPluginPath {
         source_path,
         destination_path,
     })
-}
-
-fn vfs_target_destination(
-    plugin: &std::path::Path,
-    source_path: &std::path::Path,
-    openmw_config: &openmw_config::OpenMWConfiguration,
-) -> io::Result<PathBuf> {
-    let file_name = plugin.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("target plugin {} has no filename", plugin.display()),
-        )
-    })?;
-    let directory = openmw_config.data_local().map_or_else(
-        || {
-            source_path.parent().map_or_else(
-                || {
-                    Err(io::Error::other(format!(
-                        "target plugin {} has no parent directory",
-                        source_path.display()
-                    )))
-                },
-                |parent| Ok(parent.to_path_buf()),
-            )
-        },
-        |data_local| Ok(data_local.parsed().to_path_buf()),
-    )?;
-
-    Ok(directory.join(file_name))
 }
 
 pub(super) fn load_target_plugin(path: &std::path::Path) -> io::Result<Plugin> {
@@ -190,11 +162,78 @@ pub(super) fn active_cells(target_cells: &BTreeSet<CellCoord>) -> io::Result<BTr
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     use tes3::esp::Plugin;
+    use vfstool_lib::VFS;
 
-    use super::{ContextPlugin, load_context_plugins};
+    use super::{ContextPlugin, load_context_plugins, resolve_target_plugin};
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "greenmote-unclip-setup-test-{name}-{}-{}",
+                std::process::id(),
+                NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn vfs_target_defaults_destination_to_resolved_source_path() {
+        let temp = TempDir::new("vfs-default-destination");
+        let data_local = temp.path().join("data-local");
+        let data = temp.path().join("data");
+        std::fs::create_dir_all(&data_local).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        let source = data.join("Target.omwaddon");
+        std::fs::write(&source, []).unwrap();
+        let vfs = VFS::from_directories([data.clone(), data_local.clone()], None);
+
+        let target = resolve_target_plugin(Path::new("Target.omwaddon"), None, &vfs).unwrap();
+
+        assert_eq!(target.source_path, source);
+        assert_eq!(target.destination_path, target.source_path);
+        assert_ne!(target.destination_path, data_local.join("Target.omwaddon"));
+    }
+
+    #[test]
+    fn explicit_output_plugin_overrides_destination() {
+        let temp = TempDir::new("explicit-output");
+        let data = temp.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let source = data.join("Target.omwaddon");
+        let output = temp.path().join("patched/Target.omwaddon");
+        std::fs::write(&source, []).unwrap();
+        let vfs = VFS::from_directories([data], None);
+
+        let target =
+            resolve_target_plugin(Path::new("Target.omwaddon"), Some(&output), &vfs).unwrap();
+
+        assert_eq!(target.source_path, source);
+        assert_eq!(target.destination_path, output);
+    }
 
     #[test]
     fn active_target_context_slot_borrows_loaded_target_without_reloading() {

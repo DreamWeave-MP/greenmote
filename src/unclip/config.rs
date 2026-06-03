@@ -23,6 +23,7 @@ use super::{
 pub(crate) struct UnclipConfig {
     pub(crate) openmw_cfg: Option<PathBuf>,
     pub(crate) plugin: PathBuf,
+    pub(crate) output_plugin: Option<PathBuf>,
     pub(crate) meshgenerator_ini: Option<PathBuf>,
     pub(crate) verbose: bool,
     pub(crate) structured: bool,
@@ -133,6 +134,7 @@ impl UnclipConfig {
         Ok(Self {
             openmw_cfg,
             plugin,
+            output_plugin: args.output_plugin.clone(),
             meshgenerator_ini: if args.ignore_meshgenerator_ini {
                 None
             } else {
@@ -191,6 +193,9 @@ impl UnclipConfig {
         validate_positive_f32("relocation_step", self.relocation_step)?;
         if !(1..=256).contains(&self.relocation_steps) {
             return Err(invalid_config("relocation_steps must be in 1..=256"));
+        }
+        if let Some(output_plugin) = &self.output_plugin {
+            validate_output_plugin(output_plugin)?;
         }
         self.policy().map_err(invalid_config)?;
 
@@ -279,6 +284,23 @@ fn validate_positive_f32(name: &str, value: f32) -> io::Result<()> {
     }
 }
 
+fn validate_output_plugin(path: &std::path::Path) -> io::Result<()> {
+    if path.file_name().is_none() {
+        return Err(invalid_config(format!(
+            "output_plugin {} must include a filename",
+            path.display()
+        )));
+    }
+    if path.is_dir() {
+        return Err(invalid_config(format!(
+            "output_plugin {} must not be an existing directory",
+            path.display()
+        )));
+    }
+
+    Ok(())
+}
+
 fn invalid_config<E: std::fmt::Display>(error: E) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string())
 }
@@ -332,6 +354,29 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.plugin, PathBuf::from("cli.omwaddon"));
+    }
+
+    #[test]
+    fn cli_output_plugin_merges_into_runtime_config_only() {
+        let args = unclip_args(&[
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "cli.omwaddon",
+            "--output-plugin",
+            "patched/cli.omwaddon",
+        ]);
+        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
+
+        assert_eq!(
+            config.output_plugin,
+            Some(PathBuf::from("patched/cli.omwaddon"))
+        );
+        assert!(
+            !toml::to_string(&PersistedUnclipConfig::generated_default())
+                .unwrap()
+                .contains("output_plugin")
+        );
     }
 
     #[test]

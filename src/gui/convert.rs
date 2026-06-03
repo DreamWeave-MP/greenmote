@@ -2024,6 +2024,7 @@ mod tests {
             .into_iter()
             .map(|target| UnclipArgs {
                 plugin: Some(target.into()),
+                output_plugin: None,
                 meshgenerator_ini: None,
                 ignore_meshgenerator_ini: true,
                 instances: None,
