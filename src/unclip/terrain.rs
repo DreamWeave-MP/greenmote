@@ -73,7 +73,13 @@ impl TerrainIndex {
 
     #[must_use]
     pub fn height_at(&self, world_x: f32, world_y: f32) -> Option<f32> {
-        self.sample_at(world_x, world_y).map(|sample| sample.height)
+        let cell = world_cell(world_x, world_y);
+        let heights = self.lands.get(&cell)?;
+        Some(sample_terrain_height(
+            heights,
+            local_cell_coord(world_x, cell.0),
+            local_cell_coord(world_y, cell.1),
+        ))
     }
 
     #[must_use]
@@ -149,7 +155,7 @@ fn local_cell_coord(world_coord: f32, cell_coord: i32) -> f32 {
 )]
 #[cfg(test)]
 fn sample_height(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> f32 {
-    sample_terrain(heights, local_x, local_y).height
+    sample_terrain_height(heights, local_x, local_y)
 }
 
 #[allow(
@@ -157,7 +163,7 @@ fn sample_height(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> f32 {
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
-fn sample_terrain(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> TerrainSample {
+fn terrain_quad(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> TerrainQuad {
     let grid_x = (local_x / LAND_VERTEX_SPACING).clamp(0.0, LAND_VERTEX_MAX as f32);
     let grid_y = (local_y / LAND_VERTEX_SPACING).clamp(0.0, LAND_VERTEX_MAX as f32);
     let x0 = grid_x.floor().min((LAND_VERTEX_MAX - 1) as f32) as usize;
@@ -171,33 +177,100 @@ fn sample_terrain(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> Terr
     let h01 = heights[y1][x0];
     let h11 = heights[y1][x1];
 
-    let (height, slope_x, slope_y) = if ((x0 ^ y0) & 1) == 0 {
+    TerrainQuad {
+        x0,
+        y0,
+        tx,
+        ty,
+        h00,
+        h10,
+        h01,
+        h11,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TerrainQuad {
+    x0: usize,
+    y0: usize,
+    tx: f32,
+    ty: f32,
+    h00: f32,
+    h10: f32,
+    h01: f32,
+    h11: f32,
+}
+
+fn sample_terrain_height(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> f32 {
+    terrain_quad_height(terrain_quad(heights, local_x, local_y))
+}
+
+fn terrain_quad_height(quad: TerrainQuad) -> f32 {
+    let TerrainQuad {
+        x0,
+        y0,
+        tx,
+        ty,
+        h00,
+        h10,
+        h01,
+        h11,
+    } = quad;
+
+    if ((x0 ^ y0) & 1) == 0 {
+        if tx <= ty {
+            h00 + (h01 - h00) * (ty - tx) + (h11 - h00) * tx
+        } else {
+            h00 + (h11 - h00) * ty + (h10 - h00) * (tx - ty)
+        }
+    } else if tx + ty <= 1.0 {
+        interpolate_triangle(h00, h01, h10, tx, ty)
+    } else {
+        interpolate_triangle(h11, h10, h01, 1.0 - tx, 1.0 - ty)
+    }
+}
+
+fn terrain_quad_slope(quad: TerrainQuad) -> (f32, f32) {
+    let TerrainQuad {
+        x0,
+        y0,
+        tx,
+        ty,
+        h00,
+        h10,
+        h01,
+        h11,
+    } = quad;
+
+    if ((x0 ^ y0) & 1) == 0 {
         if tx <= ty {
             (
-                h00 + (h01 - h00) * (ty - tx) + (h11 - h00) * tx,
                 (h11 - h01) / LAND_VERTEX_SPACING,
                 (h01 - h00) / LAND_VERTEX_SPACING,
             )
         } else {
             (
-                h00 + (h11 - h00) * ty + (h10 - h00) * (tx - ty),
                 (h10 - h00) / LAND_VERTEX_SPACING,
                 (h11 - h10) / LAND_VERTEX_SPACING,
             )
         }
     } else if tx + ty <= 1.0 {
         (
-            interpolate_triangle(h00, h01, h10, tx, ty),
             (h10 - h00) / LAND_VERTEX_SPACING,
             (h01 - h00) / LAND_VERTEX_SPACING,
         )
     } else {
         (
-            interpolate_triangle(h11, h10, h01, 1.0 - tx, 1.0 - ty),
             (h11 - h01) / LAND_VERTEX_SPACING,
             (h11 - h10) / LAND_VERTEX_SPACING,
         )
-    };
+    }
+}
+
+fn sample_terrain(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> TerrainSample {
+    let quad = terrain_quad(heights, local_x, local_y);
+    let height = terrain_quad_height(quad);
+    let (slope_x, slope_y) = terrain_quad_slope(quad);
     TerrainSample {
         height,
         normal: terrain_normal(slope_x, slope_y),
@@ -282,6 +355,20 @@ fn interpolate_triangle(
 mod tests {
     use super::*;
 
+    #[allow(clippy::cast_precision_loss)]
+    fn patterned_heights(offset: f32) -> Box<[[f32; 65]; 65]> {
+        let mut heights: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        for (y, row) in heights.iter_mut().enumerate() {
+            for (x, height) in row.iter_mut().enumerate() {
+                *height = offset + x as f32 * 3.25 - y as f32 * 1.5 + ((x ^ y) & 3) as f32;
+            }
+        }
+        heights
+    }
+
     #[test]
     fn samples_even_quad_triangle_height_inside_cell() {
         let mut heights: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
@@ -345,6 +432,58 @@ mod tests {
         let expected_y = (0.5_f32).atan() / 2.0;
         assert!((sample.angle.xrot - expected_x).abs() < 0.000_01);
         assert!((sample.angle.yrot - expected_y).abs() < 0.000_01);
+    }
+
+    #[test]
+    fn height_at_matches_sample_height_across_cells() {
+        let terrain = TerrainIndex {
+            lands: HashMap::from([
+                ((0, 0), patterned_heights(0.0)),
+                ((-1, 0), patterned_heights(1_000.0)),
+                ((0, -1), patterned_heights(2_000.0)),
+            ]),
+        };
+
+        for (world_x, world_y) in [
+            (0.0, 0.0),
+            (32.0, 96.0),
+            (8_191.5, 8_191.5),
+            (-1.0, 64.0),
+            (-8_192.0, 128.0),
+            (64.0, -64.0),
+        ] {
+            assert_eq!(
+                terrain.height_at(world_x, world_y),
+                terrain
+                    .sample_at(world_x, world_y)
+                    .map(|sample| sample.height)
+            );
+        }
+
+        assert_eq!(terrain.height_at(8_192.0, 0.0), None);
+    }
+
+    #[test]
+    fn positive_cell_boundary_samples_neighbor_origin_vertex() {
+        let mut left: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        let mut right: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        left[0][64] = 640.0;
+        right[0][0] = 10.0;
+        let terrain = TerrainIndex {
+            lands: HashMap::from([((0, 0), left), ((1, 0), right)]),
+        };
+
+        assert_eq!(terrain.height_at(8_192.0, 0.0), Some(10.0));
+        assert_eq!(
+            terrain.height_at(8_192.0, 0.0),
+            terrain.sample_at(8_192.0, 0.0).map(|sample| sample.height)
+        );
     }
 
     #[test]
