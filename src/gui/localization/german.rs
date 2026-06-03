@@ -155,6 +155,7 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::WaterDeleteAction => {
             "Refs löschen, die externen Wasserspiegel kreuzen (water-delete)"
         }
+        UiText::RoadDeleteAction => "Refs auf Straßentexturen löschen (road-delete)",
         UiText::StaticDeleteAction => "Vollständig statisch verdeckte Refs löschen (static-delete)",
         UiText::StaticMoveAction => "Statisch verdeckte Refs verschieben (static-move)",
         UiText::OrientAction => "Refs am Terrain ausrichten (orient)",
@@ -187,6 +188,12 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::NoIncludeOccluderIds => "Keine einschließenden Occluder-ID-Filter konfiguriert.",
         UiText::ExcludeOccluderIds => "Occluder-IDs ausschließen",
         UiText::NoExcludeOccluderIds => "Keine ausschließenden Occluder-ID-Filter konfiguriert.",
+        UiText::IncludeRoadTexturePaths => "Straßentexturpfade einschließen",
+        UiText::NoIncludeRoadTexturePaths => {
+            "Keine zusätzlichen Straßentexturpfad-Filter konfiguriert."
+        }
+        UiText::ExcludeRoadTexturePaths => "Straßentexturpfade ausschließen",
+        UiText::NoExcludeRoadTexturePaths => "Keine Straßentexturpfad-Ausschlüsse konfiguriert.",
         UiText::AddGrassIdPatternTitle => "Grass-ID-Muster hinzufügen",
         UiText::AddExcludePatternTitle => "Ausschlussmuster hinzufügen",
         UiText::AddIgnoredPluginTitle => "Ignoriertes Plugin hinzufügen",
@@ -194,11 +201,19 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::AddExcludeGrassIdRegexTitle => "Ausschließende Grass-ID-Regex hinzufügen",
         UiText::AddIncludeOccluderIdRegexTitle => "Einschließende Occluder-ID-Regex hinzufügen",
         UiText::AddExcludeOccluderIdRegexTitle => "Ausschließende Occluder-ID-Regex hinzufügen",
+        UiText::AddIncludeRoadTexturePathRegexTitle => {
+            "Einschließende Straßentexturpfad-Regex hinzufügen"
+        }
+        UiText::AddExcludeRoadTexturePathRegexTitle => {
+            "Ausschließende Straßentexturpfad-Regex hinzufügen"
+        }
         UiText::IgnoredPluginPrompt => "Ignoriertes Plugin",
         UiText::IncludeGrassIdRegexPrompt => "Einschließende Grass-ID-Regex",
         UiText::ExcludeGrassIdRegexPrompt => "Ausschließende Grass-ID-Regex",
         UiText::IncludeOccluderIdRegexPrompt => "Einschließende Occluder-ID-Regex",
         UiText::ExcludeOccluderIdRegexPrompt => "Ausschließende Occluder-ID-Regex",
+        UiText::IncludeRoadTexturePathRegexPrompt => "Einschließende Straßentexturpfad-Regex",
+        UiText::ExcludeRoadTexturePathRegexPrompt => "Ausschließende Straßentexturpfad-Regex",
         _ => unreachable!(),
     }
 }
