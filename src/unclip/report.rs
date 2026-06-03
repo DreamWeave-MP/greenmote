@@ -12,7 +12,7 @@ use super::{
     },
     write_plan::{
         WriteAdjustment, WriteOrientation, WriteReport, WriteStaticBoundsDeletion,
-        WriteStaticBoundsMove, WriteSummary,
+        WriteStaticBoundsMove, WriteSummary, WriteWaterDeletion,
     },
 };
 
@@ -64,6 +64,7 @@ pub(crate) fn write_instance_header(
     if let Some(write) = &context.write
         && (!write.adjustments.is_empty()
             || !write.deletions.is_empty()
+            || !write.water_deletions.is_empty()
             || !write.moves.is_empty()
             || !write.orientations.is_empty())
     {
@@ -191,6 +192,12 @@ fn baseline_action_counts(write: &WriteReport) -> BTreeMap<String, BaselineActio
             .or_default()
             .deleted += 1;
     }
+    for deletion in &write.water_deletions {
+        counts
+            .entry(deletion.id.to_lowercase())
+            .or_default()
+            .deleted += 1;
+    }
     for move_ in &write.moves {
         counts.entry(move_.id.to_lowercase()).or_default().moved += 1;
     }
@@ -223,7 +230,8 @@ fn write_write_summary_text(
             )?;
         }
         writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
-        writeln!(stdout, "Deleted refs: {}", write.deleted_refs)?;
+        writeln!(stdout, "Static-deleted refs: {}", write.deleted_refs)?;
+        writeln!(stdout, "Water-deleted refs: {}", write.water_deleted_refs)?;
         writeln!(stdout, "Moved refs: {}", write.moved_refs)?;
         writeln!(stdout, "Oriented refs: {}", write.oriented_refs)?;
         if include_adjustments {
@@ -239,6 +247,9 @@ fn write_change_lines(stdout: &mut dyn Write, write: &WriteReport) -> io::Result
     }
     for deletion in &write.deletions {
         write_static_bounds_deletion_text(stdout, deletion)?;
+    }
+    for deletion in &write.water_deletions {
+        write_water_deletion_text(stdout, deletion)?;
     }
     for move_ in &write.moves {
         write_static_bounds_move_text(stdout, move_)?;
@@ -620,6 +631,22 @@ fn write_static_bounds_deletion_text(
         deletion.occluder_id,
         deletion.occluder_cell,
         deletion.occluder_reference_key
+    )
+}
+
+fn write_water_deletion_text(
+    stdout: &mut dyn Write,
+    deletion: &WriteWaterDeletion,
+) -> io::Result<()> {
+    writeln!(
+        stdout,
+        "DELETE_WATER CELL {:?} REF {:?} {} old_z={:.3} new_z={:.3} water_level={:.3}",
+        deletion.cell,
+        deletion.reference_key,
+        deletion.id,
+        deletion.old_z,
+        deletion.new_z,
+        deletion.water_level
     )
 }
 

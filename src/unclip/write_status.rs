@@ -7,6 +7,7 @@ pub(crate) struct WriteStatusInput {
     pub(crate) mesh_status: MeshResolutionStatus,
     pub(crate) contact_delta: Option<f32>,
     pub(crate) static_bounds_status: Option<&'static str>,
+    pub(crate) water_crossing: Option<bool>,
     pub(crate) orientation_angle_degrees: Option<f32>,
     pub(crate) write: WriteStatusEvidence,
     pub(crate) contact_epsilon: f32,
@@ -31,6 +32,7 @@ pub(crate) enum WritePlanEvidence {
     NotPlanned,
     Unchanged,
     Adjusted,
+    WaterDeleted,
     Deleted,
     Moved,
     Oriented,
@@ -44,7 +46,9 @@ pub(crate) fn write_plan_evidence(
     let Some(write) = write else {
         return WritePlanEvidence::NotPlanned;
     };
-    if write.is_deleted(cell, key) {
+    if write.is_water_deleted(cell, key) {
+        WritePlanEvidence::WaterDeleted
+    } else if write.is_deleted(cell, key) {
         WritePlanEvidence::Deleted
     } else if write.is_moved(cell, key) {
         WritePlanEvidence::Moved
@@ -59,6 +63,7 @@ pub(crate) fn write_plan_evidence(
 
 pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
     match input.write.plan {
+        WritePlanEvidence::WaterDeleted => return "deleted_water_crossing",
         WritePlanEvidence::Deleted => return "deleted_static_bounds_occluded",
         WritePlanEvidence::Moved => return "moved_static_bounds_occluded",
         WritePlanEvidence::Adjusted => return "adjusted",
@@ -67,6 +72,9 @@ pub(crate) fn write_status_label(input: &WriteStatusInput) -> &'static str {
     }
     if input.reference_deleted {
         return "skipped_deleted_ref";
+    }
+    if let Some(status) = water_write_status(input) {
+        return status;
     }
     if let Some(occlusion) = input.static_bounds_status {
         match occlusion {
@@ -138,9 +146,33 @@ fn terrain_write_status(input: &WriteStatusInput) -> Option<&'static str> {
             WritePlanEvidence::NotPlanned => "would_adjust_terrain_z",
             WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
             WritePlanEvidence::Adjusted
+            | WritePlanEvidence::WaterDeleted
             | WritePlanEvidence::Deleted
             | WritePlanEvidence::Moved
             | WritePlanEvidence::Oriented => unreachable!("handled before terrain status"),
+        })
+    })
+}
+
+fn water_write_status(input: &WriteStatusInput) -> Option<&'static str> {
+    input.water_crossing.and_then(|crossing| {
+        if !crossing {
+            return None;
+        }
+        if !input.write.actions.terrain_z() {
+            return Some("skipped_terrain_z_disabled");
+        }
+        if !input.write.actions.water_delete() {
+            return Some("skipped_water_delete_disabled");
+        }
+        Some(match input.write.plan {
+            WritePlanEvidence::NotPlanned => "would_delete_water_crossing",
+            WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
+            WritePlanEvidence::Adjusted
+            | WritePlanEvidence::WaterDeleted
+            | WritePlanEvidence::Deleted
+            | WritePlanEvidence::Moved
+            | WritePlanEvidence::Oriented => unreachable!("handled before water status"),
         })
     })
 }
@@ -160,6 +192,7 @@ fn orientation_write_status(input: &WriteStatusInput) -> Option<&'static str> {
             WritePlanEvidence::NotPlanned => "would_orient_to_terrain",
             WritePlanEvidence::Unchanged => "skipped_write_plan_unchanged",
             WritePlanEvidence::Adjusted
+            | WritePlanEvidence::WaterDeleted
             | WritePlanEvidence::Deleted
             | WritePlanEvidence::Moved
             | WritePlanEvidence::Oriented => unreachable!("handled before orientation status"),
@@ -237,6 +270,27 @@ mod tests {
     }
 
     #[test]
+    fn write_status_reports_water_crossing_candidates() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.contact_delta = Some(10.0);
+        input.water_crossing = Some(true);
+
+        assert_eq!(write_status_label(&input), "would_delete_water_crossing");
+        input.write.actions.disable_water_delete();
+        assert_eq!(write_status_label(&input), "skipped_water_delete_disabled");
+    }
+
+    #[test]
+    fn write_status_reports_terrain_disabled_for_water_crossing_prerequisite() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.contact_delta = Some(10.0);
+        input.water_crossing = Some(true);
+        input.write.actions.disable_terrain_z();
+
+        assert_eq!(write_status_label(&input), "skipped_terrain_z_disabled");
+    }
+
+    #[test]
     fn write_status_checks_terrain_after_disabled_static_action() {
         let mut input = base_input(MeshResolutionStatus::Resolved);
         input.contact_delta = Some(10.0);
@@ -274,6 +328,15 @@ mod tests {
         assert_eq!(write_status_label(&input), "oriented_to_terrain");
     }
 
+    #[test]
+    fn write_status_prefers_water_deleted_plan_evidence() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.water_crossing = Some(true);
+        input.write.plan = WritePlanEvidence::WaterDeleted;
+
+        assert_eq!(write_status_label(&input), "deleted_water_crossing");
+    }
+
     const fn test_write_actions() -> WriteActions {
         WriteActions::all()
     }
@@ -285,6 +348,7 @@ mod tests {
             contact_delta: None,
             orientation_angle_degrees: None,
             static_bounds_status: None,
+            water_crossing: None,
             write: WriteStatusEvidence {
                 plan: WritePlanEvidence::NotPlanned,
                 actions: test_write_actions(),

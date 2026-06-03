@@ -19,12 +19,15 @@ pub(crate) struct WriteReport {
     pub(crate) backup_plugin: Option<String>,
     pub(crate) adjusted_refs: usize,
     pub(crate) deleted_refs: usize,
+    pub(crate) water_deleted_refs: usize,
     pub(crate) moved_refs: usize,
     pub(crate) oriented_refs: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) adjustments: Vec<WriteAdjustment>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) deletions: Vec<WriteStaticBoundsDeletion>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) water_deletions: Vec<WriteWaterDeletion>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) moves: Vec<WriteStaticBoundsMove>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -69,10 +72,12 @@ impl WriteReport {
             backup_plugin,
             adjusted_refs: plan.adjusted_refs,
             deleted_refs: plan.deleted_refs,
+            water_deleted_refs: plan.water_deleted_refs,
             moved_refs: plan.moved_refs,
             oriented_refs: plan.oriented_refs,
             adjustments: plan.adjustments,
             deletions: plan.deletions,
+            water_deletions: plan.water_deletions,
             moves: plan.moves,
             orientations: plan.orientations,
         }
@@ -86,6 +91,7 @@ impl WriteReport {
             backup_plugin: self.backup_plugin.clone(),
             adjusted_refs: self.adjusted_refs,
             deleted_refs: self.deleted_refs,
+            water_deleted_refs: self.water_deleted_refs,
             moved_refs: self.moved_refs,
             oriented_refs: self.oriented_refs,
         }
@@ -102,6 +108,7 @@ pub(crate) struct WriteSummary {
     pub(crate) backup_plugin: Option<String>,
     pub(crate) adjusted_refs: usize,
     pub(crate) deleted_refs: usize,
+    pub(crate) water_deleted_refs: usize,
     pub(crate) moved_refs: usize,
     pub(crate) oriented_refs: usize,
 }
@@ -110,10 +117,12 @@ pub(crate) struct WriteSummary {
 pub(crate) struct WritePlan {
     pub(crate) adjusted_refs: usize,
     pub(crate) deleted_refs: usize,
+    pub(crate) water_deleted_refs: usize,
     pub(crate) moved_refs: usize,
     pub(crate) oriented_refs: usize,
     pub(crate) adjustments: Vec<WriteAdjustment>,
     pub(crate) deletions: Vec<WriteStaticBoundsDeletion>,
+    pub(crate) water_deletions: Vec<WriteWaterDeletion>,
     pub(crate) moves: Vec<WriteStaticBoundsMove>,
     pub(crate) orientations: Vec<WriteOrientation>,
     pub(crate) static_bounds_analysis: Vec<WriteStaticBoundsAnalysis>,
@@ -121,13 +130,19 @@ pub(crate) struct WritePlan {
 
 impl WritePlan {
     pub(crate) const fn changed_refs(&self) -> usize {
-        self.adjusted_refs + self.deleted_refs + self.moved_refs + self.oriented_refs
+        self.adjusted_refs
+            + self.deleted_refs
+            + self.water_deleted_refs
+            + self.moved_refs
+            + self.oriented_refs
     }
 
     fn sort_records(&mut self) {
         self.adjustments
             .sort_by_key(|adjustment| (adjustment.cell, adjustment.reference_key));
         self.deletions
+            .sort_by_key(|deletion| (deletion.cell, deletion.reference_key));
+        self.water_deletions
             .sort_by_key(|deletion| (deletion.cell, deletion.reference_key));
         self.moves
             .sort_by_key(|move_| (move_.cell, move_.reference_key));
@@ -158,6 +173,16 @@ pub(crate) struct WriteStaticBoundsDeletion {
     pub(crate) occluder_id: String,
     pub(crate) occluder_cell: [i32; 2],
     pub(crate) occluder_reference_key: [u32; 2],
+}
+
+#[derive(Serialize)]
+pub(crate) struct WriteWaterDeletion {
+    pub(crate) cell: [i32; 2],
+    pub(crate) reference_key: [u32; 2],
+    pub(crate) id: String,
+    pub(crate) old_z: f32,
+    pub(crate) new_z: f32,
+    pub(crate) water_level: f32,
 }
 
 #[derive(Serialize)]
@@ -242,6 +267,18 @@ fn adjusted_ref_keys_from_deletions(
         .collect()
 }
 
+fn adjusted_ref_keys_from_water_deletions(
+    deletions: &[WriteWaterDeletion],
+) -> BTreeSet<AdjustedRefKey> {
+    deletions
+        .iter()
+        .map(|deletion| AdjustedRefKey {
+            cell: deletion.cell,
+            reference_key: deletion.reference_key,
+        })
+        .collect()
+}
+
 fn adjusted_ref_keys_from_moves(moves: &[WriteStaticBoundsMove]) -> BTreeSet<AdjustedRefKey> {
     moves
         .iter()
@@ -267,6 +304,7 @@ fn adjusted_ref_keys_from_orientations(
 pub(crate) struct WriteStatusIndex {
     adjusted: BTreeSet<AdjustedRefKey>,
     deleted: BTreeSet<AdjustedRefKey>,
+    water_deleted: BTreeSet<AdjustedRefKey>,
     moved: BTreeSet<AdjustedRefKey>,
     oriented: BTreeSet<AdjustedRefKey>,
     static_bounds: BTreeMap<AdjustedRefKey, WriteStaticBoundsAnalysis>,
@@ -277,6 +315,7 @@ impl WriteStatusIndex {
         Self {
             adjusted: adjusted_ref_keys(&plan.adjustments),
             deleted: adjusted_ref_keys_from_deletions(&plan.deletions),
+            water_deleted: adjusted_ref_keys_from_water_deletions(&plan.water_deletions),
             moved: adjusted_ref_keys_from_moves(&plan.moves),
             oriented: adjusted_ref_keys_from_orientations(&plan.orientations),
             static_bounds: plan
@@ -304,6 +343,10 @@ impl WriteStatusIndex {
         self.deleted.contains(&AdjustedRefKey::new(cell, key))
     }
 
+    pub(crate) fn is_water_deleted(&self, cell: CellCoord, key: (u32, u32)) -> bool {
+        self.water_deleted.contains(&AdjustedRefKey::new(cell, key))
+    }
+
     pub(crate) fn is_moved(&self, cell: CellCoord, key: (u32, u32)) -> bool {
         self.moved.contains(&AdjustedRefKey::new(cell, key))
     }
@@ -327,7 +370,7 @@ mod tests {
 
     use super::{
         WriteAdjustment, WriteOrientation, WritePlan, WriteReport, WriteStaticBoundsDeletion,
-        WriteStatusIndex,
+        WriteStatusIndex, WriteWaterDeletion,
     };
 
     #[test]
@@ -357,12 +400,26 @@ mod tests {
     }
 
     #[test]
+    fn write_status_index_tracks_water_deleted_refs() {
+        let plan = WritePlan {
+            water_deleted_refs: 1,
+            water_deletions: vec![write_water_deletion_at([1, 2], [3, 4])],
+            ..WritePlan::default()
+        };
+        let index = WriteStatusIndex::from_plan(&plan);
+
+        assert!(index.is_water_deleted((1, 2), (3, 4)));
+        assert!(!index.is_water_deleted((1, 2), (3, 5)));
+    }
+
+    #[test]
     fn write_report_sorts_change_records() {
         let report = WriteReport::not_written(
             Path::new("plugin.omwaddon"),
             WritePlan {
                 adjusted_refs: 2,
                 deleted_refs: 2,
+                water_deleted_refs: 1,
                 adjustments: vec![
                     write_adjustment_at([1, 0], [4, 0]),
                     write_adjustment_at([0, 0], [9, 0]),
@@ -371,6 +428,7 @@ mod tests {
                     write_deletion_at([1, 0], [4, 0]),
                     write_deletion_at([0, 0], [9, 0]),
                 ],
+                water_deletions: vec![write_water_deletion_at([2, 0], [8, 0])],
                 ..WritePlan::default()
             },
             "no_refs_changed",
@@ -381,6 +439,7 @@ mod tests {
         assert_eq!(report.adjustments[1].cell, [1, 0]);
         assert_eq!(report.deletions[0].cell, [0, 0]);
         assert_eq!(report.deletions[1].cell, [1, 0]);
+        assert_eq!(report.water_deletions[0].cell, [2, 0]);
     }
 
     fn write_adjustment() -> WriteAdjustment {
@@ -410,6 +469,17 @@ mod tests {
             occluder_id: "rock".to_owned(),
             occluder_cell: [0, 0],
             occluder_reference_key: [1, 0],
+        }
+    }
+
+    fn write_water_deletion_at(cell: [i32; 2], reference_key: [u32; 2]) -> WriteWaterDeletion {
+        WriteWaterDeletion {
+            cell,
+            reference_key,
+            id: "grass".to_owned(),
+            old_z: 10.0,
+            new_z: -2.0,
+            water_level: 0.0,
         }
     }
 

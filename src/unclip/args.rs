@@ -101,6 +101,8 @@ pub enum WriteActionArg {
     None,
     /// Move clipped references vertically to terrain height.
     TerrainZ,
+    /// Delete refs that terrain adjustment would move across exterior water.
+    WaterDelete,
     /// Delete references that remain inside static occluders.
     StaticDelete,
     /// Move references horizontally away from static occluders when a nearby location is found.
@@ -125,9 +127,10 @@ pub(crate) struct WriteActions {
 }
 
 const WRITE_TERRAIN_Z: u8 = 1 << 0;
-const WRITE_STATIC_DELETE: u8 = 1 << 1;
-const WRITE_STATIC_MOVE: u8 = 1 << 2;
-const WRITE_ORIENT: u8 = 1 << 3;
+const WRITE_WATER_DELETE: u8 = 1 << 1;
+const WRITE_STATIC_DELETE: u8 = 1 << 2;
+const WRITE_STATIC_MOVE: u8 = 1 << 3;
+const WRITE_ORIENT: u8 = 1 << 4;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RelocationPolicy {
@@ -184,6 +187,7 @@ impl UnclipArgs {
 pub(crate) fn default_write_actions() -> Vec<WriteActionArg> {
     vec![
         WriteActionArg::TerrainZ,
+        WriteActionArg::WaterDelete,
         WriteActionArg::StaticDelete,
         WriteActionArg::StaticMove,
         WriteActionArg::Orient,
@@ -230,6 +234,7 @@ impl WriteActions {
                     write_actions = Self::empty();
                 }
                 WriteActionArg::TerrainZ => write_actions.enable(WRITE_TERRAIN_Z),
+                WriteActionArg::WaterDelete => write_actions.enable(WRITE_WATER_DELETE),
                 WriteActionArg::StaticDelete => write_actions.enable(WRITE_STATIC_DELETE),
                 WriteActionArg::StaticMove => write_actions.enable(WRITE_STATIC_MOVE),
                 WriteActionArg::Orient => write_actions.enable(WRITE_ORIENT),
@@ -244,7 +249,11 @@ impl WriteActions {
 
     pub(crate) const fn all() -> Self {
         Self {
-            flags: WRITE_TERRAIN_Z | WRITE_STATIC_DELETE | WRITE_STATIC_MOVE | WRITE_ORIENT,
+            flags: WRITE_TERRAIN_Z
+                | WRITE_WATER_DELETE
+                | WRITE_STATIC_DELETE
+                | WRITE_STATIC_MOVE
+                | WRITE_ORIENT,
         }
     }
 
@@ -255,6 +264,11 @@ impl WriteActions {
     #[cfg(test)]
     pub(crate) fn disable_terrain_z(&mut self) {
         self.flags &= !WRITE_TERRAIN_Z;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disable_water_delete(&mut self) {
+        self.flags &= !WRITE_WATER_DELETE;
     }
 
     #[cfg(test)]
@@ -274,6 +288,10 @@ impl WriteActions {
 
     pub(crate) const fn terrain_z(self) -> bool {
         self.flags & WRITE_TERRAIN_Z != 0
+    }
+
+    pub(crate) const fn water_delete(self) -> bool {
+        self.flags & WRITE_WATER_DELETE != 0
     }
 
     pub(crate) const fn static_delete(self) -> bool {
@@ -296,6 +314,9 @@ impl WriteActions {
         let mut names = Vec::new();
         if self.terrain_z() {
             names.push("terrain-z");
+        }
+        if self.water_delete() {
+            names.push("water-delete");
         }
         if self.static_delete() {
             names.push("static-delete");

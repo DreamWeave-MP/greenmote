@@ -93,6 +93,7 @@ macro_rules! route_text {
             | UiText::RunOptionsConfiguredOnConvert
             | UiText::WriteActions
             | UiText::TerrainZAction
+            | UiText::WaterDeleteAction
             | UiText::StaticDeleteAction
             | UiText::StaticMoveAction
             | UiText::OrientAction
@@ -250,6 +251,7 @@ pub(super) enum UiText {
     RunOptionsConfiguredOnConvert,
     WriteActions,
     TerrainZAction,
+    WaterDeleteAction,
     StaticDeleteAction,
     StaticMoveAction,
     OrientAction,
@@ -478,6 +480,10 @@ mod tests {
         assert_eq!(localizer.text(UiText::Language), "Language");
         assert_eq!(localizer.text(UiText::StartConversion), "Start conversion");
         assert_eq!(
+            localizer.text(UiText::WaterDeleteAction),
+            "Delete refs crossing exterior water (water-delete)"
+        );
+        assert_eq!(
             localizer.text(UiText::ConfirmUnclipWriteMessage),
             "Unclip will modify the selected target plugin(s) and create backup files."
         );
@@ -486,26 +492,14 @@ mod tests {
         assert_eq!(localizer.unclip_target_count(6), "Targets: 6 plugins");
         assert_eq!(localizer.unclip_target_overflow(2), "... and 2 more");
         assert_eq!(localizer.text(UiText::UnclipTargetPending), "Pending");
-        assert_eq!(
-            localizer.unclip_finished_status("Unclip write", 1, 0, 0, 0),
-            "Unclip write finished: 1 target succeeded."
-        );
-        assert_eq!(
-            localizer.unclip_finished_status("Unclip write", 2, 0, 0, 0),
-            "Unclip write finished: 2 targets succeeded."
-        );
-        assert_eq!(
-            localizer.unclip_finished_status("Unclip write", 2, 1, 1, 1),
-            "Unclip write finished: 2 succeeded, 1 failed, 1 skipped, 1 cancelled."
-        );
-        assert_eq!(
-            localizer.unclip_finished_error_status("Unclip write", 1, 1, 0, 1, "disk full"),
-            "Unclip write finished: 1 succeeded, 1 failed, 0 skipped, 1 cancelled. — error: disk full"
-        );
 
         let mut french = Localizer::default();
         french.set_language(UiLanguage::French);
         assert_eq!(french.text(UiText::Settings), "Paramètres");
+        assert_eq!(
+            french.text(UiText::WaterDeleteAction),
+            "Supprimer les refs traversant l’eau extérieure (water-delete)"
+        );
         assert_eq!(french.showing_items(1, 6, 9), "Affichage de 1 à 6 sur 9");
         assert_eq!(french.unclip_target_count(6), "Cibles : 6 plugins");
         assert_eq!(french.unclip_target_overflow(1), "... et 1 autre");
@@ -514,6 +508,10 @@ mod tests {
         let mut german = Localizer::default();
         german.set_language(UiLanguage::German);
         assert_eq!(german.text(UiText::Settings), "Einstellungen");
+        assert_eq!(
+            german.text(UiText::WaterDeleteAction),
+            "Refs löschen, die externen Wasserspiegel kreuzen (water-delete)"
+        );
         assert_eq!(german.unclip_target_count(6), "Ziele: 6 Plugins");
         assert_eq!(german.unclip_target_overflow(1), "... und 1 weiteres");
         assert_eq!(german.unclip_target_overflow(2), "... und 2 weitere");
@@ -521,6 +519,10 @@ mod tests {
         let mut russian = Localizer::default();
         russian.set_language(UiLanguage::Russian);
         assert_eq!(russian.text(UiText::Settings), "Настройки");
+        assert_eq!(
+            russian.text(UiText::WaterDeleteAction),
+            "Удалять refs, пересекающие внешний водный уровень (water-delete)"
+        );
         assert_eq!(
             russian.text(UiText::ConfirmUnclipWriteMessage),
             "Unclip изменит выбранные целевые плагины и создаст резервные копии."
@@ -554,6 +556,10 @@ mod tests {
         let mut spanish = Localizer::default();
         spanish.set_language(UiLanguage::Spanish);
         assert_eq!(spanish.text(UiText::Settings), "Ajustes");
+        assert_eq!(
+            spanish.text(UiText::WaterDeleteAction),
+            "Eliminar refs que crucen el agua exterior (water-delete)"
+        );
         assert_eq!(spanish.unclip_target_count(6), "Objetivos: 6 plugins");
         assert_eq!(spanish.unclip_target_overflow(2), "... y 2 más");
         let spanish_error =
@@ -565,7 +571,33 @@ mod tests {
         let mut swedish = Localizer::default();
         swedish.set_language(UiLanguage::Swedish);
         assert_eq!(swedish.text(UiText::Settings), "Inställningar");
+        assert_eq!(
+            swedish.text(UiText::WaterDeleteAction),
+            "Ta bort refs som passerar yttre vatten (water-delete)"
+        );
         assert_eq!(swedish.unclip_target_count(6), "Mål: 6 plugin");
         assert_eq!(swedish.unclip_target_overflow(2), "... och 2 till");
+    }
+
+    #[test]
+    fn localizes_unclip_finished_statuses() {
+        let localizer = Localizer::default();
+
+        assert_eq!(
+            localizer.unclip_finished_status("Unclip write", 1, 0, 0, 0),
+            "Unclip write finished: 1 target succeeded."
+        );
+        assert_eq!(
+            localizer.unclip_finished_status("Unclip write", 2, 0, 0, 0),
+            "Unclip write finished: 2 targets succeeded."
+        );
+        assert_eq!(
+            localizer.unclip_finished_status("Unclip write", 2, 1, 1, 1),
+            "Unclip write finished: 2 succeeded, 1 failed, 1 skipped, 1 cancelled."
+        );
+        assert_eq!(
+            localizer.unclip_finished_error_status("Unclip write", 1, 1, 0, 1, "disk full"),
+            "Unclip write finished: 1 succeeded, 1 failed, 0 skipped, 1 cancelled. — error: disk full"
+        );
     }
 }

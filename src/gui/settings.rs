@@ -14,11 +14,12 @@ use super::{
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
 const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
-const UNCLIP_WRITE_ACTION_COUNT: usize = 4;
+const UNCLIP_WRITE_ACTION_COUNT: usize = 5;
 const UNCLIP_TERRAIN_Z_INDEX: usize = 0;
-const UNCLIP_STATIC_DELETE_INDEX: usize = 1;
-const UNCLIP_STATIC_MOVE_INDEX: usize = 2;
-const UNCLIP_ORIENT_INDEX: usize = 3;
+const UNCLIP_WATER_DELETE_INDEX: usize = 1;
+const UNCLIP_STATIC_DELETE_INDEX: usize = 2;
+const UNCLIP_STATIC_MOVE_INDEX: usize = 3;
+const UNCLIP_ORIENT_INDEX: usize = 4;
 
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct SettingsUiState {
@@ -473,6 +474,10 @@ impl GreenmoteApp {
                     self.localizer.text(UiText::TerrainZAction),
                 );
                 ui.checkbox(
+                    &mut policy.write_actions[UNCLIP_WATER_DELETE_INDEX],
+                    self.localizer.text(UiText::WaterDeleteAction),
+                );
+                ui.checkbox(
                     &mut policy.write_actions[UNCLIP_STATIC_DELETE_INDEX],
                     self.localizer.text(UiText::StaticDeleteAction),
                 );
@@ -888,6 +893,7 @@ impl UnclipPolicyDraft {
         Self {
             write_actions: [
                 has_action(WriteActionArg::TerrainZ),
+                has_action(WriteActionArg::WaterDelete),
                 has_action(WriteActionArg::StaticDelete),
                 has_action(WriteActionArg::StaticMove),
                 has_action(WriteActionArg::Orient),
@@ -959,6 +965,9 @@ impl UnclipPolicyDraft {
         if self.write_actions[UNCLIP_TERRAIN_Z_INDEX] {
             actions.push(WriteActionArg::TerrainZ);
         }
+        if self.write_actions[UNCLIP_WATER_DELETE_INDEX] {
+            actions.push(WriteActionArg::WaterDelete);
+        }
         if self.write_actions[UNCLIP_STATIC_DELETE_INDEX] {
             actions.push(WriteActionArg::StaticDelete);
         }
@@ -975,6 +984,9 @@ impl UnclipPolicyDraft {
         let mut actions = Vec::new();
         if self.write_actions[UNCLIP_TERRAIN_Z_INDEX] {
             actions.push("terrain-z");
+        }
+        if self.write_actions[UNCLIP_WATER_DELETE_INDEX] {
+            actions.push("water-delete");
         }
         if self.write_actions[UNCLIP_STATIC_DELETE_INDEX] {
             actions.push("static-delete");
@@ -1590,7 +1602,7 @@ mod tests {
         let mut draft = SettingsDraft::default();
         draft.unclip.plugin = Some("groundcover.omwaddon".into());
         draft.unclip.write = Some(true);
-        draft.unclip_policy.write_actions = [true, false, true, false];
+        draft.unclip_policy.write_actions = [true, false, false, true, false];
         draft.unclip_policy.include_grass_ids = vec!["flora_.*".to_owned()];
 
         let config = draft.validate_and_to_config().unwrap();
