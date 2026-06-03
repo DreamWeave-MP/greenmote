@@ -188,8 +188,8 @@ impl ConvertUiState {
         self.saved_run_options = options;
     }
 
-    pub(super) fn sync_unclip_write_from_settings(&mut self, write: bool) {
-        self.unclip.run_options.write = write;
+    pub(super) fn sync_unclip_dry_run_from_settings(&mut self, dry_run: bool) {
+        self.unclip.run_options.dry_run = dry_run;
         self.unclip.pending_write_confirmation = false;
     }
 
@@ -198,13 +198,13 @@ impl ConvertUiState {
     }
 
     #[cfg(test)]
-    pub(super) fn set_unclip_write_for_test(&mut self, write: bool) {
-        self.unclip.run_options.write = write;
+    pub(super) fn set_unclip_dry_run_for_test(&mut self, dry_run: bool) {
+        self.unclip.run_options.dry_run = dry_run;
     }
 
     #[cfg(test)]
-    pub(super) fn unclip_write_for_test(&self) -> bool {
-        self.unclip.run_options.write
+    pub(super) fn unclip_dry_run_for_test(&self) -> bool {
+        self.unclip.run_options.dry_run
     }
 
     #[cfg(test)]
@@ -351,8 +351,8 @@ impl GreenmoteApp {
                 self.show_unclip_target_list(ui);
 
                 ui.checkbox(
-                    &mut self.convert.unclip.run_options.write,
-                    self.localizer.text(UiText::WriteChangesToPlugin),
+                    &mut self.convert.unclip.run_options.dry_run,
+                    self.localizer.text(UiText::DryRun),
                 );
             });
         });
@@ -537,10 +537,10 @@ impl GreenmoteApp {
         ctx: &egui::Context,
     ) -> egui::Response {
         let can_start = self.can_start_worker();
-        let label = if self.convert.unclip.run_options.write {
-            self.localizer.text(UiText::WriteChanges)
-        } else {
+        let label = if self.convert.unclip.run_options.dry_run {
             self.localizer.text(UiText::InspectPlugin)
+        } else {
+            self.localizer.text(UiText::WriteChanges)
         };
 
         let response = ui.add_enabled(can_start, egui::Button::new(label));
@@ -673,17 +673,17 @@ impl GreenmoteApp {
             return;
         }
 
-        if self.convert.unclip.run_options.write {
-            self.convert.unclip.pending_write_confirmation = true;
-        } else {
+        if self.convert.unclip.run_options.dry_run {
             self.start_unclip(ctx);
+        } else {
+            self.convert.unclip.pending_write_confirmation = true;
         }
     }
 
     fn validate_unclip_run(&self) -> Result<(), String> {
         self.validate_worker_start()?;
         self.convert.unclip.run_options.to_args_list()?;
-        if self.convert.unclip.run_options.write
+        if !self.convert.unclip.run_options.dry_run
             && self.settings.unclip_write_action_names().is_empty()
         {
             return Err(
@@ -697,7 +697,7 @@ impl GreenmoteApp {
 
     fn validate_unclip_write_confirmation(&self) -> Result<(), String> {
         self.validate_unclip_run()?;
-        if !self.convert.unclip.run_options.write {
+        if self.convert.unclip.run_options.dry_run {
             return Err("Unclip write mode is no longer enabled.".to_owned());
         }
 
@@ -927,10 +927,10 @@ impl GreenmoteApp {
         self.convert.cancellation = Some(cancellation);
         self.convert.output.clear();
         self.convert.reset_unclip_target_statuses();
-        if self.convert.unclip.run_options.write {
-            self.set_status(self.localizer.text(UiText::WritingUnclipBatch));
-        } else {
+        if self.convert.unclip.run_options.dry_run {
             self.set_status(self.localizer.text(UiText::InspectingUnclipBatch));
+        } else {
+            self.set_status(self.localizer.text(UiText::WritingUnclipBatch));
         }
 
         thread::spawn(move || {
@@ -940,7 +940,7 @@ impl GreenmoteApp {
                 &args_list,
                 args_list
                     .first()
-                    .is_some_and(|args| args.write.unwrap_or(false)),
+                    .is_some_and(|args| !args.dry_run.unwrap_or(false)),
                 &mut stdout,
                 &worker_cancellation,
                 |index, status| {
@@ -1150,10 +1150,10 @@ impl GreenmoteApp {
         self.convert.active_worker = None;
         self.convert.cancellation = None;
 
-        let label = if self.convert.unclip.run_options.write {
-            UiText::UnclipWrite
-        } else {
+        let label = if self.convert.unclip.run_options.dry_run {
             UiText::UnclipInspection
+        } else {
+            UiText::UnclipWrite
         };
 
         if cancelled {
@@ -1791,7 +1791,7 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
             targets: vec![target("target.omwaddon")],
-            write: true,
+            dry_run: false,
         };
         app.convert.unclip.pending_write_confirmation = true;
         app.convert.running = true;
@@ -1814,7 +1814,7 @@ mod tests {
         app.settings.clear_unclip_write_actions_for_test();
         app.convert.unclip.run_options = UnclipRunOptions {
             targets: vec![target("target.omwaddon")],
-            write: true,
+            dry_run: false,
         };
 
         let error = app.validate_unclip_run().unwrap_err();
@@ -1826,17 +1826,17 @@ mod tests {
     }
 
     #[test]
-    fn settings_sync_updates_unclip_write_without_forcing_false() {
+    fn settings_sync_updates_unclip_dry_run_without_forcing_false() {
         let mut state = ConvertUiState::ready();
         state.unclip.run_options = UnclipRunOptions {
             targets: vec![target("target.omwaddon")],
-            write: false,
+            dry_run: false,
         };
         state.unclip.pending_write_confirmation = true;
 
-        state.sync_unclip_write_from_settings(true);
+        state.sync_unclip_dry_run_from_settings(true);
 
-        assert!(state.unclip.run_options.write);
+        assert!(state.unclip.run_options.dry_run);
         assert_eq!(
             state.unclip.run_options.targets,
             [target("target.omwaddon")]
@@ -1848,7 +1848,7 @@ mod tests {
     fn finish_unclip_cancelled_status_includes_batch_counts() {
         let mut app = GreenmoteApp::default();
         app.localizer.set_language(UiLanguage::French);
-        app.convert.unclip.run_options.write = true;
+        app.convert.unclip.run_options.dry_run = false;
         app.convert.unclip.target_statuses =
             vec![UnclipTargetStatus::Cancelled, UnclipTargetStatus::Skipped];
 
@@ -1866,7 +1866,7 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
             targets: vec![target("first.omwaddon"), target("second.omwaddon")],
-            write: false,
+            dry_run: true,
         };
 
         app.validate_unclip_run().unwrap();
@@ -2146,7 +2146,7 @@ mod tests {
                 instances: None,
                 verbose: None,
                 structured: Some(false),
-                write: Some(write),
+                dry_run: Some(!write),
                 write_actions: Vec::new(),
                 origin_epsilon: None,
                 relocation_step: None,
@@ -2171,7 +2171,7 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
             targets: vec![target(" ")],
-            write: false,
+            dry_run: true,
         };
 
         let error = app.validate_unclip_run().unwrap_err();

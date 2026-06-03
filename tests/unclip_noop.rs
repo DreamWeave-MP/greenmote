@@ -92,7 +92,6 @@ fn unclip_args(target: &Path) -> greenmote::unclip::UnclipArgs {
         std::ffi::OsString::from("--include-grass-id"),
         std::ffi::OsString::from("^flora_"),
         std::ffi::OsString::from("--structured"),
-        std::ffi::OsString::from("--write"),
     ]);
     let Command::Unclip(args) = cli.command_or_default() else {
         panic!("expected unclip args");

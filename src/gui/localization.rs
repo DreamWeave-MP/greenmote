@@ -33,7 +33,6 @@ macro_rules! route_text {
             | UiText::ClearTargets
             | UiText::EmptyTargetList
             | UiText::TargetPathEntry
-            | UiText::WriteChangesToPlugin
             | UiText::StartConversion
             | UiText::WriteChanges
             | UiText::InspectPlugin
@@ -195,7 +194,6 @@ pub(super) enum UiText {
     ClearTargets,
     EmptyTargetList,
     TargetPathEntry,
-    WriteChangesToPlugin,
     StartConversion,
     WriteChanges,
     InspectPlugin,

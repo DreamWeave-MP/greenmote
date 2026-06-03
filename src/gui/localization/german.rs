@@ -60,7 +60,6 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::ClearTargets => "Ziele löschen",
         UiText::EmptyTargetList => "Keine Ziel-Plugins hinzugefügt.",
         UiText::TargetPathEntry => "Plugin-Name oder Pfad",
-        UiText::WriteChangesToPlugin => "Änderungen ins Plugin schreiben",
         UiText::StartConversion => "Konvertierung starten",
         UiText::WriteChanges => "Änderungen schreiben",
         UiText::InspectPlugin => "Plugin prüfen",

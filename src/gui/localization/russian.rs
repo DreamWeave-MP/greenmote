@@ -70,7 +70,6 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::ClearTargets => "Очистить список плагинов",
         UiText::EmptyTargetList => "Целевые плагины не добавлены.",
         UiText::TargetPathEntry => "Имя плагина или путь",
-        UiText::WriteChangesToPlugin => "Записать изменения в плагин",
         UiText::StartConversion => "Начать конвертацию",
         UiText::WriteChanges => "Записать изменения",
         UiText::InspectPlugin => "Проверить плагин",

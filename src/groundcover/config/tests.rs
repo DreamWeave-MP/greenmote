@@ -84,6 +84,8 @@ fn missing_config_default_initializes_next_to_user_config() {
     assert!(contents.contains("[unclip]"));
     assert!(!contents.contains("openmw_cfg"));
     assert!(!contents.contains("plugin ="));
+    assert!(contents.contains("dry_run = false"));
+    assert!(!contents.contains("write = false"));
     assert!(!contents.contains("validate_config"));
     assert!(!contents.contains("fallback_output_directory"));
     assert!(
@@ -102,7 +104,7 @@ fn save_for_edit_preserves_unclip_config() {
         r#"
 [unclip]
 plugin = "custom-groundcover.omwaddon"
-write = true
+dry_run = true
 include_grass_ids = ["flora_.*"]
 "#,
     )
@@ -119,8 +121,59 @@ include_grass_ids = ["flora_.*"]
     let contents = read_to_string(config_path).unwrap();
 
     assert!(contents.contains("plugin = \"custom-groundcover.omwaddon\""));
-    assert!(contents.contains("write = true"));
+    assert!(contents.contains("dry_run = true"));
+    assert!(!contents.contains("write = true"));
     assert!(contents.contains("include_grass_ids = [\"flora_.*\"]"));
+}
+
+#[test]
+fn load_for_edit_maps_legacy_unclip_write_to_dry_run() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[unclip]
+plugin = "custom-groundcover.omwaddon"
+write = false
+"#,
+    )
+    .unwrap();
+
+    let config = GroundcoverConfig::load_for_edit(
+        &config_path,
+        resolved_output_directory(dir.path.join("data-local")),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(config.unclip.dry_run, Some(true));
+    assert_eq!(config.unclip.legacy_write, None);
+}
+
+#[test]
+fn load_for_edit_rejects_conflicting_unclip_write_and_dry_run() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r"
+[unclip]
+write = true
+dry_run = true
+",
+    )
+    .unwrap();
+
+    let error = GroundcoverConfig::load_for_edit(
+        &config_path,
+        resolved_output_directory(dir.path.join("data-local")),
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("conflicts"));
 }
 
 #[test]

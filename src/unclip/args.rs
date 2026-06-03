@@ -26,7 +26,7 @@ pub struct UnclipArgs {
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
     pub plugin: Option<PathBuf>,
 
-    /// Plugin path to write when --write is set. Defaults to replacing the resolved source plugin.
+    /// Plugin path to write. Defaults to replacing the resolved source plugin.
     #[arg(long = "output-plugin", value_name = "PATH")]
     pub output_plugin: Option<PathBuf>,
 
@@ -49,11 +49,11 @@ pub struct UnclipArgs {
     #[arg(long = "structured", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
     pub structured: Option<bool>,
 
-    /// Back up and replace the target plugin with planned unclipping changes.
-    #[arg(long = "write", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
-    pub write: Option<bool>,
+    /// Inspect planned unclipping changes without writing them.
+    #[arg(long = "dry-run", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+    pub dry_run: Option<bool>,
 
-    /// Comma-separated write actions to plan when --write is set.
+    /// Comma-separated write actions to plan when writing.
     #[arg(long = "write-actions", value_enum, value_delimiter = ',')]
     pub write_actions: Vec<WriteActionArg>,
 
@@ -183,7 +183,7 @@ impl UnclipArgs {
             },
             verbose: self.verbose.or(self.instances).unwrap_or(false),
             structured: self.structured.unwrap_or(false),
-            write: self.write.unwrap_or(false),
+            dry_run: self.dry_run.unwrap_or(false),
             write_actions: if self.write_actions.is_empty() {
                 default_write_actions()
             } else {

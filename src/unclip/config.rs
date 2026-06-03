@@ -27,7 +27,7 @@ pub(crate) struct UnclipConfig {
     pub(crate) meshgenerator_ini: Option<PathBuf>,
     pub(crate) verbose: bool,
     pub(crate) structured: bool,
-    pub(crate) write: bool,
+    pub(crate) dry_run: bool,
     pub(crate) write_actions: Vec<WriteActionArg>,
     pub(crate) origin_epsilon: f32,
     pub(crate) relocation_step: f32,
@@ -59,7 +59,10 @@ pub(crate) struct PersistedUnclipConfig {
     pub(crate) structured: Option<bool>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) write: Option<bool>,
+    pub(crate) dry_run: Option<bool>,
+
+    #[serde(default, rename = "write", skip_serializing)]
+    pub(crate) legacy_write: Option<bool>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) write_actions: Option<Vec<WriteActionArg>>,
@@ -157,7 +160,7 @@ impl UnclipConfig {
                 .or(persisted.instances)
                 .unwrap_or(false),
             structured: args.structured.or(persisted.structured).unwrap_or(false),
-            write: args.write.or(persisted.write).unwrap_or(false),
+            dry_run: args.dry_run.or(persisted.dry_run).unwrap_or(false),
             write_actions: if args.write_actions.is_empty() {
                 persisted
                     .write_actions
@@ -224,7 +227,7 @@ impl PersistedUnclipConfig {
         Self {
             verbose: Some(false),
             structured: Some(false),
-            write: Some(false),
+            dry_run: Some(false),
             write_actions: Some(default_write_actions()),
             origin_epsilon: Some(ORIGIN_TERRAIN_EPSILON),
             relocation_step: Some(DEFAULT_RELOCATION_STEP),
@@ -246,7 +249,25 @@ impl PersistedUnclipConfig {
 
     pub(crate) fn from_toml(contents: &str) -> io::Result<Self> {
         let root = toml::from_str::<UnclipConfigRoot>(contents).map_err(invalid_config)?;
-        Ok(root.unclip)
+        root.unclip.normalize_legacy_write()
+    }
+
+    pub(crate) fn normalize_legacy_write(mut self) -> io::Result<Self> {
+        let Some(write) = self.legacy_write.take() else {
+            return Ok(self);
+        };
+        let legacy_dry_run = !write;
+        if let Some(dry_run) = self.dry_run {
+            if dry_run != legacy_dry_run {
+                return Err(invalid_config(
+                    "[unclip].write conflicts with [unclip].dry_run; remove the deprecated write key",
+                ));
+            }
+        } else {
+            self.dry_run = Some(legacy_dry_run);
+        }
+
+        Ok(self)
     }
 }
 
@@ -521,25 +542,114 @@ origin_epsilon = 2.5
     }
 
     #[test]
-    fn cli_bool_false_overrides_persisted_write_true() {
+    fn cli_dry_run_false_overrides_persisted_dry_run_true() {
         let args = unclip_args(&[
             "greenmote",
             "unclip",
             "--plugin",
             "cli.omwaddon",
-            "--write=false",
+            "--dry-run=false",
         ]);
         let config = UnclipConfig::merge(
             &args,
             PersistedUnclipConfig {
-                write: Some(true),
+                dry_run: Some(true),
                 ..PersistedUnclipConfig::default()
             },
             None,
         )
         .unwrap();
 
-        assert!(!config.write);
+        assert!(!config.dry_run);
+    }
+
+    #[test]
+    fn cli_dry_run_defaults_to_false_and_flag_enables_it() {
+        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
+        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
+
+        assert!(!config.dry_run);
+
+        let args = unclip_args(&[
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "cli.omwaddon",
+            "--dry-run",
+        ]);
+        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
+
+        assert!(config.dry_run);
+    }
+
+    #[test]
+    fn persisted_dry_run_true_applies_when_cli_omits_it() {
+        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
+        let config = UnclipConfig::merge(
+            &args,
+            PersistedUnclipConfig {
+                dry_run: Some(true),
+                ..PersistedUnclipConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(config.dry_run);
+    }
+
+    #[test]
+    fn generated_default_toml_uses_dry_run_not_write() {
+        let contents = toml::to_string(&PersistedUnclipConfig::generated_default()).unwrap();
+
+        assert!(contents.contains("dry_run = false"));
+        assert!(!contents.contains("write = false"));
+    }
+
+    #[test]
+    fn legacy_persisted_write_maps_to_dry_run() {
+        let inspect = PersistedUnclipConfig::from_toml(
+            r"
+[unclip]
+write = false
+",
+        )
+        .unwrap();
+        let write = PersistedUnclipConfig::from_toml(
+            r"
+[unclip]
+write = true
+",
+        )
+        .unwrap();
+
+        assert_eq!(inspect.dry_run, Some(true));
+        assert_eq!(write.dry_run, Some(false));
+        assert_eq!(inspect.legacy_write, None);
+        assert_eq!(write.legacy_write, None);
+    }
+
+    #[test]
+    fn conflicting_legacy_write_and_dry_run_fails() {
+        let error = PersistedUnclipConfig::from_toml(
+            r"
+[unclip]
+write = false
+dry_run = false
+",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("conflicts"));
+    }
+
+    #[test]
+    fn old_write_cli_flag_is_unknown() {
+        let result =
+            Cli::try_parse_from(["greenmote", "unclip", "--plugin", "cli.omwaddon", "--write"]);
+
+        assert!(result.is_err());
     }
 
     #[test]

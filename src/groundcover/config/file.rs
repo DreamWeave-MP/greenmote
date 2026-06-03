@@ -76,7 +76,7 @@ impl GroundcoverConfigFile {
         let unclip = if is_empty_unclip_config(&file.unclip) {
             PersistedUnclipConfig::generated_default()
         } else {
-            file.unclip
+            file.unclip.normalize_legacy_write().map_err(to_io_error)?
         };
 
         Ok(GroundcoverConfig {
@@ -106,7 +106,8 @@ fn is_empty_unclip_config(config: &PersistedUnclipConfig) -> bool {
         && config.instances.is_none()
         && config.verbose.is_none()
         && config.structured.is_none()
-        && config.write.is_none()
+        && config.dry_run.is_none()
+        && config.legacy_write.is_none()
         && config.write_actions.is_none()
         && config.origin_epsilon.is_none()
         && config.relocation_step.is_none()

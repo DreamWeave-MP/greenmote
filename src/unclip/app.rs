@@ -169,7 +169,7 @@ pub fn run(
         terrain: &terrain,
         missing_active_terrain_cells,
         static_occluder_report,
-        write_requested: config.write,
+        write_requested: !config.dry_run,
         policy: &policy,
     });
     let write_actions_enabled = policy.write_actions.any_enabled();
@@ -230,7 +230,7 @@ pub fn run(
             &target_plugin.source_path,
             &target_plugin.destination_path,
             write_plan,
-            config.write,
+            !config.dry_run,
             (!write_actions_enabled).then_some("all_write_actions_disabled"),
         )
     })?;
@@ -282,7 +282,7 @@ fn write_no_target_report(
         terrain: &terrain,
         missing_active_terrain_cells: Vec::new(),
         static_occluder_report: StaticOccluderBuildReport::default(),
-        write_requested: config.write,
+        write_requested: !config.dry_run,
         policy,
     });
     let write_actions_enabled = policy.write_actions.any_enabled();
@@ -294,7 +294,7 @@ fn write_no_target_report(
             &target_plugin.source_path,
             &target_plugin.destination_path,
             Some(write_plan),
-            config.write,
+            !config.dry_run,
             (!write_actions_enabled).then_some("all_write_actions_disabled"),
         )
     })?;
@@ -842,7 +842,7 @@ mod tests {
             meshgenerator_ini: None,
             verbose: true,
             structured: true,
-            write: true,
+            dry_run: false,
             write_actions: vec![
                 WriteActionArg::TerrainZ,
                 WriteActionArg::WaterDelete,
@@ -896,7 +896,7 @@ mod tests {
             meshgenerator_ini: None,
             verbose: false,
             structured: false,
-            write: true,
+            dry_run: false,
             write_actions: vec![
                 WriteActionArg::TerrainZ,
                 WriteActionArg::WaterDelete,

@@ -846,8 +846,9 @@ impl GreenmoteApp {
                 );
                 self.convert
                     .sync_saved_run_options_from_settings(ConvertRunOptions::from_config(&config));
-                self.convert
-                    .sync_unclip_write_from_settings(UnclipRunOptions::from_config(&config).write);
+                self.convert.sync_unclip_dry_run_from_settings(
+                    UnclipRunOptions::from_config(&config).dry_run,
+                );
                 true
             }
             Err(error) => {
@@ -1685,7 +1686,7 @@ mod tests {
     fn unclip_policy_save_serializes_concrete_actions_and_preserves_run_keys() {
         let mut draft = SettingsDraft::default();
         draft.unclip.plugin = Some("groundcover.omwaddon".into());
-        draft.unclip.write = Some(true);
+        draft.unclip.dry_run = Some(true);
         draft.unclip_policy.write_actions = [true, false, false, false, true, false];
         draft.unclip_policy.include_grass_ids = vec!["flora_.*".to_owned()];
         draft.unclip_policy.include_road_texture_paths = vec![".*custom_road.*".to_owned()];
@@ -1694,7 +1695,7 @@ mod tests {
         let config = draft.validate_and_to_config().unwrap();
 
         assert_eq!(config.unclip.plugin, Some("groundcover.omwaddon".into()));
-        assert_eq!(config.unclip.write, Some(true));
+        assert_eq!(config.unclip.dry_run, Some(true));
         assert_eq!(
             config.unclip.write_actions,
             Some(vec![WriteActionArg::TerrainZ, WriteActionArg::StaticMove])
@@ -1734,19 +1735,19 @@ mod tests {
     }
 
     #[test]
-    fn save_settings_syncs_unclip_write_from_saved_config() {
+    fn save_settings_syncs_unclip_dry_run_from_saved_config() {
         let directory = unique_temp_directory("greenmote-gui-settings-save");
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("greenmote.toml");
         let mut app = GreenmoteApp::default();
         app.settings.config_path = Some(path);
-        app.convert.set_unclip_write_for_test(false);
+        app.convert.set_unclip_dry_run_for_test(true);
         app.convert
             .set_pending_unclip_write_confirmation_for_test(true);
 
         assert!(app.save_settings());
 
-        assert!(app.convert.unclip_write_for_test());
+        assert!(!app.convert.unclip_dry_run_for_test());
         assert!(!app.convert.pending_unclip_write_confirmation_for_test());
 
         fs::remove_dir_all(directory).unwrap();

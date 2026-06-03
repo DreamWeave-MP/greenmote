@@ -132,7 +132,7 @@ mod tests {
         assert_eq!(args.instances, None);
         assert_eq!(args.verbose, None);
         assert_eq!(args.structured, None);
-        assert_eq!(args.write, None);
+        assert_eq!(args.dry_run, None);
         assert_eq!(args.origin_epsilon, None);
         assert_eq!(args.relocation_step, None);
         assert_eq!(args.relocation_steps, None);
@@ -332,7 +332,7 @@ mod tests {
             "--instances=false",
             "--verbose=false",
             "--structured=false",
-            "--write=false",
+            "--dry-run=false",
         ]);
 
         let Some(Command::Unclip(args)) = cli.command else {
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(args.instances, Some(false));
         assert_eq!(args.verbose, Some(false));
         assert_eq!(args.structured, Some(false));
-        assert_eq!(args.write, Some(false));
+        assert_eq!(args.dry_run, Some(false));
     }
 
     #[test]
@@ -440,8 +440,25 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_unclip_write() {
+    fn parser_accepts_unclip_dry_run() {
         let cli = Cli::parse_from([
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--dry-run",
+        ]);
+
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("unclip command should parse");
+        };
+
+        assert_eq!(args.dry_run, Some(true));
+    }
+
+    #[test]
+    fn parser_rejects_unclip_write() {
+        let result = Cli::command().try_get_matches_from([
             "greenmote",
             "unclip",
             "--plugin",
@@ -449,11 +466,7 @@ mod tests {
             "--write",
         ]);
 
-        let Some(Command::Unclip(args)) = cli.command else {
-            panic!("unclip command should parse");
-        };
-
-        assert_eq!(args.write, Some(true));
+        assert!(result.is_err());
     }
 
     #[test]
