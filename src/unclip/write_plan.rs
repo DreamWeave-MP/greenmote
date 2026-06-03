@@ -492,5 +492,4 @@ mod tests {
             sample_position: [0.0, 0.0, 10.0],
         }
     }
-
 }
