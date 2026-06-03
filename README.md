@@ -51,7 +51,7 @@ cargo run --release -- unclip --plugin groundcover.omwaddon --verbose
 Write Unclip fixes after inspection:
 
 ```sh
-cargo run --release -- unclip --plugin groundcover.omwaddon --write --write-actions terrain-z,static-move,orient
+cargo run --release -- unclip --plugin groundcover.omwaddon --write-actions terrain-z,static-move,orient
 ```
 
 Top-level options such as `--openmw-cfg`, `--config`, `--generate-completion`, and `--generate-manpage` must appear before the subcommand.
@@ -146,7 +146,7 @@ Useful Convert flags:
 
 ## Unclip Workflow
 
-`greenmote unclip` inspects a groundcover plugin against `OpenMW` terrain and static occluders. It can run in read-only inspection mode or in write mode.
+`greenmote unclip` inspects a groundcover plugin against `OpenMW` terrain and static occluders. It writes planned fixes by default and can run in read-only dry-run mode.
 
 Inspection mode:
 
@@ -162,10 +162,10 @@ Inspection mode:
 
 Write mode:
 
-- Enabled by `--write` or `[unclip].write = true`.
+- Enabled by default. Use `--dry-run` or `[unclip].dry_run = true` for read-only inspection.
 - Creates a backup before replacing the target plugin.
 - In the GUI, write mode requires a confirmation dialog before modifying the target plugin.
-- The GUI does not persist write arming as a runtime action. You must intentionally arm write mode again when needed.
+- The GUI exposes Unclip dry-run as a localized runtime option.
 
 Write actions:
 
@@ -229,7 +229,7 @@ plugin = "groundcover.omwaddon"
 meshgenerator_ini = "mesh_generator_ini_files/groundcover.ini"
 verbose = false
 structured = false
-write = false
+dry_run = false
 write_actions = ["terrain-z", "static-delete", "static-move", "orient"]
 origin_epsilon = 2.0
 relocation_step = 32.0
@@ -259,7 +259,7 @@ Key notes:
 - `[unclip].meshgenerator_ini` provides optional `mw-groundcover-generator` mesh-list hints for origin placement inference.
 - `[unclip].verbose` writes detailed per-reference diagnostics to `greenmote.log`; `[unclip].instances` is still accepted as a deprecated compatibility alias.
 - `[unclip].structured` switches the compact stdout summary to JSON.
-- `[unclip].write` arms CLI write mode from config; use this carefully.
+- `[unclip].dry_run` disables Unclip writes for read-only inspection.
 - `[unclip].write_actions` selects which write fixes are allowed.
 - `[unclip].*_epsilon`, `relocation_step`, and `relocation_steps` tune inspection/write policy.
 - Include/exclude ID filters are case-insensitive regex lists.
@@ -313,7 +313,7 @@ Review `[convert].grass_ids`, `[convert].exclude`, `--ignore`, and the active `O
 
 Unexpected Unclip write plan
 
-Run without `--write` first, add `--verbose`, and inspect `greenmote.log` for exact per-reference diagnostics.
+Run with `--dry-run` first, add `--verbose`, and inspect `greenmote.log` for exact per-reference diagnostics.
 
 ## Development And Validation
 
