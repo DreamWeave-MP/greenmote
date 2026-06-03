@@ -76,7 +76,10 @@ impl GroundcoverConfigFile {
         let unclip = if is_empty_unclip_config(&file.unclip) {
             PersistedUnclipConfig::generated_default()
         } else {
-            file.unclip.normalize_legacy_write().map_err(to_io_error)?
+            file.unclip
+                .normalize_legacy_write()
+                .map(PersistedUnclipConfig::with_generated_default_road_texture_paths)
+                .map_err(to_io_error)?
         };
 
         Ok(GroundcoverConfig {
@@ -117,4 +120,5 @@ fn is_empty_unclip_config(config: &PersistedUnclipConfig) -> bool {
         && config.exclude_grass_ids.is_none()
         && config.include_occluder_ids.is_none()
         && config.exclude_occluder_ids.is_none()
+        && config.road_texture_paths.is_none()
 }

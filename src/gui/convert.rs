@@ -2156,8 +2156,7 @@ mod tests {
                 exclude_grass_ids: Vec::new(),
                 include_occluder_ids: Vec::new(),
                 exclude_occluder_ids: Vec::new(),
-                include_road_texture_paths: Vec::new(),
-                exclude_road_texture_paths: Vec::new(),
+                road_texture_paths: Vec::new(),
             })
             .collect()
     }

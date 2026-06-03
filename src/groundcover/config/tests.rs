@@ -124,6 +124,56 @@ include_grass_ids = ["flora_.*"]
     assert!(contents.contains("dry_run = true"));
     assert!(!contents.contains("write = true"));
     assert!(contents.contains("include_grass_ids = [\"flora_.*\"]"));
+    assert!(contents.contains("road_texture_paths = ["));
+    assert!(!contents.contains("road_texture_paths = []"));
+}
+
+#[test]
+fn load_for_edit_defaults_missing_unclip_road_texture_paths() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+    std::fs::write(
+        &config_path,
+        r#"
+[unclip]
+plugin = "x.omwaddon"
+"#,
+    )
+    .unwrap();
+
+    let config = GroundcoverConfig::load_for_edit(
+        &config_path,
+        resolved_output_directory(dir.path.join("data-local")),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config.unclip.road_texture_paths,
+        crate::unclip::config::PersistedUnclipConfig::generated_default().road_texture_paths
+    );
+}
+
+#[test]
+fn load_for_edit_creates_missing_config_with_defaults() {
+    let dir = TempDir::new();
+    let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+
+    let config = GroundcoverConfig::load_for_edit(
+        &config_path,
+        resolved_output_directory(dir.path.join("data-local")),
+        None,
+    )
+    .unwrap();
+    let contents = read_to_string(config_path).unwrap();
+
+    assert_eq!(
+        config.unclip.road_texture_paths,
+        crate::unclip::config::PersistedUnclipConfig::generated_default().road_texture_paths
+    );
+    assert!(contents.contains("road_texture_paths = ["));
+    assert!(!contents.contains("include_road_texture_paths"));
+    assert!(!contents.contains("exclude_road_texture_paths"));
 }
 
 #[test]

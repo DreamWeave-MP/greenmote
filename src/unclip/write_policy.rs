@@ -1170,7 +1170,10 @@ mod tests {
     use crate::{
         groundcover::CancellationToken,
         unclip::{
-            args::{IdFilter, RelocationPolicy, RoadTextureFilter, UnclipPolicy, WriteActions},
+            args::{
+                IdFilter, RelocationPolicy, RoadTextureFilter, UnclipPolicy, WriteActions,
+                default_road_texture_path_patterns,
+            },
             generated_placement::GeneratedPlacement,
             mesh::{MeshAabb, MeshContact, MeshGeometry, WorldAabb},
             occlusion::{StaticOccluder, StaticOccluderIndex},
@@ -2154,7 +2157,8 @@ mod tests {
             },
             target_filter: IdFilter::new(&[], &[]).unwrap(),
             occluder_filter: IdFilter::new(&[], &[]).unwrap(),
-            road_texture_filter: RoadTextureFilter::new(&[], &[]).unwrap(),
+            road_texture_filter: RoadTextureFilter::new(&default_road_texture_path_patterns())
+                .unwrap(),
         }
     }
 

@@ -14,7 +14,7 @@ use super::{
     UnclipArgs,
     args::{
         DEFAULT_ORIENTATION_EPSILON_DEGREES, DEFAULT_RELOCATION_STEP, DEFAULT_RELOCATION_STEPS,
-        WriteActionArg, default_write_actions,
+        WriteActionArg, default_road_texture_path_patterns, default_write_actions,
     },
     model::ORIGIN_TERRAIN_EPSILON,
 };
@@ -37,8 +37,7 @@ pub(crate) struct UnclipConfig {
     pub(crate) exclude_grass_ids: Vec<String>,
     pub(crate) include_occluder_ids: Vec<String>,
     pub(crate) exclude_occluder_ids: Vec<String>,
-    pub(crate) include_road_texture_paths: Vec<String>,
-    pub(crate) exclude_road_texture_paths: Vec<String>,
+    pub(crate) road_texture_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -92,10 +91,7 @@ pub(crate) struct PersistedUnclipConfig {
     pub(crate) exclude_occluder_ids: Option<Vec<String>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) include_road_texture_paths: Option<Vec<String>>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) exclude_road_texture_paths: Option<Vec<String>>,
+    pub(crate) road_texture_paths: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -195,13 +191,10 @@ impl UnclipConfig {
                 persisted.exclude_occluder_ids,
                 default_tree_occluder_exclude_ids(),
             ),
-            include_road_texture_paths: merge_list(
-                &args.include_road_texture_paths,
-                persisted.include_road_texture_paths,
-            ),
-            exclude_road_texture_paths: merge_list(
-                &args.exclude_road_texture_paths,
-                persisted.exclude_road_texture_paths,
+            road_texture_paths: merge_list_with_default(
+                &args.road_texture_paths,
+                persisted.road_texture_paths,
+                default_road_texture_path_patterns(),
             ),
         })
     }
@@ -237,8 +230,7 @@ impl PersistedUnclipConfig {
             exclude_grass_ids: Some(Vec::new()),
             include_occluder_ids: Some(Vec::new()),
             exclude_occluder_ids: Some(default_tree_occluder_exclude_ids()),
-            include_road_texture_paths: Some(Vec::new()),
-            exclude_road_texture_paths: Some(Vec::new()),
+            road_texture_paths: Some(default_road_texture_path_patterns()),
             ..Self::default()
         }
     }
@@ -249,7 +241,9 @@ impl PersistedUnclipConfig {
 
     pub(crate) fn from_toml(contents: &str) -> io::Result<Self> {
         let root = toml::from_str::<UnclipConfigRoot>(contents).map_err(invalid_config)?;
-        root.unclip.normalize_legacy_write()
+        root.unclip
+            .normalize_legacy_write()
+            .map(Self::with_generated_default_road_texture_paths)
     }
 
     pub(crate) fn normalize_legacy_write(mut self) -> io::Result<Self> {
@@ -268,6 +262,14 @@ impl PersistedUnclipConfig {
         }
 
         Ok(self)
+    }
+
+    pub(crate) fn with_generated_default_road_texture_paths(mut self) -> Self {
+        if self.road_texture_paths.is_none() {
+            self.road_texture_paths = Self::generated_default().road_texture_paths;
+        }
+
+        self
     }
 }
 
@@ -827,7 +829,7 @@ dry_run = false
         let config = UnclipConfig::merge(
             &args,
             PersistedUnclipConfig {
-                include_road_texture_paths: Some(vec!["(".to_owned()]),
+                road_texture_paths: Some(vec!["(".to_owned()]),
                 ..PersistedUnclipConfig::default()
             },
             None,

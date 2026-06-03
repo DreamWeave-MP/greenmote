@@ -46,8 +46,7 @@ pub(super) struct SettingsUiState {
     exclude_grass_ids_viewport_start: usize,
     include_occluder_ids_viewport_start: usize,
     exclude_occluder_ids_viewport_start: usize,
-    include_road_texture_paths_viewport_start: usize,
-    exclude_road_texture_paths_viewport_start: usize,
+    road_texture_paths_viewport_start: usize,
 }
 
 #[derive(Default)]
@@ -76,8 +75,7 @@ struct UnclipPolicyDraft {
     exclude_grass_ids: Vec<String>,
     include_occluder_ids: Vec<String>,
     exclude_occluder_ids: Vec<String>,
-    include_road_texture_paths: Vec<String>,
-    exclude_road_texture_paths: Vec<String>,
+    road_texture_paths: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,8 +87,7 @@ enum SettingsListKind {
     ExcludeGrassIds,
     IncludeOccluderIds,
     ExcludeOccluderIds,
-    IncludeRoadTexturePaths,
-    ExcludeRoadTexturePaths,
+    RoadTexturePaths,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,8 +135,7 @@ impl Default for SettingsUiState {
             exclude_grass_ids_viewport_start: 0,
             include_occluder_ids_viewport_start: 0,
             exclude_occluder_ids_viewport_start: 0,
-            include_road_texture_paths_viewport_start: 0,
-            exclude_road_texture_paths_viewport_start: 0,
+            road_texture_paths_viewport_start: 0,
         }
     }
 }
@@ -287,8 +283,7 @@ impl SettingsUiState {
         self.exclude_grass_ids_viewport_start = 0;
         self.include_occluder_ids_viewport_start = 0;
         self.exclude_occluder_ids_viewport_start = 0;
-        self.include_road_texture_paths_viewport_start = 0;
-        self.exclude_road_texture_paths_viewport_start = 0;
+        self.road_texture_paths_viewport_start = 0;
     }
 }
 
@@ -609,24 +604,14 @@ impl GreenmoteApp {
             &mut self.settings.draft.unclip_policy.exclude_occluder_ids,
             &mut list_control,
         );
-        list_control.viewport_start = &mut self.settings.include_road_texture_paths_viewport_start;
+        list_control.viewport_start = &mut self.settings.road_texture_paths_viewport_start;
         setting_editable_list(
             ui,
             self.localizer,
-            self.localizer.text(UiText::IncludeRoadTexturePaths),
-            self.localizer.text(UiText::NoIncludeRoadTexturePaths),
-            SettingsListKind::IncludeRoadTexturePaths,
-            &mut self.settings.draft.unclip_policy.include_road_texture_paths,
-            &mut list_control,
-        );
-        list_control.viewport_start = &mut self.settings.exclude_road_texture_paths_viewport_start;
-        setting_editable_list(
-            ui,
-            self.localizer,
-            self.localizer.text(UiText::ExcludeRoadTexturePaths),
-            self.localizer.text(UiText::NoExcludeRoadTexturePaths),
-            SettingsListKind::ExcludeRoadTexturePaths,
-            &mut self.settings.draft.unclip_policy.exclude_road_texture_paths,
+            self.localizer.text(UiText::RoadTexturePaths),
+            self.localizer.text(UiText::NoRoadTexturePaths),
+            SettingsListKind::RoadTexturePaths,
+            &mut self.settings.draft.unclip_policy.road_texture_paths,
             &mut list_control,
         );
     }
@@ -909,12 +894,7 @@ impl SettingsDraft {
             SettingsListKind::ExcludeGrassIds => &mut self.unclip_policy.exclude_grass_ids,
             SettingsListKind::IncludeOccluderIds => &mut self.unclip_policy.include_occluder_ids,
             SettingsListKind::ExcludeOccluderIds => &mut self.unclip_policy.exclude_occluder_ids,
-            SettingsListKind::IncludeRoadTexturePaths => {
-                &mut self.unclip_policy.include_road_texture_paths
-            }
-            SettingsListKind::ExcludeRoadTexturePaths => {
-                &mut self.unclip_policy.exclude_road_texture_paths
-            }
+            SettingsListKind::RoadTexturePaths => &mut self.unclip_policy.road_texture_paths,
         }
     }
 }
@@ -965,13 +945,10 @@ impl UnclipPolicyDraft {
             exclude_grass_ids: config.exclude_grass_ids.clone().unwrap_or_default(),
             include_occluder_ids: config.include_occluder_ids.clone().unwrap_or_default(),
             exclude_occluder_ids: config.exclude_occluder_ids.clone().unwrap_or_default(),
-            include_road_texture_paths: config
-                .include_road_texture_paths
+            road_texture_paths: config
+                .road_texture_paths
                 .clone()
-                .unwrap_or_default(),
-            exclude_road_texture_paths: config
-                .exclude_road_texture_paths
-                .clone()
+                .or(defaults.road_texture_paths)
                 .unwrap_or_default(),
         }
     }
@@ -988,14 +965,7 @@ impl UnclipPolicyDraft {
         validate_regex_list("exclude_grass_ids", &self.exclude_grass_ids)?;
         validate_regex_list("include_occluder_ids", &self.include_occluder_ids)?;
         validate_regex_list("exclude_occluder_ids", &self.exclude_occluder_ids)?;
-        validate_regex_list(
-            "include_road_texture_paths",
-            &self.include_road_texture_paths,
-        )?;
-        validate_regex_list(
-            "exclude_road_texture_paths",
-            &self.exclude_road_texture_paths,
-        )?;
+        validate_regex_list("road_texture_paths", &self.road_texture_paths)?;
 
         config.write_actions = Some(self.write_actions());
         config.origin_epsilon = Some(parse_non_negative_f32(
@@ -1015,8 +985,7 @@ impl UnclipPolicyDraft {
         config.exclude_grass_ids = Some(self.exclude_grass_ids.clone());
         config.include_occluder_ids = Some(self.include_occluder_ids.clone());
         config.exclude_occluder_ids = Some(self.exclude_occluder_ids.clone());
-        config.include_road_texture_paths = Some(self.include_road_texture_paths.clone());
-        config.exclude_road_texture_paths = Some(self.exclude_road_texture_paths.clone());
+        config.road_texture_paths = Some(self.road_texture_paths.clone());
 
         Ok(())
     }
@@ -1084,12 +1053,7 @@ impl SettingsUiState {
             SettingsListKind::ExcludeGrassIds => &mut self.exclude_grass_ids_viewport_start,
             SettingsListKind::IncludeOccluderIds => &mut self.include_occluder_ids_viewport_start,
             SettingsListKind::ExcludeOccluderIds => &mut self.exclude_occluder_ids_viewport_start,
-            SettingsListKind::IncludeRoadTexturePaths => {
-                &mut self.include_road_texture_paths_viewport_start
-            }
-            SettingsListKind::ExcludeRoadTexturePaths => {
-                &mut self.exclude_road_texture_paths_viewport_start
-            }
+            SettingsListKind::RoadTexturePaths => &mut self.road_texture_paths_viewport_start,
         }
     }
 }
@@ -1542,12 +1506,7 @@ impl SettingsListKind {
             Self::ExcludeGrassIds => localizer.text(UiText::AddExcludeGrassIdRegexTitle),
             Self::IncludeOccluderIds => localizer.text(UiText::AddIncludeOccluderIdRegexTitle),
             Self::ExcludeOccluderIds => localizer.text(UiText::AddExcludeOccluderIdRegexTitle),
-            Self::IncludeRoadTexturePaths => {
-                localizer.text(UiText::AddIncludeRoadTexturePathRegexTitle)
-            }
-            Self::ExcludeRoadTexturePaths => {
-                localizer.text(UiText::AddExcludeRoadTexturePathRegexTitle)
-            }
+            Self::RoadTexturePaths => localizer.text(UiText::AddRoadTexturePathRegexTitle),
         }
     }
 
@@ -1560,12 +1519,7 @@ impl SettingsListKind {
             Self::ExcludeGrassIds => localizer.text(UiText::ExcludeGrassIdRegexPrompt),
             Self::IncludeOccluderIds => localizer.text(UiText::IncludeOccluderIdRegexPrompt),
             Self::ExcludeOccluderIds => localizer.text(UiText::ExcludeOccluderIdRegexPrompt),
-            Self::IncludeRoadTexturePaths => {
-                localizer.text(UiText::IncludeRoadTexturePathRegexPrompt)
-            }
-            Self::ExcludeRoadTexturePaths => {
-                localizer.text(UiText::ExcludeRoadTexturePathRegexPrompt)
-            }
+            Self::RoadTexturePaths => localizer.text(UiText::RoadTexturePathRegexPrompt),
         }
     }
 }
@@ -1586,12 +1540,12 @@ mod tests {
     use std::{fs, time::SystemTime};
 
     use super::{
-        SettingsDraft, SettingsListItem, SettingsListKind, SettingsUiState,
+        SettingsDraft, SettingsListItem, SettingsListKind, SettingsUiState, UnclipPolicyDraft,
         clamp_settings_list_viewport_start, commit_inline_list_edit,
         ensure_settings_list_item_visible, list_item_from_text, remove_selected_list_item,
     };
     use crate::gui::GreenmoteApp;
-    use crate::unclip::WriteActionArg;
+    use crate::unclip::{WriteActionArg, config::PersistedUnclipConfig};
 
     #[test]
     fn list_item_from_text_preserves_text_and_rejects_empty_text() {
@@ -1689,8 +1643,7 @@ mod tests {
         draft.unclip.dry_run = Some(true);
         draft.unclip_policy.write_actions = [true, false, false, false, true, false];
         draft.unclip_policy.include_grass_ids = vec!["flora_.*".to_owned()];
-        draft.unclip_policy.include_road_texture_paths = vec![".*custom_road.*".to_owned()];
-        draft.unclip_policy.exclude_road_texture_paths = vec![".*custom_bad.*".to_owned()];
+        draft.unclip_policy.road_texture_paths = vec![".*custom_road.*".to_owned()];
 
         let config = draft.validate_and_to_config().unwrap();
 
@@ -1705,12 +1658,30 @@ mod tests {
             Some(vec!["flora_.*".to_owned()])
         );
         assert_eq!(
-            config.unclip.include_road_texture_paths,
+            config.unclip.road_texture_paths,
             Some(vec![".*custom_road.*".to_owned()])
         );
+    }
+
+    #[test]
+    fn unclip_policy_draft_defaults_missing_road_texture_paths() {
+        let draft = UnclipPolicyDraft::from_config(&PersistedUnclipConfig {
+            plugin: Some("x.omwaddon".into()),
+            ..PersistedUnclipConfig::default()
+        });
+        let mut config = PersistedUnclipConfig::default();
+
+        draft.apply_to_config(&mut config).unwrap();
+
         assert_eq!(
-            config.unclip.exclude_road_texture_paths,
-            Some(vec![".*custom_bad.*".to_owned()])
+            draft.road_texture_paths,
+            PersistedUnclipConfig::generated_default()
+                .road_texture_paths
+                .unwrap()
+        );
+        assert_eq!(
+            config.road_texture_paths,
+            PersistedUnclipConfig::generated_default().road_texture_paths
         );
     }
 

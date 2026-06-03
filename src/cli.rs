@@ -264,10 +264,8 @@ mod tests {
             "^terrain_.*$",
             "--exclude-occluder-id",
             "^terrain_tree_huge$",
-            "--include-road-texture-path",
+            "--road-texture-path",
             "^textures/road/custom_.*\\.dds$",
-            "--exclude-road-texture-path",
-            "^textures/road/custom_bad\\.dds$",
         ]);
 
         let Some(Command::Unclip(args)) = cli.command else {
@@ -293,11 +291,6 @@ mod tests {
             policy
                 .road_texture_filter
                 .includes("textures/road/custom_good.dds")
-        );
-        assert!(
-            !policy
-                .road_texture_filter
-                .includes("textures/road/custom_bad.dds")
         );
     }
 
@@ -350,8 +343,7 @@ mod tests {
         for flag in [
             "--include-grass-id",
             "--exclude-occluder-id",
-            "--include-road-texture-path",
-            "--exclude-road-texture-path",
+            "--road-texture-path",
         ] {
             let cli = Cli::parse_from([
                 "greenmote",

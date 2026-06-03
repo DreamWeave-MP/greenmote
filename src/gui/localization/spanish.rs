@@ -188,14 +188,8 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::NoExcludeOccluderIds => {
             "No hay filtros de exclusión de ID de occluders configurados."
         }
-        UiText::IncludeRoadTexturePaths => "Incluir rutas de texturas de camino",
-        UiText::NoIncludeRoadTexturePaths => {
-            "No hay filtros adicionales de rutas de texturas de camino configurados."
-        }
-        UiText::ExcludeRoadTexturePaths => "Excluir rutas de texturas de camino",
-        UiText::NoExcludeRoadTexturePaths => {
-            "No hay exclusiones de rutas de texturas de camino configuradas."
-        }
+        UiText::RoadTexturePaths => "Rutas de texturas de camino",
+        UiText::NoRoadTexturePaths => "No hay filtros de rutas de texturas de camino configurados.",
         UiText::AddGrassIdPatternTitle => "Añadir patrón de Grass ID",
         UiText::AddExcludePatternTitle => "Añadir patrón de exclusión",
         UiText::AddIgnoredPluginTitle => "Añadir plugin ignorado",
@@ -203,12 +197,7 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::AddExcludeGrassIdRegexTitle => "Añadir regex de exclusión de Grass ID",
         UiText::AddIncludeOccluderIdRegexTitle => "Añadir regex de inclusión de ID de occluders",
         UiText::AddExcludeOccluderIdRegexTitle => "Añadir regex de exclusión de ID de occluders",
-        UiText::AddIncludeRoadTexturePathRegexTitle => {
-            "Añadir regex de inclusión de ruta de textura de camino"
-        }
-        UiText::AddExcludeRoadTexturePathRegexTitle => {
-            "Añadir regex de exclusión de ruta de textura de camino"
-        }
+        UiText::AddRoadTexturePathRegexTitle => "Añadir regex de ruta de textura de camino",
         UiText::GrassIdPatternPrompt => "Patrón de Grass ID",
         UiText::ExcludePatternPrompt => "Patrón de exclusión",
         UiText::IgnoredPluginPrompt => "Plugin ignorado",
@@ -216,12 +205,7 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::ExcludeGrassIdRegexPrompt => "Regex de exclusión de Grass ID",
         UiText::IncludeOccluderIdRegexPrompt => "Regex de inclusión de ID de occluders",
         UiText::ExcludeOccluderIdRegexPrompt => "Regex de exclusión de ID de occluders",
-        UiText::IncludeRoadTexturePathRegexPrompt => {
-            "Regex de inclusión de ruta de textura de camino"
-        }
-        UiText::ExcludeRoadTexturePathRegexPrompt => {
-            "Regex de exclusión de ruta de textura de camino"
-        }
+        UiText::RoadTexturePathRegexPrompt => "Regex de ruta de textura de camino",
         _ => unreachable!(),
     }
 }

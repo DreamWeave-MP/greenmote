@@ -194,14 +194,8 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::NoIncludeOccluderIds => "Aucun filtre d’inclusion d’ID d’occulteurs configuré.",
         UiText::ExcludeOccluderIds => "Exclure les ID d’occulteurs",
         UiText::NoExcludeOccluderIds => "Aucun filtre d’exclusion d’ID d’occulteurs configuré.",
-        UiText::IncludeRoadTexturePaths => "Inclure les chemins de textures de route",
-        UiText::NoIncludeRoadTexturePaths => {
-            "Aucun filtre supplémentaire de chemin de texture de route configuré."
-        }
-        UiText::ExcludeRoadTexturePaths => "Exclure les chemins de textures de route",
-        UiText::NoExcludeRoadTexturePaths => {
-            "Aucune exclusion de chemin de texture de route configurée."
-        }
+        UiText::RoadTexturePaths => "Chemins de textures de route",
+        UiText::NoRoadTexturePaths => "Aucun filtre de chemin de texture de route configuré.",
         UiText::AddGrassIdPatternTitle => "Ajouter un motif d’ID d’herbe",
         UiText::AddExcludePatternTitle => "Ajouter un motif d’exclusion",
         UiText::AddIgnoredPluginTitle => "Ajouter un plugin ignoré",
@@ -209,12 +203,7 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::AddExcludeGrassIdRegexTitle => "Ajouter une regex d’exclusion d’ID d’herbe",
         UiText::AddIncludeOccluderIdRegexTitle => "Ajouter une regex d’inclusion d’ID d’occulteurs",
         UiText::AddExcludeOccluderIdRegexTitle => "Ajouter une regex d’exclusion d’ID d’occulteurs",
-        UiText::AddIncludeRoadTexturePathRegexTitle => {
-            "Ajouter une regex d’inclusion de chemin de texture de route"
-        }
-        UiText::AddExcludeRoadTexturePathRegexTitle => {
-            "Ajouter une regex d’exclusion de chemin de texture de route"
-        }
+        UiText::AddRoadTexturePathRegexTitle => "Ajouter une regex de chemin de texture de route",
         UiText::GrassIdPatternPrompt => "Motif d’ID d’herbe",
         UiText::ExcludePatternPrompt => "Motif d’exclusion",
         UiText::IgnoredPluginPrompt => "Plugin ignoré",
@@ -222,12 +211,7 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::ExcludeGrassIdRegexPrompt => "Regex d’exclusion d’ID d’herbe",
         UiText::IncludeOccluderIdRegexPrompt => "Regex d’inclusion d’ID d’occulteurs",
         UiText::ExcludeOccluderIdRegexPrompt => "Regex d’exclusion d’ID d’occulteurs",
-        UiText::IncludeRoadTexturePathRegexPrompt => {
-            "Regex d’inclusion de chemin de texture de route"
-        }
-        UiText::ExcludeRoadTexturePathRegexPrompt => {
-            "Regex d’exclusion de chemin de texture de route"
-        }
+        UiText::RoadTexturePathRegexPrompt => "Regex de chemin de texture de route",
         _ => unreachable!(),
     }
 }

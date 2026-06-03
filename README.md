@@ -181,7 +181,7 @@ Policy knobs:
 - `--meshgenerator-ini` reads `mw-groundcover-generator` mesh lists as optional hints for origin-offset inference; measured target-plugin residuals remain the source of truth, and inferred refs preserve `ref.z = terrain_z_at_origin + offset` within the generator-style 4-unit tolerance.
 - `--include-grass-id` and `--exclude-grass-id` filter target groundcover reference IDs with case-insensitive regexes.
 - `--include-occluder-id` and `--exclude-occluder-id` filter static occluder IDs with case-insensitive regexes.
-- `--include-road-texture-path` and `--exclude-road-texture-path` tune road-delete texture path matching.
+- `--road-texture-path` replaces the configured road-delete texture path regex list when provided.
 
 ## GUI Features
 
@@ -242,8 +242,18 @@ exclude_occluder_ids = [
   "t_.*flora.*(tree|branch|root|stump|log|palm).*",
   "t_cyr_flora(gc|str)_bush_.*",
 ]
-include_road_texture_paths = []
-exclude_road_texture_paths = []
+road_texture_paths = [
+  ".*(road|mainroad|dirtroad|gravelroad|beatenpath).*",
+  ".*(cobble|cobblestone).*",
+  ".*(street|whiteroad).*",
+  ".*t_.*_terrroad.*",
+  ".*t_imp_highway_txroad.*",
+  ".*t_hr_.*road.*",
+  ".*t_ham_.*road.*",
+  ".*tx_sky.*road.*",
+  ".*tr_alm_street.*",
+  ".*nec_whiteroad.*",
+]
 ```
 
 Key notes:

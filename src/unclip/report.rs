@@ -431,19 +431,14 @@ fn write_policy_summary_text(
     } else {
         writeln!(stdout, "  occluder id filter: none")?;
     }
-    if policy.has_road_texture_filter_overrides() {
+    if policy.has_road_texture_filter() {
         writeln!(
             stdout,
-            "  include road texture paths: {}",
-            pattern_list(&policy.include_road_texture_paths)
-        )?;
-        writeln!(
-            stdout,
-            "  exclude road texture paths: {}",
-            pattern_list(&policy.exclude_road_texture_paths)
+            "  road texture paths: {}",
+            pattern_list(&policy.road_texture_paths)
         )?;
     } else {
-        writeln!(stdout, "  road texture path filter: built-in defaults")?;
+        writeln!(stdout, "  road texture path filter: none")?;
     }
     writeln!(
         stdout,

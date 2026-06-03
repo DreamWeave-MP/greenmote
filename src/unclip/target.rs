@@ -315,7 +315,7 @@ mod tests {
             )
             .unwrap(),
             occluder_filter: IdFilter::new(&[], &[]).unwrap(),
-            road_texture_filter: RoadTextureFilter::new(&[], &[]).unwrap(),
+            road_texture_filter: RoadTextureFilter::new(&[]).unwrap(),
         }
     }
 

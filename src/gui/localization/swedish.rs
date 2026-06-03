@@ -177,12 +177,8 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::NoIncludeOccluderIds => "Inga inkluderande ockluderar-ID-filter konfigurerade.",
         UiText::ExcludeOccluderIds => "Exkludera ockluderar-ID:n",
         UiText::NoExcludeOccluderIds => "Inga exkluderande ockluderar-ID-filter konfigurerade.",
-        UiText::IncludeRoadTexturePaths => "Inkludera vägtextursökvägar",
-        UiText::NoIncludeRoadTexturePaths => {
-            "Inga extra filter för vägtextursökvägar konfigurerade."
-        }
-        UiText::ExcludeRoadTexturePaths => "Exkludera vägtextursökvägar",
-        UiText::NoExcludeRoadTexturePaths => "Inga undantag för vägtextursökvägar konfigurerade.",
+        UiText::RoadTexturePaths => "Vägtextursökvägar",
+        UiText::NoRoadTexturePaths => "Inga filter för vägtextursökvägar konfigurerade.",
         UiText::AddGrassIdPatternTitle => "Lägg till Grass ID-mönster",
         UiText::AddExcludePatternTitle => "Lägg till exkluderingsmönster",
         UiText::AddIgnoredPluginTitle => "Lägg till ignorerat plugin",
@@ -190,19 +186,13 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::AddExcludeGrassIdRegexTitle => "Lägg till exkluderande Grass ID-regex",
         UiText::AddIncludeOccluderIdRegexTitle => "Lägg till inkluderande ockluderar-ID-regex",
         UiText::AddExcludeOccluderIdRegexTitle => "Lägg till exkluderande ockluderar-ID-regex",
-        UiText::AddIncludeRoadTexturePathRegexTitle => {
-            "Lägg till inkluderande regex för vägtextursökväg"
-        }
-        UiText::AddExcludeRoadTexturePathRegexTitle => {
-            "Lägg till exkluderande regex för vägtextursökväg"
-        }
+        UiText::AddRoadTexturePathRegexTitle => "Lägg till regex för vägtextursökväg",
         UiText::IgnoredPluginPrompt => "Ignorerat plugin",
         UiText::IncludeGrassIdRegexPrompt => "Inkluderande Grass ID-regex",
         UiText::ExcludeGrassIdRegexPrompt => "Exkluderande Grass ID-regex",
         UiText::IncludeOccluderIdRegexPrompt => "Inkluderande ockluderar-ID-regex",
         UiText::ExcludeOccluderIdRegexPrompt => "Exkluderande ockluderar-ID-regex",
-        UiText::IncludeRoadTexturePathRegexPrompt => "Inkluderande regex för vägtextursökväg",
-        UiText::ExcludeRoadTexturePathRegexPrompt => "Exkluderande regex för vägtextursökväg",
+        UiText::RoadTexturePathRegexPrompt => "Regex för vägtextursökväg",
         _ => unreachable!(),
     }
 }

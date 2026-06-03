@@ -109,8 +109,7 @@ impl GroundcoverConfig {
 }
 
 impl GroundcoverConfig {
-    /// Loads `greenmote.toml` for GUI editing without applying transient CLI overrides or writing
-    /// a generated file as a side effect.
+    /// Loads `greenmote.toml` for GUI editing without applying transient CLI overrides.
     ///
     /// # Errors
     ///
@@ -133,7 +132,7 @@ impl GroundcoverConfig {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let mut config = Self::with_resolved_output_directory(output_directory);
                 config.openmw_cfg = openmw_cfg;
-                config
+                config.save_for_edit_new(config_path)?
             }
             Err(error) => return Err(error),
         };
