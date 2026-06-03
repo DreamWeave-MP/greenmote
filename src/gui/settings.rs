@@ -287,6 +287,8 @@ impl SettingsUiState {
         self.exclude_grass_ids_viewport_start = 0;
         self.include_occluder_ids_viewport_start = 0;
         self.exclude_occluder_ids_viewport_start = 0;
+        self.include_road_texture_paths_viewport_start = 0;
+        self.exclude_road_texture_paths_viewport_start = 0;
     }
 }
 
