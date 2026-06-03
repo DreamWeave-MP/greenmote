@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use glam::Vec3;
+use rustc_hash::FxHashMap;
 use tes3::esp::{Landscape, LandscapeFlags};
 
 use super::cells::CellCoord;
@@ -12,8 +13,10 @@ const LAND_VERTEX_SPACING: f32 = 128.0;
 const LAND_VERTEX_MAX: usize = 64;
 
 pub struct TerrainIndex {
-    lands: HashMap<CellCoord, Box<[[f32; 65]; 65]>>,
+    lands: TerrainLandMap,
 }
+
+type TerrainLandMap = FxHashMap<CellCoord, Box<[[f32; 65]; 65]>>;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TerrainSample {
@@ -31,7 +34,7 @@ pub(crate) struct TerrainAngle {
 impl TerrainIndex {
     #[must_use]
     pub fn from_landscapes<'a>(landscapes: impl IntoIterator<Item = &'a Landscape>) -> Self {
-        let mut lands = HashMap::new();
+        let mut lands = TerrainLandMap::default();
 
         for landscape in landscapes {
             if landscape.flags.contains(tes3::esp::ObjectFlags::DELETED) {
@@ -62,7 +65,7 @@ impl TerrainIndex {
     #[cfg(test)]
     pub(crate) fn from_decoded_heights(cell: CellCoord, heights: Box<[[f32; 65]; 65]>) -> Self {
         Self {
-            lands: HashMap::from([(cell, heights)]),
+            lands: TerrainLandMap::from_iter([(cell, heights)]),
         }
     }
 
@@ -488,7 +491,7 @@ mod tests {
     #[test]
     fn height_at_matches_sample_height_across_cells() {
         let terrain = TerrainIndex {
-            lands: HashMap::from([
+            lands: TerrainLandMap::from_iter([
                 ((0, 0), patterned_heights(0.0)),
                 ((-1, 0), patterned_heights(1_000.0)),
                 ((0, -1), patterned_heights(2_000.0)),
@@ -527,7 +530,7 @@ mod tests {
         left[0][64] = 640.0;
         right[0][0] = 10.0;
         let terrain = TerrainIndex {
-            lands: HashMap::from([((0, 0), left), ((1, 0), right)]),
+            lands: TerrainLandMap::from_iter([((0, 0), left), ((1, 0), right)]),
         };
 
         assert_eq!(terrain.height_at(8_192.0, 0.0), Some(10.0));
@@ -552,7 +555,7 @@ mod tests {
         right[1][0] = 160.0;
         right[0][0] = 96.0;
         let terrain = TerrainIndex {
-            lands: HashMap::from([((0, 0), left), ((1, 0), right)]),
+            lands: TerrainLandMap::from_iter([((0, 0), left), ((1, 0), right)]),
         };
 
         let sample = terrain.sample_at(8_192.0, 128.0).unwrap();
@@ -571,7 +574,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
         heights[0][0] = 64.0;
         let terrain = TerrainIndex {
-            lands: HashMap::from([((0, 0), heights)]),
+            lands: TerrainLandMap::from_iter([((0, 0), heights)]),
         };
 
         let sample = terrain.sample_at(0.0, 0.0).unwrap();
