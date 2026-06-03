@@ -93,6 +93,7 @@ macro_rules! route_text {
             | UiText::RunOptionsConfiguredOnConvert
             | UiText::WriteActions
             | UiText::TerrainZAction
+            | UiText::WaterDeleteAction
             | UiText::StaticDeleteAction
             | UiText::StaticMoveAction
             | UiText::OrientAction
@@ -250,6 +251,7 @@ pub(super) enum UiText {
     RunOptionsConfiguredOnConvert,
     WriteActions,
     TerrainZAction,
+    WaterDeleteAction,
     StaticDeleteAction,
     StaticMoveAction,
     OrientAction,

@@ -160,6 +160,9 @@ const fn settings_text(key: UiText) -> &'static str {
         }
         UiText::WriteActions => "Действия записи",
         UiText::TerrainZAction => "Terrain Z (terrain-z)",
+        UiText::WaterDeleteAction => {
+            "Удалять refs, пересекающие внешний водный уровень (water-delete)"
+        }
         UiText::StaticDeleteAction => "Удалять refs, полностью перекрытые statics (static-delete)",
         UiText::StaticMoveAction => "Перемещать refs, перекрытые statics (static-move)",
         UiText::OrientAction => "Ориентировать refs по terrain (orient)",

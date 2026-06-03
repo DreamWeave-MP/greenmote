@@ -144,6 +144,7 @@ const fn settings_text(key: UiText) -> &'static str {
         }
         UiText::WriteActions => "Skrivåtgärder",
         UiText::TerrainZAction => "Terräng Z (terrain-z)",
+        UiText::WaterDeleteAction => "Ta bort refs som passerar yttre vatten (water-delete)",
         UiText::StaticDeleteAction => "Ta bort helt statiskt blockerade refs (static-delete)",
         UiText::StaticMoveAction => "Flytta statiskt blockerade refs (static-move)",
         UiText::OrientAction => "Rikta refs mot terräng (orient)",

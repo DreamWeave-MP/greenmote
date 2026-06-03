@@ -146,6 +146,7 @@ const fn settings_text(key: UiText) -> &'static str {
         }
         UiText::WriteActions => "Write actions",
         UiText::TerrainZAction => "Terrain Z (terrain-z)",
+        UiText::WaterDeleteAction => "Delete refs crossing exterior water (water-delete)",
         UiText::StaticDeleteAction => "Delete fully static-occluded refs (static-delete)",
         UiText::StaticMoveAction => "Move static-occluded refs (static-move)",
         UiText::OrientAction => "Orient refs to terrain (orient)",
