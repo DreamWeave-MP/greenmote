@@ -50,6 +50,8 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPlugins => "Target plugins",
         UiText::AddFiles => "Add files...",
         UiText::AddTargetPath => "Add target/path",
+        UiText::SetUnclipOutputPlugin => "Set output...",
+        UiText::ClearUnclipOutputPlugin => "Clear output plugin",
         UiText::RemoveSelectedTarget => "Remove selected target",
         UiText::ClearTargets => "Clear targets",
         UiText::EmptyTargetList => "No target plugins added.",
@@ -112,6 +114,7 @@ const fn dialog_text(key: UiText) -> &'static str {
         }
         UiText::SelectOpenMwConfig => "Select OpenMW Config",
         UiText::SelectUnclipTargetPlugins => "Select Unclip Target Plugins",
+        UiText::SelectUnclipOutputPlugin => "Select Unclip output plugin",
         _ => unreachable!(),
     }
 }

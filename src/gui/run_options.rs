@@ -18,15 +18,37 @@ pub(super) struct ConvertRunOptions {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct UnclipRunOptions {
-    pub(super) target_plugins: Vec<String>,
+    pub(super) targets: Vec<UnclipTargetRunOption>,
     pub(super) write: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct UnclipTargetRunOption {
+    pub(super) plugin: String,
+    pub(super) output_plugin: Option<String>,
 }
 
 impl Default for UnclipRunOptions {
     fn default() -> Self {
         Self {
-            target_plugins: Vec::new(),
+            targets: Vec::new(),
             write: true,
+        }
+    }
+}
+
+impl UnclipTargetRunOption {
+    pub(super) fn new(plugin: impl Into<String>, output_plugin: Option<String>) -> Self {
+        Self {
+            plugin: plugin.into(),
+            output_plugin,
+        }
+    }
+
+    pub(super) fn label(&self) -> String {
+        match self.output_plugin.as_deref() {
+            Some(output_plugin) => format!("{} -> {output_plugin}", self.plugin),
+            None => self.plugin.clone(),
         }
     }
 }
@@ -81,15 +103,15 @@ impl ConvertRunOptions {
 impl UnclipRunOptions {
     #[must_use]
     pub(super) fn from_config(config: &GroundcoverConfig) -> Self {
-        let target_plugins = config
+        let targets = config
             .unclip
             .plugin
             .as_ref()
-            .map(|path| vec![path.display().to_string()])
+            .map(|path| vec![UnclipTargetRunOption::new(path.display().to_string(), None)])
             .unwrap_or_default();
 
         Self {
-            target_plugins,
+            targets,
             write: if config.unclip.is_generated_default() {
                 true
             } else {
@@ -99,43 +121,82 @@ impl UnclipRunOptions {
     }
 
     pub(super) fn add_target(&mut self, target: impl Into<String>) -> bool {
+        self.add_target_with_output(target, None)
+    }
+
+    pub(super) fn add_target_with_output(
+        &mut self,
+        target: impl Into<String>,
+        output_plugin: Option<String>,
+    ) -> bool {
         let target = target.into();
         let target = target.trim();
         if target.is_empty()
             || self
-                .target_plugins
+                .targets
                 .iter()
-                .any(|existing| existing == target)
+                .any(|existing| existing.plugin == target)
         {
             return false;
         }
 
-        self.target_plugins.push(target.to_owned());
+        self.targets.push(UnclipTargetRunOption::new(
+            target.to_owned(),
+            output_plugin.and_then(|output_plugin| {
+                let output_plugin = output_plugin.trim();
+                (!output_plugin.is_empty() && output_plugin != target)
+                    .then(|| output_plugin.to_owned())
+            }),
+        ));
+        true
+    }
+
+    pub(super) fn set_target_output(
+        &mut self,
+        index: usize,
+        output_plugin: Option<String>,
+    ) -> bool {
+        let Some(target) = self.targets.get_mut(index) else {
+            return false;
+        };
+        target.output_plugin = output_plugin.and_then(|output_plugin| {
+            let output_plugin = output_plugin.trim();
+            (!output_plugin.is_empty() && output_plugin != target.plugin)
+                .then(|| output_plugin.to_owned())
+        });
         true
     }
 
     pub(super) fn remove_target(&mut self, index: usize) -> bool {
-        if index >= self.target_plugins.len() {
+        if index >= self.targets.len() {
             return false;
         }
 
-        self.target_plugins.remove(index);
+        self.targets.remove(index);
         true
     }
 
     pub(super) fn clear_targets(&mut self) {
-        self.target_plugins.clear();
+        self.targets.clear();
     }
 
     pub(super) fn to_args_list(&self) -> Result<Vec<UnclipArgs>, String> {
         let plugins = self
-            .target_plugins
+            .targets
             .iter()
-            .map(|plugin| plugin.trim())
-            .filter(|plugin| !plugin.is_empty());
+            .map(|target| {
+                (
+                    target.plugin.trim(),
+                    target.output_plugin.as_deref().map(str::trim),
+                )
+            })
+            .filter(|(plugin, _output_plugin)| !plugin.is_empty());
         let args = plugins
-            .map(|plugin| UnclipArgs {
+            .map(|(plugin, output_plugin)| UnclipArgs {
                 plugin: Some(PathBuf::from(plugin)),
+                output_plugin: output_plugin
+                    .filter(|output_plugin| !output_plugin.is_empty() && *output_plugin != plugin)
+                    .map(PathBuf::from),
                 meshgenerator_ini: None,
                 ignore_meshgenerator_ini: true,
                 instances: None,
@@ -209,7 +270,7 @@ impl GreenmoteApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConvertRunOptions, UnclipRunOptions};
+    use super::{ConvertRunOptions, UnclipRunOptions, UnclipTargetRunOption};
     use crate::groundcover::GroundcoverConfig;
 
     #[test]
@@ -300,7 +361,7 @@ mod tests {
 
         let options = UnclipRunOptions::from_config(&config);
 
-        assert_eq!(options.target_plugins, ["groundcover.omwaddon"]);
+        assert_eq!(options.targets, [target("groundcover.omwaddon")]);
         assert!(options.write);
     }
 
@@ -342,13 +403,13 @@ mod tests {
 
         let options = UnclipRunOptions::from_config(&config);
 
-        assert_eq!(options.target_plugins, vec!["groundcover.omwaddon"]);
+        assert_eq!(options.targets, vec![target("groundcover.omwaddon")]);
     }
 
     #[test]
     fn unclip_run_options_build_explicit_safe_args() {
         let options = UnclipRunOptions {
-            target_plugins: vec![" groundcover.omwaddon ".to_owned()],
+            targets: vec![UnclipTargetRunOption::new(" groundcover.omwaddon ", None)],
             write: false,
         };
 
@@ -362,7 +423,35 @@ mod tests {
         assert_eq!(args.verbose, None);
         assert_eq!(args.structured, Some(false));
         assert_eq!(args.write, Some(false));
+        assert_eq!(args.output_plugin, None);
         assert!(args.write_actions.is_empty());
+    }
+
+    #[test]
+    fn unclip_run_options_build_explicit_output_override() {
+        let options = UnclipRunOptions {
+            targets: vec![UnclipTargetRunOption::new(
+                "input.omwaddon",
+                Some("output.omwaddon".to_owned()),
+            )],
+            write: true,
+        };
+
+        let args = options.to_args_list().unwrap();
+        let args = args.first().unwrap();
+
+        assert_eq!(args.plugin, Some("input.omwaddon".into()));
+        assert_eq!(args.output_plugin, Some("output.omwaddon".into()));
+    }
+
+    #[test]
+    fn unclip_run_options_target_label_shows_output_override() {
+        assert_eq!(target("input.omwaddon").label(), "input.omwaddon");
+        assert_eq!(
+            UnclipTargetRunOption::new("input.omwaddon", Some("output.omwaddon".to_owned()))
+                .label(),
+            "input.omwaddon -> output.omwaddon"
+        );
     }
 
     #[test]
@@ -380,30 +469,49 @@ mod tests {
         assert!(!options.add_target(" "));
 
         assert_eq!(
-            options.target_plugins,
-            ["first.omwaddon", "second.omwaddon"]
+            options.targets,
+            [target("first.omwaddon"), target("second.omwaddon")]
+        );
+    }
+
+    #[test]
+    fn unclip_run_options_dedupes_by_input_not_output() {
+        let mut options = UnclipRunOptions::default();
+
+        assert!(options.add_target_with_output("first.omwaddon", Some("out.omwaddon".to_owned())));
+        assert!(
+            !options.add_target_with_output("first.omwaddon", Some("other.omwaddon".to_owned()))
+        );
+
+        assert_eq!(options.targets.len(), 1);
+        assert_eq!(
+            options.targets[0].output_plugin.as_deref(),
+            Some("out.omwaddon")
         );
     }
 
     #[test]
     fn unclip_run_options_remove_and_clear_targets() {
         let mut options = UnclipRunOptions {
-            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            targets: vec![target("first.omwaddon"), target("second.omwaddon")],
             write: false,
         };
 
         assert!(options.remove_target(0));
         assert!(!options.remove_target(3));
-        assert_eq!(options.target_plugins, ["second.omwaddon"]);
+        assert_eq!(options.targets, [target("second.omwaddon")]);
 
         options.clear_targets();
-        assert!(options.target_plugins.is_empty());
+        assert!(options.targets.is_empty());
     }
 
     #[test]
     fn unclip_run_options_builds_multiple_args() {
         let options = UnclipRunOptions {
-            target_plugins: vec![" first.omwaddon ".to_owned(), "second.omwaddon".to_owned()],
+            targets: vec![
+                UnclipTargetRunOption::new(" first.omwaddon ", None),
+                target("second.omwaddon"),
+            ],
             write: true,
         };
 
@@ -417,7 +525,7 @@ mod tests {
     #[test]
     fn unclip_run_options_all_args_ignore_meshgenerator_ini() {
         let options = UnclipRunOptions {
-            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            targets: vec![target("first.omwaddon"), target("second.omwaddon")],
             write: false,
         };
 
@@ -425,5 +533,9 @@ mod tests {
 
         assert!(args.iter().all(|args| args.meshgenerator_ini.is_none()));
         assert!(args.iter().all(|args| args.ignore_meshgenerator_ini));
+    }
+
+    fn target(plugin: &str) -> UnclipTargetRunOption {
+        UnclipTargetRunOption::new(plugin, None)
     }
 }

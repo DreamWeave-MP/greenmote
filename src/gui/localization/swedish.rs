@@ -50,6 +50,8 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPlugins => "Målplugin",
         UiText::AddFiles => "Lägg till filer...",
         UiText::AddTargetPath => "Lägg till mål/sökväg",
+        UiText::SetUnclipOutputPlugin => "Ange utdata...",
+        UiText::ClearUnclipOutputPlugin => "Rensa utdataplugin",
         UiText::RemoveSelectedTarget => "Ta bort valt mål",
         UiText::ClearTargets => "Rensa mål",
         UiText::EmptyTargetList => "Inga målplugin tillagda.",
@@ -110,6 +112,7 @@ const fn dialog_text(key: UiText) -> &'static str {
         }
         UiText::SelectOpenMwConfig => "Välj OpenMW-config",
         UiText::SelectUnclipTargetPlugins => "Välj Unclip-målplugin",
+        UiText::SelectUnclipOutputPlugin => "Välj Unclip-utdataplugin",
         _ => unreachable!(),
     }
 }

@@ -14,7 +14,7 @@ mod settings;
 
 use convert::ConvertUiState;
 use localization::{Localizer, UiLanguage, UiText};
-use run_options::{ConvertRunOptions, UnclipRunOptions};
+use run_options::{ConvertRunOptions, UnclipRunOptions, UnclipTargetRunOption};
 use settings::SettingsUiState;
 
 struct GreenmoteApp {
