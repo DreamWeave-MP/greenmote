@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use glam::Vec3;
+use rustc_hash::FxHashMap;
 use tes3::esp::{Landscape, LandscapeFlags};
 
 use super::cells::CellCoord;
@@ -12,8 +13,10 @@ const LAND_VERTEX_SPACING: f32 = 128.0;
 const LAND_VERTEX_MAX: usize = 64;
 
 pub struct TerrainIndex {
-    lands: HashMap<CellCoord, Box<[[f32; 65]; 65]>>,
+    lands: TerrainLandMap,
 }
+
+type TerrainLandMap = FxHashMap<CellCoord, Box<[[f32; 65]; 65]>>;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TerrainSample {
@@ -31,7 +34,7 @@ pub(crate) struct TerrainAngle {
 impl TerrainIndex {
     #[must_use]
     pub fn from_landscapes<'a>(landscapes: impl IntoIterator<Item = &'a Landscape>) -> Self {
-        let mut lands = HashMap::new();
+        let mut lands = TerrainLandMap::default();
 
         for landscape in landscapes {
             if landscape.flags.contains(tes3::esp::ObjectFlags::DELETED) {
@@ -62,7 +65,7 @@ impl TerrainIndex {
     #[cfg(test)]
     pub(crate) fn from_decoded_heights(cell: CellCoord, heights: Box<[[f32; 65]; 65]>) -> Self {
         Self {
-            lands: HashMap::from([(cell, heights)]),
+            lands: TerrainLandMap::from_iter([(cell, heights)]),
         }
     }
 
@@ -73,20 +76,30 @@ impl TerrainIndex {
 
     #[must_use]
     pub fn height_at(&self, world_x: f32, world_y: f32) -> Option<f32> {
-        self.sample_at(world_x, world_y).map(|sample| sample.height)
+        let cell = world_cell(world_x, world_y);
+        let heights = self.lands.get(&cell)?;
+        Some(sample_terrain_height(
+            heights,
+            local_cell_coord(world_x, cell.0),
+            local_cell_coord(world_y, cell.1),
+        ))
     }
 
     #[must_use]
     pub(crate) fn sample_at(&self, world_x: f32, world_y: f32) -> Option<TerrainSample> {
         let cell = world_cell(world_x, world_y);
         let heights = self.lands.get(&cell)?;
-        let mut sample = sample_terrain(
+        let quad = terrain_quad(
             heights,
             local_cell_coord(world_x, cell.0),
             local_cell_coord(world_y, cell.1),
         );
-        sample.angle = self.generator_angle_at(world_x, world_y, cell);
-        Some(sample)
+        let (slope_x, slope_y) = terrain_quad_slope(quad);
+        Some(TerrainSample {
+            height: terrain_quad_height(quad),
+            normal: terrain_normal(slope_x, slope_y),
+            angle: self.generator_angle_at(world_x, world_y, cell, heights),
+        })
     }
 
     #[must_use]
@@ -99,7 +112,14 @@ impl TerrainIndex {
         world_x: f32,
         world_y: f32,
         fallback_cell: CellCoord,
+        fallback_heights: &[[f32; 65]; 65],
     ) -> TerrainAngle {
+        if let Some(angle) =
+            same_cell_generator_angle(world_x, world_y, fallback_cell, fallback_heights)
+        {
+            return angle;
+        }
+
         generator_angle_from_vertices(world_x, world_y, |vertex_x, vertex_y| {
             self.height_at_global_vertex(vertex_x, vertex_y, fallback_cell)
         })
@@ -149,7 +169,7 @@ fn local_cell_coord(world_coord: f32, cell_coord: i32) -> f32 {
 )]
 #[cfg(test)]
 fn sample_height(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> f32 {
-    sample_terrain(heights, local_x, local_y).height
+    sample_terrain_height(heights, local_x, local_y)
 }
 
 #[allow(
@@ -157,7 +177,7 @@ fn sample_height(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> f32 {
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
-fn sample_terrain(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> TerrainSample {
+fn terrain_quad(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> TerrainQuad {
     let grid_x = (local_x / LAND_VERTEX_SPACING).clamp(0.0, LAND_VERTEX_MAX as f32);
     let grid_y = (local_y / LAND_VERTEX_SPACING).clamp(0.0, LAND_VERTEX_MAX as f32);
     let x0 = grid_x.floor().min((LAND_VERTEX_MAX - 1) as f32) as usize;
@@ -171,33 +191,101 @@ fn sample_terrain(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> Terr
     let h01 = heights[y1][x0];
     let h11 = heights[y1][x1];
 
-    let (height, slope_x, slope_y) = if ((x0 ^ y0) & 1) == 0 {
+    TerrainQuad {
+        x0,
+        y0,
+        tx,
+        ty,
+        h00,
+        h10,
+        h01,
+        h11,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TerrainQuad {
+    x0: usize,
+    y0: usize,
+    tx: f32,
+    ty: f32,
+    h00: f32,
+    h10: f32,
+    h01: f32,
+    h11: f32,
+}
+
+fn sample_terrain_height(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> f32 {
+    terrain_quad_height(terrain_quad(heights, local_x, local_y))
+}
+
+fn terrain_quad_height(quad: TerrainQuad) -> f32 {
+    let TerrainQuad {
+        x0,
+        y0,
+        tx,
+        ty,
+        h00,
+        h10,
+        h01,
+        h11,
+    } = quad;
+
+    if ((x0 ^ y0) & 1) == 0 {
+        if tx <= ty {
+            h00 + (h01 - h00) * (ty - tx) + (h11 - h00) * tx
+        } else {
+            h00 + (h11 - h00) * ty + (h10 - h00) * (tx - ty)
+        }
+    } else if tx + ty <= 1.0 {
+        interpolate_triangle(h00, h01, h10, tx, ty)
+    } else {
+        interpolate_triangle(h11, h10, h01, 1.0 - tx, 1.0 - ty)
+    }
+}
+
+fn terrain_quad_slope(quad: TerrainQuad) -> (f32, f32) {
+    let TerrainQuad {
+        x0,
+        y0,
+        tx,
+        ty,
+        h00,
+        h10,
+        h01,
+        h11,
+    } = quad;
+
+    if ((x0 ^ y0) & 1) == 0 {
         if tx <= ty {
             (
-                h00 + (h01 - h00) * (ty - tx) + (h11 - h00) * tx,
                 (h11 - h01) / LAND_VERTEX_SPACING,
                 (h01 - h00) / LAND_VERTEX_SPACING,
             )
         } else {
             (
-                h00 + (h11 - h00) * ty + (h10 - h00) * (tx - ty),
                 (h10 - h00) / LAND_VERTEX_SPACING,
                 (h11 - h10) / LAND_VERTEX_SPACING,
             )
         }
     } else if tx + ty <= 1.0 {
         (
-            interpolate_triangle(h00, h01, h10, tx, ty),
             (h10 - h00) / LAND_VERTEX_SPACING,
             (h01 - h00) / LAND_VERTEX_SPACING,
         )
     } else {
         (
-            interpolate_triangle(h11, h10, h01, 1.0 - tx, 1.0 - ty),
             (h11 - h01) / LAND_VERTEX_SPACING,
             (h11 - h10) / LAND_VERTEX_SPACING,
         )
-    };
+    }
+}
+
+#[cfg(test)]
+fn sample_terrain(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> TerrainSample {
+    let quad = terrain_quad(heights, local_x, local_y);
+    let height = terrain_quad_height(quad);
+    let (slope_x, slope_y) = terrain_quad_slope(quad);
     TerrainSample {
         height,
         normal: terrain_normal(slope_x, slope_y),
@@ -210,6 +298,7 @@ fn sample_terrain(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> Terr
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
+#[cfg(test)]
 fn generator_angle_from_local_heights(
     heights: &[[f32; 65]; 65],
     local_x: f32,
@@ -264,6 +353,33 @@ fn generator_angle_from_stencil(
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
+fn same_cell_generator_angle(
+    world_x: f32,
+    world_y: f32,
+    cell: CellCoord,
+    heights: &[[f32; 65]; 65],
+) -> Option<TerrainAngle> {
+    let vertex_x = (world_x / LAND_VERTEX_SPACING).ceil() as i32;
+    let vertex_y = (world_y / LAND_VERTEX_SPACING).ceil() as i32;
+    let min_x = cell.0 * 64;
+    let min_y = cell.1 * 64;
+    if vertex_x <= min_x || vertex_x >= min_x + 64 || vertex_y <= min_y || vertex_y >= min_y + 64 {
+        return None;
+    }
+
+    let local_x = usize::try_from(vertex_x - min_x).ok()?;
+    let local_y = usize::try_from(vertex_y - min_y).ok()?;
+    let prev_x = local_x.checked_sub(1)?;
+    let prev_y = local_y.checked_sub(1)?;
+    Some(generator_angle_from_stencil(
+        heights[local_y][local_x],
+        heights[prev_y][local_x],
+        heights[local_y][prev_x],
+        heights[prev_y][prev_x],
+    ))
+}
+
 fn terrain_normal(slope_x: f32, slope_y: f32) -> [f32; 3] {
     Vec3::new(-slope_x, -slope_y, 1.0).normalize().to_array()
 }
@@ -281,6 +397,20 @@ fn interpolate_triangle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[allow(clippy::cast_precision_loss)]
+    fn patterned_heights(offset: f32) -> Box<[[f32; 65]; 65]> {
+        let mut heights: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        for (y, row) in heights.iter_mut().enumerate() {
+            for (x, height) in row.iter_mut().enumerate() {
+                *height = offset + x as f32 * 3.25 - y as f32 * 1.5 + ((x ^ y) & 3) as f32;
+            }
+        }
+        heights
+    }
 
     #[test]
     fn samples_even_quad_triangle_height_inside_cell() {
@@ -348,6 +478,95 @@ mod tests {
     }
 
     #[test]
+    fn sample_at_same_cell_generator_angle_matches_global_vertex_path() {
+        let terrain = TerrainIndex::from_decoded_heights((0, 0), patterned_heights(0.0));
+        let sample = terrain.sample_at(320.0, 448.0).unwrap();
+        let expected = generator_angle_from_vertices(320.0, 448.0, |vertex_x, vertex_y| {
+            terrain.height_at_global_vertex(vertex_x, vertex_y, (0, 0))
+        });
+
+        assert_eq!(sample.angle, expected);
+    }
+
+    #[test]
+    fn height_at_matches_sample_height_across_cells() {
+        let terrain = TerrainIndex {
+            lands: TerrainLandMap::from_iter([
+                ((0, 0), patterned_heights(0.0)),
+                ((-1, 0), patterned_heights(1_000.0)),
+                ((0, -1), patterned_heights(2_000.0)),
+            ]),
+        };
+
+        for (world_x, world_y) in [
+            (0.0, 0.0),
+            (32.0, 96.0),
+            (8_191.5, 8_191.5),
+            (-1.0, 64.0),
+            (-8_192.0, 128.0),
+            (64.0, -64.0),
+        ] {
+            assert_eq!(
+                terrain.height_at(world_x, world_y),
+                terrain
+                    .sample_at(world_x, world_y)
+                    .map(|sample| sample.height)
+            );
+        }
+
+        assert_eq!(terrain.height_at(8_192.0, 0.0), None);
+    }
+
+    #[test]
+    fn positive_cell_boundary_samples_neighbor_origin_vertex() {
+        let mut left: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        let mut right: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        left[0][64] = 640.0;
+        right[0][0] = 10.0;
+        let terrain = TerrainIndex {
+            lands: TerrainLandMap::from_iter([((0, 0), left), ((1, 0), right)]),
+        };
+
+        assert_eq!(terrain.height_at(8_192.0, 0.0), Some(10.0));
+        assert_eq!(
+            terrain.height_at(8_192.0, 0.0),
+            terrain.sample_at(8_192.0, 0.0).map(|sample| sample.height)
+        );
+    }
+
+    #[test]
+    fn generator_style_angle_samples_present_boundary_neighbor() {
+        let mut left: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        let mut right: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        left[1][63] = 64.0;
+        left[0][63] = 32.0;
+        right[1][0] = 160.0;
+        right[0][0] = 96.0;
+        let terrain = TerrainIndex {
+            lands: TerrainLandMap::from_iter([((0, 0), left), ((1, 0), right)]),
+        };
+
+        let sample = terrain.sample_at(8_192.0, 128.0).unwrap();
+
+        assert_eq!(
+            sample.angle,
+            generator_angle_from_stencil(160.0, 96.0, 64.0, 32.0)
+        );
+    }
+
+    #[test]
     fn generator_style_angle_clamps_missing_boundary_neighbor() {
         let mut heights: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
             .into_boxed_slice()
@@ -355,7 +574,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
         heights[0][0] = 64.0;
         let terrain = TerrainIndex {
-            lands: HashMap::from([((0, 0), heights)]),
+            lands: TerrainLandMap::from_iter([((0, 0), heights)]),
         };
 
         let sample = terrain.sample_at(0.0, 0.0).unwrap();

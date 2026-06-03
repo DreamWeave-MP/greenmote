@@ -44,18 +44,20 @@ impl ContactBaseline {
 }
 
 impl ContactBaselineIndex {
+    #[cfg(test)]
     pub(super) fn get(&self, id: &str) -> ContactBaseline {
-        self.baselines
-            .get(&id.to_lowercase())
-            .copied()
-            .unwrap_or(ContactBaseline {
-                delta: 0.0,
-                samples: 0,
-                min_delta: 0.0,
-                p05_delta: 0.0,
-                p95_delta: 0.0,
-                max_delta: 0.0,
-            })
+        self.get_normalized_key(&id.to_lowercase())
+    }
+
+    pub(super) fn get_normalized_key(&self, id: &str) -> ContactBaseline {
+        self.baselines.get(id).copied().unwrap_or(ContactBaseline {
+            delta: 0.0,
+            samples: 0,
+            min_delta: 0.0,
+            p05_delta: 0.0,
+            p95_delta: 0.0,
+            max_delta: 0.0,
+        })
     }
 
     pub(super) fn diagnostics(&self) -> Vec<ContactBaselineDiagnostic> {
@@ -81,12 +83,13 @@ pub(super) fn build_contact_baselines(
     let mut samples = BTreeMap::<String, Vec<f32>>::new();
     let mut meshes = BTreeMap::<String, String>::new();
 
-    for (_, _, reference) in target_refs.iter_refs(plugin) {
+    for target_ref in target_refs.iter_ref_entries(plugin) {
         super::check_cancellation(cancellation)?;
+        let reference = target_ref.reference;
         if reference.deleted == Some(true) {
             continue;
         }
-        let Some(static_mesh) = static_index.get(&reference.id) else {
+        let Some(static_mesh) = static_index.get_normalized_key(target_ref.normalized_id) else {
             continue;
         };
         let Ok(geometry) = mesh_contacts.geometry(static_mesh) else {
@@ -102,11 +105,11 @@ pub(super) fn build_contact_baselines(
             continue;
         };
         samples
-            .entry(static_mesh.static_id.to_lowercase())
+            .entry(target_ref.normalized_id.to_owned())
             .or_default()
             .push(contact_position[2] - terrain_z);
         meshes
-            .entry(static_mesh.static_id.to_lowercase())
+            .entry(target_ref.normalized_id.to_owned())
             .or_insert_with(|| static_mesh.mesh_path.clone());
     }
 

@@ -34,10 +34,10 @@ pub(crate) struct StaticOccluderBuildReport {
     pub(crate) huge_footprint_side_threshold: f32,
 }
 
-pub(crate) fn build_static_occluders(
-    active_plugins: &[Plugin],
+pub(crate) fn build_static_occluders<'a>(
+    active_plugins: impl IntoIterator<Item = &'a Plugin>,
     active_cells: &BTreeSet<CellCoord>,
-    static_index: &StaticMeshIndex,
+    static_index: &'a StaticMeshIndex,
     mesh_bounds: &mut MeshCache<'_>,
     target_static_ids: &BTreeSet<String>,
     occluder_filter: &IdFilter,
@@ -161,7 +161,7 @@ enum ExclusionReason {
 }
 
 fn effective_static_occluder_refs<'a>(
-    active_plugins: &'a [Plugin],
+    active_plugins: impl IntoIterator<Item = &'a Plugin>,
     active_cells: &BTreeSet<CellCoord>,
     static_index: &'a StaticMeshIndex,
     target_static_ids: &BTreeSet<String>,
@@ -225,13 +225,17 @@ mod tests {
     };
     use vfstool_lib::VFS;
 
-    use crate::unclip::{args::IdFilter, cells::CellCoord};
+    use crate::unclip::{
+        args::IdFilter,
+        cells::CellCoord,
+        setup::{ContextPlugin, build_static_index},
+    };
 
     type NifVec3 = rapier3d::math::Vec3;
 
     use super::{
-        EffectiveRefState, ExclusionReason, build_static_occluders, effective_static_occluder_refs,
-        should_include_occluder,
+        EffectiveRefKey, EffectiveRefState, ExclusionReason, build_static_occluders,
+        effective_static_occluder_refs, should_include_occluder,
     };
 
     static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
@@ -286,6 +290,78 @@ mod tests {
         );
 
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn borrowed_active_target_context_slot_preserves_later_override_order() {
+        let before = Plugin {
+            objects: vec![TES3Object::from(static_record(
+                "grass",
+                "meshes/before-grass.nif",
+            ))],
+        };
+        let target = Plugin {
+            objects: vec![
+                TES3Object::from(static_record("rock", "meshes/target-rock.nif")),
+                TES3Object::from(static_record("grass", "meshes/target-grass.nif")),
+                TES3Object::Cell(exterior_cell([
+                    ((1, 2), reference_with_id("rock")),
+                    ((3, 4), reference_with_id("grass")),
+                ])),
+            ],
+        };
+        let mut moved_grass = reference_at_z(12.0);
+        moved_grass.moved_cell = Some((0, 0));
+        let later = Plugin {
+            objects: vec![
+                TES3Object::from(static_record("grass", "meshes/later-grass.nif")),
+                TES3Object::Cell(exterior_cell([((1, 2), deleted_ref())])),
+                TES3Object::Cell(exterior_cell_at((1, 0), [((3, 4), moved_grass)])),
+            ],
+        };
+        let context_plugins = [
+            ContextPlugin::Owned(before),
+            ContextPlugin::Borrowed(&target),
+            ContextPlugin::Owned(later),
+        ];
+        assert!(matches!(context_plugins[1], ContextPlugin::Borrowed(_)));
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(context_plugins[1].as_plugin()),
+            std::ptr::from_ref(&target),
+        ));
+
+        let static_index =
+            build_static_index(context_plugins.iter().map(ContextPlugin::as_plugin), None);
+        let refs = effective_static_occluder_refs(
+            context_plugins.iter().map(ContextPlugin::as_plugin),
+            &BTreeSet::from([(0, 0), (1, 0)]),
+            &static_index,
+            &BTreeSet::new(),
+            &IdFilter::new(&[], &[]).unwrap(),
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
+
+        assert!(!refs.contains_key(&EffectiveRefKey {
+            cell: (0, 0),
+            reference: (1, 2),
+        }));
+        assert_eq!(refs.len(), 1);
+        let moved_state = refs
+            .get(&EffectiveRefKey {
+                cell: (0, 0),
+                reference: (3, 4),
+            })
+            .expect("later moved ref should replace target ref at its original cell");
+        let EffectiveRefState::Candidate {
+            reference,
+            static_mesh,
+        } = moved_state
+        else {
+            panic!("later moved target ref should remain an occluder candidate");
+        };
+        assert!((reference.translation[2] - 12.0).abs() < f32::EPSILON);
+        assert_eq!(static_mesh.mesh_path, "meshes/later-grass.nif");
     }
 
     #[test]
@@ -606,6 +682,14 @@ mod tests {
             ..Static::default()
         };
         crate::unclip::mesh::StaticMeshIndex::from_statics([&rock, &grass])
+    }
+
+    fn static_record(id: &str, mesh: &str) -> Static {
+        Static {
+            id: id.to_owned(),
+            mesh: mesh.to_owned(),
+            ..Static::default()
+        }
     }
 
     struct TempDir {

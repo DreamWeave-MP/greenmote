@@ -7,7 +7,7 @@ use tes3::esp::Plugin;
 use crate::groundcover::CancellationToken;
 
 use super::{
-    mesh::{StaticMesh, StaticMeshIndex},
+    mesh::{StaticMesh, StaticMeshIndex, normalize_mesh_key},
     target::TargetRefIndex,
     terrain::TerrainIndex,
 };
@@ -65,9 +65,7 @@ impl GeneratedPlacementIndex {
     }
 
     pub(crate) fn get(&self, static_mesh: &StaticMesh) -> Option<GeneratedPlacement> {
-        self.placements_by_mesh
-            .get(&normalize_mesh_key(&static_mesh.mesh_path))
-            .copied()
+        self.placements_by_mesh.get(static_mesh.mesh_key()).copied()
     }
 
     #[cfg(test)]
@@ -122,15 +120,17 @@ impl OriginPlacementSamples {
         cancellation: &CancellationToken,
     ) -> io::Result<Self> {
         let mut groups = BTreeMap::<String, OriginPlacementSampleGroup>::new();
-        for (_, _, reference) in target_refs.iter_refs(plugin) {
+        for target_ref in target_refs.iter_ref_entries(plugin) {
             super::check_cancellation(cancellation)?;
+            let reference = target_ref.reference;
             if reference.deleted == Some(true) {
                 continue;
             }
-            let Some(static_mesh) = static_index.get(&reference.id) else {
+            let Some(static_mesh) = static_index.get_normalized_key(target_ref.normalized_id)
+            else {
                 continue;
             };
-            let mesh_key = normalize_mesh_key(&static_mesh.mesh_path);
+            let mesh_key = static_mesh.mesh_key().to_owned();
             let group = groups.entry(mesh_key.clone()).or_default();
             group.hinted |= hints.contains_key(&mesh_key);
 
@@ -259,14 +259,6 @@ fn parse_f32(value: &str, line: usize, key: &str) -> io::Result<f32> {
     })
 }
 
-fn normalize_mesh_key(mesh_path: &str) -> String {
-    mesh_path
-        .trim_start_matches("Meshes\\")
-        .trim_start_matches("Meshes/")
-        .replace('/', "\\")
-        .to_lowercase()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{GeneratedPlacementIndex, OriginPlacementSampleGroup, inferred_placement};
@@ -314,6 +306,44 @@ mod tests {
             .unwrap();
 
         assert!((placement.z_offset + 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn meshgenerator_hints_strip_lowercase_meshes_prefix() {
+        let index = GeneratedPlacementIndex::from_meshgenerator_ini_str(
+            r"
+            [Grass:Region]
+            iZPositionModifier=7
+            sMesh0=meshes/grass/foo.nif
+            ",
+        )
+        .unwrap();
+
+        let placement = index
+            .get(&StaticMesh::new_for_test("grass", "Grass/Foo.nif"))
+            .unwrap();
+
+        assert_eq!(index.len(), 1);
+        assert!((placement.z_offset - 7.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn meshgenerator_hints_strip_mixed_case_meshes_prefix() {
+        let index = GeneratedPlacementIndex::from_meshgenerator_ini_str(
+            r"
+            [Grass:Region]
+            iZPositionModifier=9
+            sMesh0=MeShEs\Grass\Foo.nif
+            ",
+        )
+        .unwrap();
+
+        let placement = index
+            .get(&StaticMesh::new_for_test("grass", "meshes/grass/foo.nif"))
+            .unwrap();
+
+        assert_eq!(index.len(), 1);
+        assert!((placement.z_offset - 9.0).abs() < f32::EPSILON);
     }
 
     #[test]
