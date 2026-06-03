@@ -14,6 +14,8 @@ mod settings;
 
 use convert::ConvertUiState;
 use localization::{Localizer, UiLanguage, UiText};
+#[cfg(test)]
+use run_options::UnclipTargetRunOption;
 use run_options::{ConvertRunOptions, UnclipRunOptions};
 use settings::SettingsUiState;
 

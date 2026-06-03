@@ -27,6 +27,8 @@ macro_rules! route_text {
             | UiText::TargetPlugins
             | UiText::AddFiles
             | UiText::AddTargetPath
+            | UiText::SetUnclipOutputPlugin
+            | UiText::ClearUnclipOutputPlugin
             | UiText::RemoveSelectedTarget
             | UiText::ClearTargets
             | UiText::EmptyTargetList
@@ -72,7 +74,8 @@ macro_rules! route_text {
             | UiText::OpenMwConfigNotFoundMessage
             | UiText::ChooseOpenMwConfigBeforeContinuing
             | UiText::SelectOpenMwConfig
-            | UiText::SelectUnclipTargetPlugins => $dialogs($key),
+            | UiText::SelectUnclipTargetPlugins
+            | UiText::SelectUnclipOutputPlugin => $dialogs($key),
             UiText::OpenMwConfig
             | UiText::OpenMwPlugins
             | UiText::UsingOpenMwAutodetection
@@ -176,6 +179,8 @@ pub(super) enum UiText {
     TargetPlugins,
     AddFiles,
     AddTargetPath,
+    SetUnclipOutputPlugin,
+    ClearUnclipOutputPlugin,
     RemoveSelectedTarget,
     ClearTargets,
     EmptyTargetList,
@@ -227,6 +232,7 @@ pub(super) enum UiText {
     ChooseOpenMwConfigBeforeContinuing,
     SelectOpenMwConfig,
     SelectUnclipTargetPlugins,
+    SelectUnclipOutputPlugin,
     OpenMwConfig,
     OpenMwPlugins,
     UsingOpenMwAutodetection,

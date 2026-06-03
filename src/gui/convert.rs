@@ -11,6 +11,9 @@ use crate::{
 
 use super::{ConvertRunOptions, GreenmoteApp, UiText, UnclipRunOptions};
 
+#[cfg(test)]
+use super::UnclipTargetRunOption;
+
 const MAX_EVENTS_PER_FRAME: usize = 256;
 const MIN_WIDGET_SIZE: f32 = 1.0;
 
@@ -219,25 +222,53 @@ impl ConvertUiState {
 
     fn selected_unclip_target(&self) -> Option<usize> {
         let selected = self.unclip.selected_target?;
-        (selected < self.unclip.run_options.target_plugins.len()).then_some(selected)
+        (selected < self.unclip.run_options.targets.len()).then_some(selected)
     }
 
     fn set_selected_unclip_target(&mut self, selected: Option<usize>) {
         self.unclip.selected_target =
-            selected.filter(|index| *index < self.unclip.run_options.target_plugins.len());
+            selected.filter(|index| *index < self.unclip.run_options.targets.len());
     }
 
     fn add_unclip_target(&mut self, target: impl Into<String>) -> bool {
         let added = self.unclip.run_options.add_target(target);
         if added {
-            self.unclip.selected_target =
-                self.unclip.run_options.target_plugins.len().checked_sub(1);
+            self.unclip.selected_target = self.unclip.run_options.targets.len().checked_sub(1);
             self.unclip
                 .target_statuses
                 .push(UnclipTargetStatus::Pending);
         }
 
         added
+    }
+
+    fn add_unclip_target_with_output(
+        &mut self,
+        target: impl Into<String>,
+        output_plugin: Option<String>,
+    ) -> bool {
+        let added = self
+            .unclip
+            .run_options
+            .add_target_with_output(target, output_plugin);
+        if added {
+            self.unclip.selected_target = self.unclip.run_options.targets.len().checked_sub(1);
+            self.unclip
+                .target_statuses
+                .push(UnclipTargetStatus::Pending);
+        }
+
+        added
+    }
+
+    fn set_selected_unclip_output(&mut self, output_plugin: Option<String>) -> bool {
+        let Some(selected) = self.selected_unclip_target() else {
+            return false;
+        };
+
+        self.unclip
+            .run_options
+            .set_target_output(selected, output_plugin)
     }
 
     fn remove_selected_unclip_target(&mut self) -> bool {
@@ -248,7 +279,7 @@ impl ConvertUiState {
         let removed = self.unclip.run_options.remove_target(selected);
         if removed {
             self.unclip.target_statuses.remove(selected);
-            let len = self.unclip.run_options.target_plugins.len();
+            let len = self.unclip.run_options.targets.len();
             self.unclip.selected_target = if len == 0 {
                 None
             } else {
@@ -267,7 +298,7 @@ impl ConvertUiState {
 
     fn reset_unclip_target_statuses(&mut self) {
         self.unclip.target_statuses =
-            vec![UnclipTargetStatus::Pending; self.unclip.run_options.target_plugins.len()];
+            vec![UnclipTargetStatus::Pending; self.unclip.run_options.targets.len()];
     }
 
     fn run_options_differ_from_saved(&self) -> bool {
@@ -354,7 +385,7 @@ impl GreenmoteApp {
 
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(finite_widget_extent(ui.available_width()));
-            if self.convert.unclip.run_options.target_plugins.is_empty() {
+            if self.convert.unclip.run_options.targets.is_empty() {
                 ui.label(egui::RichText::new(self.localizer.text(UiText::EmptyTargetList)).weak());
             } else {
                 egui::ScrollArea::vertical()
@@ -363,13 +394,8 @@ impl GreenmoteApp {
                     .show(ui, |ui| {
                         let selected_target = self.convert.selected_unclip_target();
                         let mut next_selected = selected_target;
-                        for (index, target) in self
-                            .convert
-                            .unclip
-                            .run_options
-                            .target_plugins
-                            .iter()
-                            .enumerate()
+                        for (index, target) in
+                            self.convert.unclip.run_options.targets.iter().enumerate()
                         {
                             let status = self
                                 .convert
@@ -382,8 +408,9 @@ impl GreenmoteApp {
                                 .selectable_label(
                                     selected_target == Some(index),
                                     format!(
-                                        "[{}] {target}",
-                                        self.localizer.text(status.text_key())
+                                        "[{}] {}",
+                                        self.localizer.text(status.text_key()),
+                                        target.label()
                                     ),
                                 )
                                 .clicked()
@@ -401,8 +428,45 @@ impl GreenmoteApp {
                 && let Some(paths) = select_plugin_files(self.localizer)
             {
                 for path in paths {
-                    self.convert.add_unclip_target(path.display().to_string());
+                    let output_plugin = select_unclip_output_plugin(self.localizer, &path)
+                        .filter(|output_path| output_path != &path)
+                        .map(|path| path.display().to_string());
+                    self.convert
+                        .add_unclip_target_with_output(path.display().to_string(), output_plugin);
                 }
+            }
+
+            let can_set_output = self.convert.selected_unclip_target().is_some();
+            if ui
+                .add_enabled(
+                    can_set_output,
+                    egui::Button::new(self.localizer.text(UiText::SetUnclipOutputPlugin)),
+                )
+                .clicked()
+                && let Some(selected) = self.convert.selected_unclip_target()
+                && let Some(target) = self.convert.unclip.run_options.targets.get(selected)
+            {
+                let input_plugin = target.plugin.clone();
+                let input_path = Path::new(&input_plugin);
+                if let Some(output_path) = select_unclip_output_plugin(self.localizer, input_path) {
+                    self.convert
+                        .set_selected_unclip_output(Some(output_path.display().to_string()));
+                }
+            }
+
+            let can_clear_output = self
+                .convert
+                .selected_unclip_target()
+                .and_then(|selected| self.convert.unclip.run_options.targets.get(selected))
+                .is_some_and(|target| target.output_plugin.is_some());
+            if ui
+                .add_enabled(
+                    can_clear_output,
+                    egui::Button::new(self.localizer.text(UiText::ClearUnclipOutputPlugin)),
+                )
+                .clicked()
+            {
+                self.convert.set_selected_unclip_output(None);
             }
 
             let can_remove = self.convert.selected_unclip_target().is_some();
@@ -416,7 +480,7 @@ impl GreenmoteApp {
                 self.convert.remove_selected_unclip_target();
             }
 
-            let can_clear = !self.convert.unclip.run_options.target_plugins.is_empty();
+            let can_clear = !self.convert.unclip.run_options.targets.is_empty();
             if ui
                 .add_enabled(
                     can_clear,
@@ -668,10 +732,10 @@ impl GreenmoteApp {
             .convert
             .unclip
             .run_options
-            .target_plugins
+            .targets
             .iter()
-            .map(|target| target.trim())
-            .filter(|target| !target.is_empty())
+            .filter(|target| !target.plugin.trim().is_empty())
+            .map(|target| target.label())
             .collect::<Vec<_>>();
         let actions = self.settings.unclip_write_action_names().join(", ");
         let mut confirm = false;
@@ -1554,6 +1618,26 @@ fn select_plugin_files(localizer: super::Localizer) -> Option<Vec<std::path::Pat
         .pick_files()
 }
 
+fn select_unclip_output_plugin(
+    localizer: super::Localizer,
+    input_path: &Path,
+) -> Option<std::path::PathBuf> {
+    let mut dialog =
+        rfd::FileDialog::new().set_title(localizer.text(UiText::SelectUnclipOutputPlugin));
+    if let Some(parent) = input_path.parent() {
+        dialog = dialog.set_directory(parent);
+    }
+    if let Some(file_name) = input_path.file_name() {
+        dialog = dialog.set_file_name(file_name.to_string_lossy().to_string());
+    }
+    dialog
+        .add_filter(
+            localizer.text(UiText::OpenMwPlugins),
+            &["omwaddon", "esp", "esm"],
+        )
+        .save_file()
+}
+
 #[cfg(target_os = "windows")]
 fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
     vec![OpenCommand {
@@ -1598,8 +1682,8 @@ mod tests {
     use std::{ffi::OsString, io, path::Path};
 
     use super::{
-        ConvertRunOptions, ConvertUiState, UnclipRunOptions, UnclipTargetStatus, egui,
-        loaded_openmw_config_status, run_unclip_batch,
+        ConvertRunOptions, ConvertUiState, UnclipRunOptions, UnclipTargetRunOption,
+        UnclipTargetStatus, egui, loaded_openmw_config_status, run_unclip_batch,
     };
     use crate::{
         groundcover::CancellationToken,
@@ -1692,11 +1776,11 @@ mod tests {
         assert_eq!(state.selected_unclip_target(), Some(1));
 
         assert!(state.remove_selected_unclip_target());
-        assert_eq!(state.unclip.run_options.target_plugins, ["first.omwaddon"]);
+        assert_eq!(state.unclip.run_options.targets, [target("first.omwaddon")]);
         assert_eq!(state.selected_unclip_target(), Some(0));
 
         state.clear_unclip_targets();
-        assert!(state.unclip.run_options.target_plugins.is_empty());
+        assert!(state.unclip.run_options.targets.is_empty());
         assert_eq!(state.selected_unclip_target(), None);
     }
 
@@ -1714,7 +1798,7 @@ mod tests {
     fn pending_unclip_write_confirmation_cannot_start_after_worker_becomes_active() {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
-            target_plugins: vec!["target.omwaddon".to_owned()],
+            targets: vec![target("target.omwaddon")],
             write: true,
         };
         app.convert.unclip.pending_write_confirmation = true;
@@ -1737,7 +1821,7 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.settings.clear_unclip_write_actions_for_test();
         app.convert.unclip.run_options = UnclipRunOptions {
-            target_plugins: vec!["target.omwaddon".to_owned()],
+            targets: vec![target("target.omwaddon")],
             write: true,
         };
 
@@ -1753,7 +1837,7 @@ mod tests {
     fn settings_sync_updates_unclip_write_without_forcing_false() {
         let mut state = ConvertUiState::ready();
         state.unclip.run_options = UnclipRunOptions {
-            target_plugins: vec!["target.omwaddon".to_owned()],
+            targets: vec![target("target.omwaddon")],
             write: false,
         };
         state.unclip.pending_write_confirmation = true;
@@ -1761,7 +1845,10 @@ mod tests {
         state.sync_unclip_write_from_settings(true);
 
         assert!(state.unclip.run_options.write);
-        assert_eq!(state.unclip.run_options.target_plugins, ["target.omwaddon"]);
+        assert_eq!(
+            state.unclip.run_options.targets,
+            [target("target.omwaddon")]
+        );
         assert!(!state.unclip.pending_write_confirmation);
     }
 
@@ -1786,7 +1873,7 @@ mod tests {
     fn unclip_validation_accepts_multiple_usable_targets_for_batch_runs() {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
-            target_plugins: vec!["first.omwaddon".to_owned(), "second.omwaddon".to_owned()],
+            targets: vec![target("first.omwaddon"), target("second.omwaddon")],
             write: false,
         };
 
@@ -2044,11 +2131,15 @@ mod tests {
             .collect()
     }
 
+    fn target(plugin: &str) -> UnclipTargetRunOption {
+        UnclipTargetRunOption::new(plugin, None)
+    }
+
     #[test]
     fn unclip_validation_rejects_blank_target_list() {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
-            target_plugins: vec![" ".to_owned()],
+            targets: vec![target(" ")],
             write: false,
         };
 

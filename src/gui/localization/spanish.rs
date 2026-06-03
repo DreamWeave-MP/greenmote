@@ -50,6 +50,8 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPlugins => "Plugins objetivo",
         UiText::AddFiles => "Añadir archivos...",
         UiText::AddTargetPath => "Añadir objetivo/ruta",
+        UiText::SetUnclipOutputPlugin => "Definir salida...",
+        UiText::ClearUnclipOutputPlugin => "Borrar salida",
         UiText::RemoveSelectedTarget => "Quitar objetivo seleccionado",
         UiText::ClearTargets => "Borrar objetivos",
         UiText::EmptyTargetList => "No hay plugins objetivo añadidos.",
@@ -112,6 +114,7 @@ const fn dialog_text(key: UiText) -> &'static str {
         }
         UiText::SelectOpenMwConfig => "Seleccionar configuración de OpenMW",
         UiText::SelectUnclipTargetPlugins => "Seleccionar plugins objetivo de Unclip",
+        UiText::SelectUnclipOutputPlugin => "Seleccionar plugin de salida de Unclip",
         _ => unreachable!(),
     }
 }

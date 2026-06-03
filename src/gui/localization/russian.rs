@@ -64,6 +64,8 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPlugins => "Целевые плагины",
         UiText::AddFiles => "Добавить файлы...",
         UiText::AddTargetPath => "Добавить плагин/путь",
+        UiText::SetUnclipOutputPlugin => "Задать вывод...",
+        UiText::ClearUnclipOutputPlugin => "Очистить вывод",
         UiText::RemoveSelectedTarget => "Удалить выбранный плагин",
         UiText::ClearTargets => "Очистить список плагинов",
         UiText::EmptyTargetList => "Целевые плагины не добавлены.",
@@ -128,6 +130,7 @@ const fn dialog_text(key: UiText) -> &'static str {
         }
         UiText::SelectOpenMwConfig => "Выбрать конфигурацию OpenMW",
         UiText::SelectUnclipTargetPlugins => "Выбрать целевые плагины Unclip",
+        UiText::SelectUnclipOutputPlugin => "Выбрать выходной плагин Unclip",
         _ => unreachable!(),
     }
 }
