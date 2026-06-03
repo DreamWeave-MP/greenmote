@@ -80,13 +80,49 @@ impl StaticOccluderIndex {
     pub(crate) fn intersects_shape(&self, collider: &RapierCollider) -> bool {
         let bounds = collider.bounds();
         if let Some(cells) = cell_span_for_bounds(bounds) {
-            for cell in cells {
-                if let Some(cell_indices) = self.cells.get(&cell)
-                    && cell_indices
-                        .iter()
-                        .any(|&index| self.intersects_shape_index(collider, index))
-                {
-                    return true;
+            let mut cells = cells;
+            let Some(first_cell) = cells.next() else {
+                return self
+                    .large_occluders
+                    .iter()
+                    .any(|&index| self.intersects_shape_index(collider, index));
+            };
+            if let Some(cell_indices) = self.cells.get(&first_cell)
+                && cell_indices
+                    .iter()
+                    .any(|&index| self.intersects_shape_index(collider, index))
+            {
+                return true;
+            }
+
+            let Some(second_cell) = cells.next() else {
+                return self
+                    .large_occluders
+                    .iter()
+                    .any(|&index| self.intersects_shape_index(collider, index));
+            };
+
+            let mut tested_indices = Vec::new();
+            if let Some(cell_indices) = self.cells.get(&first_cell) {
+                tested_indices.resize(self.occluders.len(), false);
+                for &index in cell_indices {
+                    tested_indices[index] = true;
+                }
+            }
+            for cell in [second_cell].into_iter().chain(cells) {
+                if let Some(cell_indices) = self.cells.get(&cell) {
+                    for &index in cell_indices {
+                        if tested_indices.is_empty() {
+                            tested_indices.resize(self.occluders.len(), false);
+                        }
+                        if tested_indices[index] {
+                            continue;
+                        }
+                        tested_indices[index] = true;
+                        if self.intersects_shape_index(collider, index) {
+                            return true;
+                        }
+                    }
                 }
             }
 
