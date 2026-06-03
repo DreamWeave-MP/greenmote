@@ -86,13 +86,17 @@ impl TerrainIndex {
     pub(crate) fn sample_at(&self, world_x: f32, world_y: f32) -> Option<TerrainSample> {
         let cell = world_cell(world_x, world_y);
         let heights = self.lands.get(&cell)?;
-        let mut sample = sample_terrain(
+        let quad = terrain_quad(
             heights,
             local_cell_coord(world_x, cell.0),
             local_cell_coord(world_y, cell.1),
         );
-        sample.angle = self.generator_angle_at(world_x, world_y, cell);
-        Some(sample)
+        let (slope_x, slope_y) = terrain_quad_slope(quad);
+        Some(TerrainSample {
+            height: terrain_quad_height(quad),
+            normal: terrain_normal(slope_x, slope_y),
+            angle: self.generator_angle_at(world_x, world_y, cell),
+        })
     }
 
     #[must_use]
@@ -267,6 +271,7 @@ fn terrain_quad_slope(quad: TerrainQuad) -> (f32, f32) {
     }
 }
 
+#[cfg(test)]
 fn sample_terrain(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> TerrainSample {
     let quad = terrain_quad(heights, local_x, local_y);
     let height = terrain_quad_height(quad);
@@ -283,6 +288,7 @@ fn sample_terrain(heights: &[[f32; 65]; 65], local_x: f32, local_y: f32) -> Terr
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
+#[cfg(test)]
 fn generator_angle_from_local_heights(
     heights: &[[f32; 65]; 65],
     local_x: f32,
