@@ -425,39 +425,36 @@ impl<'a> MeshCache<'a> {
 
     pub fn geometry(&mut self, static_mesh: &StaticMesh) -> io::Result<&MeshGeometry> {
         let key = &static_mesh.mesh_key;
-        if !self.meshes.contains_key(key) {
-            let mesh = load_geometry(self.vfs, &static_mesh.mesh_path).map_or_else(
+        let cached = self.meshes.entry(key.clone()).or_insert_with(|| {
+            load_geometry(self.vfs, &static_mesh.mesh_path).map_or_else(
                 |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
                 CachedMesh::Loaded,
-            );
-            self.meshes.insert(key.clone(), mesh);
-        }
+            )
+        });
 
-        if let Some(CachedMesh::BoundsOnly {
+        if let CachedMesh::BoundsOnly {
             geometry_error: Some(error),
             ..
-        }) = self.meshes.get(key)
+        } = cached
         {
             return Err(error.to_io());
         }
 
-        if let Some(CachedMesh::BoundsOnly {
+        if let CachedMesh::BoundsOnly {
             stream,
             bounds,
             collider_parts,
             ..
-        }) = self.meshes.get(key)
+        } = cached
         {
             let mesh = mesh_visible_geometry(stream, *bounds, collider_parts.clone())
                 .ok_or_else(|| no_triangle_vertices_error(&static_mesh.mesh_path));
             match mesh {
                 Ok(mesh) => {
-                    self.meshes.insert(key.clone(), CachedMesh::Loaded(mesh));
+                    *cached = CachedMesh::Loaded(mesh);
                 }
                 Err(error) => {
-                    if let Some(CachedMesh::BoundsOnly { geometry_error, .. }) =
-                        self.meshes.get_mut(key)
-                    {
+                    if let CachedMesh::BoundsOnly { geometry_error, .. } = cached {
                         *geometry_error = Some(CachedMeshError::from_io(&error));
                     }
                     return Err(error);
@@ -465,7 +462,7 @@ impl<'a> MeshCache<'a> {
             }
         }
 
-        match &self.meshes[key] {
+        match cached {
             CachedMesh::BoundsOnly { .. } => unreachable!("bounds-only mesh should be promoted"),
             CachedMesh::Loaded(geometry) => Ok(geometry),
             CachedMesh::Failed(error) => Err(error.to_io()),
@@ -473,21 +470,22 @@ impl<'a> MeshCache<'a> {
     }
 
     pub fn bounds(&mut self, static_mesh: &StaticMesh) -> io::Result<MeshAabb> {
-        let key = &static_mesh.mesh_key;
-        if !self.meshes.contains_key(key) {
-            let mesh = load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
-                |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
-                |(stream, bounds)| CachedMesh::BoundsOnly {
-                    collider_parts: mesh_collider_parts(&stream, bounds),
-                    stream,
-                    bounds,
-                    geometry_error: None,
-                },
-            );
-            self.meshes.insert(key.clone(), mesh);
-        }
+        let cached = self
+            .meshes
+            .entry(static_mesh.mesh_key.clone())
+            .or_insert_with(|| {
+                load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
+                    |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
+                    |(stream, bounds)| CachedMesh::BoundsOnly {
+                        collider_parts: mesh_collider_parts(&stream, bounds),
+                        stream,
+                        bounds,
+                        geometry_error: None,
+                    },
+                )
+            });
 
-        match &self.meshes[key] {
+        match cached {
             CachedMesh::BoundsOnly { bounds, .. } => Ok(*bounds),
             CachedMesh::Loaded(geometry) => Ok(geometry.occluder_bounds),
             CachedMesh::Failed(error) => Err(error.to_io()),
@@ -498,21 +496,22 @@ impl<'a> MeshCache<'a> {
         &mut self,
         static_mesh: &StaticMesh,
     ) -> io::Result<&MeshColliderParts> {
-        let key = &static_mesh.mesh_key;
-        if !self.meshes.contains_key(key) {
-            let mesh = load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
-                |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
-                |(stream, bounds)| CachedMesh::BoundsOnly {
-                    collider_parts: mesh_collider_parts(&stream, bounds),
-                    stream,
-                    bounds,
-                    geometry_error: None,
-                },
-            );
-            self.meshes.insert(key.clone(), mesh);
-        }
+        let cached = self
+            .meshes
+            .entry(static_mesh.mesh_key.clone())
+            .or_insert_with(|| {
+                load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
+                    |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
+                    |(stream, bounds)| CachedMesh::BoundsOnly {
+                        collider_parts: mesh_collider_parts(&stream, bounds),
+                        stream,
+                        bounds,
+                        geometry_error: None,
+                    },
+                )
+            });
 
-        match &self.meshes[key] {
+        match cached {
             CachedMesh::BoundsOnly { collider_parts, .. } => Ok(collider_parts),
             CachedMesh::Loaded(geometry) => Ok(&geometry.occluder_parts),
             CachedMesh::Failed(error) => Err(error.to_io()),
