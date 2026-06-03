@@ -42,14 +42,15 @@ pub(super) fn inspect_target_refs(
 ) -> io::Result<TerrainInspectionReport> {
     let mut report = TerrainInspectionReport::default();
 
-    for (cell, key, reference) in target_refs.iter_refs(plugin) {
+    for target_ref in target_refs.iter_ref_entries(plugin) {
         super::check_cancellation(cancellation)?;
         inspect_reference(
             &mut report,
             context,
-            cell,
-            key,
-            reference,
+            target_ref.cell,
+            target_ref.key,
+            target_ref.reference,
+            target_ref.normalized_id,
             &mut reference_sink,
         )?;
     }
@@ -65,9 +66,16 @@ pub(super) fn count_target_refs(
 ) -> io::Result<TerrainInspectionReport> {
     let mut report = TerrainInspectionReport::default();
 
-    for (cell, key, reference) in target_refs.iter_refs(plugin) {
+    for target_ref in target_refs.iter_ref_entries(plugin) {
         super::check_cancellation(cancellation)?;
-        count_reference(&mut report, context, cell, key, reference);
+        count_reference(
+            &mut report,
+            context,
+            target_ref.cell,
+            target_ref.key,
+            target_ref.reference,
+            target_ref.normalized_id,
+        );
     }
 
     Ok(report)
@@ -79,6 +87,7 @@ fn count_reference(
     cell: CellCoord,
     key: (u32, u32),
     reference: &tes3::esp::Reference,
+    normalized_id: &str,
 ) {
     report.refs += 1;
     if reference.deleted == Some(true) {
@@ -95,7 +104,7 @@ fn count_reference(
     };
     let mesh_contact = resolve_ref_mesh_contact(
         report,
-        reference,
+        normalized_id,
         context.static_index,
         context.mesh_contacts,
     );
@@ -106,7 +115,7 @@ fn count_reference(
             reference,
             contact,
             CONTACT_TERRAIN_EPSILON,
-            context.contact_baselines.get(&reference.id),
+            context.contact_baselines.get_normalized_key(normalized_id),
         );
     }
     let _ = classify_static_bounds_occlusion(
@@ -151,6 +160,7 @@ fn inspect_reference(
     cell: CellCoord,
     key: (u32, u32),
     reference: &tes3::esp::Reference,
+    normalized_id: &str,
     reference_sink: &mut impl FnMut(&ReferenceInspection) -> io::Result<()>,
 ) -> io::Result<()> {
     report.refs += 1;
@@ -181,7 +191,7 @@ fn inspect_reference(
     };
     let mesh_contact = resolve_ref_mesh_contact(
         report,
-        reference,
+        normalized_id,
         context.static_index,
         context.mesh_contacts,
     );
@@ -192,7 +202,7 @@ fn inspect_reference(
             reference,
             contact,
             CONTACT_TERRAIN_EPSILON,
-            context.contact_baselines.get(&reference.id),
+            context.contact_baselines.get_normalized_key(normalized_id),
         )),
         MeshContactResolution::UnresolvedStatic | MeshContactResolution::MissingContact { .. } => {
             None
@@ -847,11 +857,11 @@ impl<'a> MeshContactResolution<'a> {
 
 fn resolve_ref_mesh_contact<'a>(
     report: &mut TerrainInspectionReport,
-    reference: &tes3::esp::Reference,
+    normalized_id: &str,
     static_index: &'a StaticMeshIndex,
     mesh_contacts: &'a mut MeshCache<'_>,
 ) -> MeshContactResolution<'a> {
-    let Some(static_mesh) = static_index.get(&reference.id) else {
+    let Some(static_mesh) = static_index.get_normalized_key(normalized_id) else {
         report.refs_without_resolved_static += 1;
         return MeshContactResolution::UnresolvedStatic;
     };

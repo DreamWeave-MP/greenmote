@@ -18,7 +18,21 @@ pub(crate) struct TargetRefIndex {
 struct TargetRefCell {
     grid: CellCoord,
     object_index: usize,
-    reference_keys: Vec<(u32, u32)>,
+    references: Vec<TargetRefEntry>,
+}
+
+struct TargetRefEntry {
+    key: (u32, u32),
+    normalized_id: String,
+}
+
+pub(crate) struct TargetRef<'a> {
+    pub(crate) cell: CellCoord,
+    pub(crate) key: (u32, u32),
+    pub(crate) reference: &'a Reference,
+    // Cached from `reference.id` during `TargetRefIndex::build`; target
+    // reference IDs must not be mutated before `iter_ref_entries` is used.
+    pub(crate) normalized_id: &'a str,
 }
 
 impl TargetRefIndex {
@@ -42,26 +56,30 @@ impl TargetRefIndex {
             }
 
             exterior_ref_count += cell.references.len();
-            let mut reference_keys = Vec::new();
+            let mut references = Vec::new();
             for (key, reference) in &cell.references {
                 if !policy.target_filter.includes(&reference.id) {
                     continue;
                 }
-                reference_keys.push(*key);
+                let normalized_id = reference.id.to_lowercase();
+                references.push(TargetRefEntry {
+                    key: *key,
+                    normalized_id: normalized_id.clone(),
+                });
                 if reference.deleted != Some(true) {
-                    target_static_ids.insert(reference.id.to_lowercase());
+                    target_static_ids.insert(normalized_id);
                 }
             }
-            if reference_keys.is_empty() {
+            if references.is_empty() {
                 continue;
             }
 
-            reference_keys.sort_unstable();
+            references.sort_by_key(|reference| reference.key);
             target_cells.insert(cell.data.grid);
             cells.push(TargetRefCell {
                 grid: cell.data.grid,
                 object_index,
-                reference_keys,
+                references,
             });
         }
 
@@ -75,18 +93,30 @@ impl TargetRefIndex {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn iter_refs<'a>(
         &'a self,
         plugin: &'a Plugin,
     ) -> impl Iterator<Item = (CellCoord, (u32, u32), &'a Reference)> + 'a {
+        self.iter_ref_entries(plugin)
+            .map(|entry| (entry.cell, entry.key, entry.reference))
+    }
+
+    pub(crate) fn iter_ref_entries<'a>(
+        &'a self,
+        plugin: &'a Plugin,
+    ) -> impl Iterator<Item = TargetRef<'a>> + 'a {
         self.cells.iter().flat_map(|target_cell| {
             let TES3Object::Cell(cell) = &plugin.objects[target_cell.object_index] else {
                 unreachable!("target ref index cell should still point to a CELL")
             };
-            target_cell.reference_keys.iter().filter_map(move |key| {
-                cell.references
-                    .get(key)
-                    .map(|reference| (target_cell.grid, *key, reference))
+            target_cell.references.iter().filter_map(move |entry| {
+                cell.references.get(&entry.key).map(|reference| TargetRef {
+                    cell: target_cell.grid,
+                    key: entry.key,
+                    reference,
+                    normalized_id: &entry.normalized_id,
+                })
             })
         })
     }
@@ -225,6 +255,33 @@ mod tests {
                 ((2, 0), (4, 0), "flora_late_key"),
                 ((2, 0), (2, 0), "flora_duplicate_cell"),
             ]
+        );
+    }
+
+    #[test]
+    fn target_ref_entries_reuse_normalized_ids_in_stable_order() {
+        let plugin = Plugin {
+            objects: vec![TES3Object::Cell(exterior_cell([
+                ((2, 0), reference_with_id("Flora_Late")),
+                ((1, 0), reference_with_id("FLORA_Early")),
+            ]))],
+        };
+        let policy = test_policy_with_filter(&["^flora_.*"], &[]);
+        let index = TargetRefIndex::build(
+            &plugin,
+            &policy,
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
+
+        let entries = index
+            .iter_ref_entries(&plugin)
+            .map(|entry| (entry.key, entry.normalized_id))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            entries,
+            vec![((1, 0), "flora_early"), ((2, 0), "flora_late")]
         );
     }
 

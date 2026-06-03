@@ -76,12 +76,13 @@ pub(crate) fn plan_unclip_adjustments(
         retain_static_bounds_details,
         cancellation,
     };
-    for (cell_grid, key, reference) in target_refs.iter_refs(plugin) {
+    for target_ref in target_refs.iter_ref_entries(plugin) {
         super::check_cancellation(cancellation)?;
         let change = adjust_reference_for_terrain_and_static_bounds(
-            cell_grid,
-            key,
-            reference,
+            target_ref.cell,
+            target_ref.key,
+            target_ref.reference,
+            target_ref.normalized_id,
             &mut context,
         )?;
         record_reference_change(change, &mut plan);
@@ -266,6 +267,7 @@ fn adjust_reference_for_terrain_and_static_bounds(
     cell: CellCoord,
     key: (u32, u32),
     reference: &tes3::esp::Reference,
+    normalized_id: &str,
     context: &mut WritePlanningContext<'_, '_>,
 ) -> io::Result<WriteReferenceChange> {
     if reference.deleted == Some(true) {
@@ -275,7 +277,7 @@ fn adjust_reference_for_terrain_and_static_bounds(
     let static_occluders = context.static_occluders;
     let policy = context.policy;
     let target = WriteTarget { cell, key };
-    let Some(static_mesh) = context.static_index.get(&reference.id) else {
+    let Some(static_mesh) = context.static_index.get_normalized_key(normalized_id) else {
         return Ok(WriteReferenceChange::None(None));
     };
     let generated_placement = context.generated_placements.get(static_mesh);

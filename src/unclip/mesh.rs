@@ -52,6 +52,7 @@ impl StaticMeshIndex {
         index
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn get(&self, id: &str) -> Option<&StaticMesh> {
         self.statics.get(&id.to_lowercase())

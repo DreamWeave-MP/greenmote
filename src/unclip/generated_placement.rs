@@ -120,12 +120,14 @@ impl OriginPlacementSamples {
         cancellation: &CancellationToken,
     ) -> io::Result<Self> {
         let mut groups = BTreeMap::<String, OriginPlacementSampleGroup>::new();
-        for (_, _, reference) in target_refs.iter_refs(plugin) {
+        for target_ref in target_refs.iter_ref_entries(plugin) {
             super::check_cancellation(cancellation)?;
+            let reference = target_ref.reference;
             if reference.deleted == Some(true) {
                 continue;
             }
-            let Some(static_mesh) = static_index.get(&reference.id) else {
+            let Some(static_mesh) = static_index.get_normalized_key(target_ref.normalized_id)
+            else {
                 continue;
             };
             let mesh_key = static_mesh.mesh_key().to_owned();
