@@ -95,7 +95,7 @@ impl TerrainIndex {
         Some(TerrainSample {
             height: terrain_quad_height(quad),
             normal: terrain_normal(slope_x, slope_y),
-            angle: self.generator_angle_at(world_x, world_y, cell),
+            angle: self.generator_angle_at(world_x, world_y, cell, heights),
         })
     }
 
@@ -109,7 +109,14 @@ impl TerrainIndex {
         world_x: f32,
         world_y: f32,
         fallback_cell: CellCoord,
+        fallback_heights: &[[f32; 65]; 65],
     ) -> TerrainAngle {
+        if let Some(angle) =
+            same_cell_generator_angle(world_x, world_y, fallback_cell, fallback_heights)
+        {
+            return angle;
+        }
+
         generator_angle_from_vertices(world_x, world_y, |vertex_x, vertex_y| {
             self.height_at_global_vertex(vertex_x, vertex_y, fallback_cell)
         })
@@ -343,6 +350,33 @@ fn generator_angle_from_stencil(
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
+fn same_cell_generator_angle(
+    world_x: f32,
+    world_y: f32,
+    cell: CellCoord,
+    heights: &[[f32; 65]; 65],
+) -> Option<TerrainAngle> {
+    let vertex_x = (world_x / LAND_VERTEX_SPACING).ceil() as i32;
+    let vertex_y = (world_y / LAND_VERTEX_SPACING).ceil() as i32;
+    let min_x = cell.0 * 64;
+    let min_y = cell.1 * 64;
+    if vertex_x <= min_x || vertex_x >= min_x + 64 || vertex_y <= min_y || vertex_y >= min_y + 64 {
+        return None;
+    }
+
+    let local_x = usize::try_from(vertex_x - min_x).ok()?;
+    let local_y = usize::try_from(vertex_y - min_y).ok()?;
+    let prev_x = local_x.checked_sub(1)?;
+    let prev_y = local_y.checked_sub(1)?;
+    Some(generator_angle_from_stencil(
+        heights[local_y][local_x],
+        heights[prev_y][local_x],
+        heights[local_y][prev_x],
+        heights[prev_y][prev_x],
+    ))
+}
+
 fn terrain_normal(slope_x: f32, slope_y: f32) -> [f32; 3] {
     Vec3::new(-slope_x, -slope_y, 1.0).normalize().to_array()
 }
@@ -441,6 +475,17 @@ mod tests {
     }
 
     #[test]
+    fn sample_at_same_cell_generator_angle_matches_global_vertex_path() {
+        let terrain = TerrainIndex::from_decoded_heights((0, 0), patterned_heights(0.0));
+        let sample = terrain.sample_at(320.0, 448.0).unwrap();
+        let expected = generator_angle_from_vertices(320.0, 448.0, |vertex_x, vertex_y| {
+            terrain.height_at_global_vertex(vertex_x, vertex_y, (0, 0))
+        });
+
+        assert_eq!(sample.angle, expected);
+    }
+
+    #[test]
     fn height_at_matches_sample_height_across_cells() {
         let terrain = TerrainIndex {
             lands: HashMap::from([
@@ -489,6 +534,32 @@ mod tests {
         assert_eq!(
             terrain.height_at(8_192.0, 0.0),
             terrain.sample_at(8_192.0, 0.0).map(|sample| sample.height)
+        );
+    }
+
+    #[test]
+    fn generator_style_angle_samples_present_boundary_neighbor() {
+        let mut left: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        let mut right: Box<[[f32; 65]; 65]> = vec![[0.0; 65]; 65]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("terrain test grid should have 65 rows"));
+        left[1][63] = 64.0;
+        left[0][63] = 32.0;
+        right[1][0] = 160.0;
+        right[0][0] = 96.0;
+        let terrain = TerrainIndex {
+            lands: HashMap::from([((0, 0), left), ((1, 0), right)]),
+        };
+
+        let sample = terrain.sample_at(8_192.0, 128.0).unwrap();
+
+        assert_eq!(
+            sample.angle,
+            generator_angle_from_stencil(160.0, 96.0, 64.0, 32.0)
         );
     }
 
