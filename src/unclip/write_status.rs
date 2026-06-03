@@ -159,6 +159,9 @@ fn water_write_status(input: &WriteStatusInput) -> Option<&'static str> {
         if !crossing {
             return None;
         }
+        if !input.write.actions.terrain_z() {
+            return Some("skipped_terrain_z_disabled");
+        }
         if !input.write.actions.water_delete() {
             return Some("skipped_water_delete_disabled");
         }
@@ -275,6 +278,16 @@ mod tests {
         assert_eq!(write_status_label(&input), "would_delete_water_crossing");
         input.write.actions.disable_water_delete();
         assert_eq!(write_status_label(&input), "skipped_water_delete_disabled");
+    }
+
+    #[test]
+    fn write_status_reports_terrain_disabled_for_water_crossing_prerequisite() {
+        let mut input = base_input(MeshResolutionStatus::Resolved);
+        input.contact_delta = Some(10.0);
+        input.water_crossing = Some(true);
+        input.write.actions.disable_terrain_z();
+
+        assert_eq!(write_status_label(&input), "skipped_terrain_z_disabled");
     }
 
     #[test]

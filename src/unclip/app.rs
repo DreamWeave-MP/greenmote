@@ -386,6 +386,7 @@ impl UnclipProfiler {
         self.counter("write_changed_refs", write_plan.changed_refs());
         self.counter("write_adjusted_refs", write_plan.adjusted_refs);
         self.counter("write_deleted_refs", write_plan.deleted_refs);
+        self.counter("write_water_deleted_refs", write_plan.water_deleted_refs);
         self.counter("write_moved_refs", write_plan.moved_refs);
         self.counter("write_oriented_refs", write_plan.oriented_refs);
     }

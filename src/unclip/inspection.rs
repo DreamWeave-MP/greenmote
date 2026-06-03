@@ -302,6 +302,9 @@ impl ReferenceInspectionInput<'_, '_> {
         let placement = self.generated_placement?;
         let old_z = self.reference.translation[2];
         let new_z = terrain_z + placement.z_offset;
+        if (old_z - new_z).abs() <= placement.tolerance {
+            return None;
+        }
         Some(water_crosses_exterior_plane(old_z, new_z))
     }
 }

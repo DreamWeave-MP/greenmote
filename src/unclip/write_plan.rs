@@ -130,7 +130,11 @@ pub(crate) struct WritePlan {
 
 impl WritePlan {
     pub(crate) const fn changed_refs(&self) -> usize {
-        self.adjusted_refs + self.deleted_refs + self.moved_refs + self.oriented_refs
+        self.adjusted_refs
+            + self.deleted_refs
+            + self.water_deleted_refs
+            + self.moved_refs
+            + self.oriented_refs
     }
 
     fn sort_records(&mut self) {

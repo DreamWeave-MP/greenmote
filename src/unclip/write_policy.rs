@@ -231,7 +231,6 @@ fn record_reference_change(change: WriteReferenceChange, plan: &mut WritePlan) {
                 plan.deletions.push(deletion);
             }
             if let Some(deletion) = changes.water_deletion {
-                plan.deleted_refs += 1;
                 plan.water_deleted_refs += 1;
                 plan.water_deletions.push(deletion);
             }
@@ -332,14 +331,17 @@ fn adjust_reference_for_terrain_and_static_bounds(
         corrected_translation[2] -=
             terrain_delta(reference.translation, terrain_z, generated_placement);
     }
-
-    if let Some(water_deletion) = plan_water_delete_change(
+    let planned_adjustment = plan_contact_adjustment_from_terrain(
         target,
         reference,
-        reference.translation[2],
-        corrected_translation[2],
+        terrain_z,
         policy,
-    ) {
+        generated_placement,
+    );
+
+    if let Some(water_deletion) =
+        plan_water_delete_change(target, reference, planned_adjustment.as_ref(), policy)
+    {
         let changes = WriteReferenceChanges {
             water_deletion: Some(water_deletion),
             ..WriteReferenceChanges::default()
@@ -388,13 +390,15 @@ fn adjust_reference_for_terrain_and_static_bounds(
 fn plan_water_delete_change(
     target: WriteTarget,
     reference: &tes3::esp::Reference,
-    old_z: f32,
-    new_z: f32,
+    adjustment: Option<&WriteAdjustment>,
     policy: &UnclipPolicy,
 ) -> Option<WriteWaterDeletion> {
-    if !policy.write_actions.water_delete() || !policy.write_actions.terrain_z() {
+    if !policy.write_actions.water_delete() {
         return None;
     }
+    let adjustment = adjustment?;
+    let old_z = adjustment.old_z;
+    let new_z = adjustment.new_z;
     if !water_crosses_exterior_plane(old_z, new_z) {
         return None;
     }
@@ -804,15 +808,13 @@ fn apply_terrain_adjustment_to_changes(
     final_translation: &mut [f32; 3],
     context: AdjustmentOrientationContext<'_>,
 ) {
-    if let Some(terrain_z) = context.terrain_z
-        && let Some(adjustment) = plan_contact_adjustment(ContactAdjustmentInput {
-            target: context.target,
-            reference: context.reference,
-            terrain_z,
-            policy: context.policy,
-            generated_placement: context.generated_placement,
-        })
-    {
+    if let Some(adjustment) = plan_contact_adjustment_from_terrain(
+        context.target,
+        context.reference,
+        context.terrain_z,
+        context.policy,
+        context.generated_placement,
+    ) {
         final_translation[2] = adjustment.new_z;
         changes.adjustment = Some(adjustment);
     }
@@ -1000,6 +1002,22 @@ fn plan_contact_adjustment(input: ContactAdjustmentInput<'_>) -> Option<WriteAdj
         sample_kind,
         contact_position: sample_position,
         terrain_z: input.terrain_z,
+    })
+}
+
+fn plan_contact_adjustment_from_terrain(
+    target: WriteTarget,
+    reference: &tes3::esp::Reference,
+    terrain_z: Option<f32>,
+    policy: &UnclipPolicy,
+    generated_placement: Option<GeneratedPlacement>,
+) -> Option<WriteAdjustment> {
+    plan_contact_adjustment(ContactAdjustmentInput {
+        target,
+        reference,
+        terrain_z: terrain_z?,
+        policy,
+        generated_placement,
     })
 }
 
@@ -1618,8 +1636,9 @@ mod tests {
         let TES3Object::Cell(cell) = &plugin.objects[0] else {
             unreachable!("test plugin should contain a CELL")
         };
-        assert_eq!(plan.deleted_refs, 1);
+        assert_eq!(plan.deleted_refs, 0);
         assert_eq!(plan.water_deleted_refs, 1);
+        assert_eq!(plan.changed_refs(), 1);
         assert!(!cell.references.contains_key(&(3, 4)));
         assert!(cell.references.contains_key(&(7, 8)));
     }
@@ -1627,15 +1646,24 @@ mod tests {
     #[test]
     fn water_delete_change_detects_crossing() {
         let reference = reference_at_z(4.0);
+        let policy = test_policy();
+        let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
+            &reference,
+            -2.0,
+            &policy,
+            Some(GeneratedPlacement {
+                z_offset: 0.0,
+                tolerance: 4.0,
+            }),
+        ));
         let deletion = super::plan_water_delete_change(
             super::WriteTarget {
                 cell: (1, 2),
                 key: (3, 4),
             },
             &reference,
-            4.0,
-            -2.0,
-            &test_policy(),
+            adjustment.as_ref(),
+            &policy,
         );
 
         let deletion = deletion.expect("crossing the exterior water plane should delete");
@@ -1647,6 +1675,25 @@ mod tests {
     #[test]
     fn water_delete_change_ignores_same_side_and_on_plane() {
         let reference = reference_at_z(4.0);
+        let policy = test_policy();
+        let same_side_adjustment = plan_contact_adjustment(test_contact_adjustment_input(
+            &reference,
+            3.0,
+            &policy,
+            Some(GeneratedPlacement {
+                z_offset: 0.0,
+                tolerance: 0.0,
+            }),
+        ));
+        let on_plane_adjustment = plan_contact_adjustment(test_contact_adjustment_input(
+            &reference,
+            -1.0,
+            &policy,
+            Some(GeneratedPlacement {
+                z_offset: 0.0,
+                tolerance: 0.0,
+            }),
+        ));
         assert!(
             super::plan_water_delete_change(
                 super::WriteTarget {
@@ -1654,9 +1701,8 @@ mod tests {
                     key: (3, 4),
                 },
                 &reference,
-                4.0,
-                3.0,
-                &test_policy(),
+                same_side_adjustment.as_ref(),
+                &policy,
             )
             .is_none()
         );
@@ -1667,9 +1713,37 @@ mod tests {
                     key: (3, 4),
                 },
                 &reference,
-                4.0,
-                -1.0,
-                &test_policy(),
+                on_plane_adjustment.as_ref(),
+                &policy,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn water_delete_change_ignores_crossing_within_terrain_tolerance() {
+        let reference = reference_at_z(0.0);
+        let policy = test_policy();
+        let adjustment = plan_contact_adjustment(test_contact_adjustment_input(
+            &reference,
+            -2.0,
+            &policy,
+            Some(GeneratedPlacement {
+                z_offset: 0.0,
+                tolerance: 4.0,
+            }),
+        ));
+
+        assert!(adjustment.is_none());
+        assert!(
+            super::plan_water_delete_change(
+                super::WriteTarget {
+                    cell: (1, 2),
+                    key: (3, 4),
+                },
+                &reference,
+                adjustment.as_ref(),
+                &policy,
             )
             .is_none()
         );

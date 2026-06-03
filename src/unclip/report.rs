@@ -230,7 +230,7 @@ fn write_write_summary_text(
             )?;
         }
         writeln!(stdout, "Adjusted refs: {}", write.adjusted_refs)?;
-        writeln!(stdout, "Deleted refs: {}", write.deleted_refs)?;
+        writeln!(stdout, "Static-deleted refs: {}", write.deleted_refs)?;
         writeln!(stdout, "Water-deleted refs: {}", write.water_deleted_refs)?;
         writeln!(stdout, "Moved refs: {}", write.moved_refs)?;
         writeln!(stdout, "Oriented refs: {}", write.oriented_refs)?;
