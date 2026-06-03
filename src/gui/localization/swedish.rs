@@ -51,7 +51,7 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::AddFiles => "Lägg till filer...",
         UiText::AddTargetPath => "Lägg till mål/sökväg",
         UiText::SetUnclipOutputPlugin => "Ange utdata...",
-        UiText::ClearUnclipOutputPlugin => "Rensa utdata",
+        UiText::ClearUnclipOutputPlugin => "Rensa utdataplugin",
         UiText::RemoveSelectedTarget => "Ta bort valt mål",
         UiText::ClearTargets => "Rensa mål",
         UiText::EmptyTargetList => "Inga målplugin tillagda.",

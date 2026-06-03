@@ -9,10 +9,7 @@ use crate::{
     unclip::{self, UnclipArgs},
 };
 
-use super::{ConvertRunOptions, GreenmoteApp, UiText, UnclipRunOptions};
-
-#[cfg(test)]
-use super::UnclipTargetRunOption;
+use super::{ConvertRunOptions, GreenmoteApp, UiText, UnclipRunOptions, UnclipTargetRunOption};
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
 const MIN_WIDGET_SIZE: f32 = 1.0;
@@ -383,6 +380,12 @@ impl GreenmoteApp {
     fn show_unclip_target_list(&mut self, ui: &mut egui::Ui) {
         ui.label(self.localizer.text(UiText::TargetPlugins));
 
+        self.show_selected_unclip_target_list(ui);
+        self.show_unclip_target_actions(ui);
+        self.show_unclip_target_path_entry(ui);
+    }
+
+    fn show_selected_unclip_target_list(&mut self, ui: &mut egui::Ui) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(finite_widget_extent(ui.available_width()));
             if self.convert.unclip.run_options.targets.is_empty() {
@@ -422,7 +425,9 @@ impl GreenmoteApp {
                     });
             }
         });
+    }
 
+    fn show_unclip_target_actions(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if ui.button(self.localizer.text(UiText::AddFiles)).clicked()
                 && let Some(paths) = select_plugin_files(self.localizer)
@@ -494,7 +499,9 @@ impl GreenmoteApp {
                 self.convert.clear_unclip_targets();
             }
         });
+    }
 
+    fn show_unclip_target_path_entry(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.convert.unclip.pending_target)
@@ -738,7 +745,7 @@ impl GreenmoteApp {
             .targets
             .iter()
             .filter(|target| !target.plugin.trim().is_empty())
-            .map(|target| target.label())
+            .map(UnclipTargetRunOption::label)
             .collect::<Vec<_>>();
         let actions = self.settings.unclip_write_action_names().join(", ");
         let mut confirm = false;

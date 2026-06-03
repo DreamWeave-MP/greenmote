@@ -65,7 +65,7 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::AddFiles => "Добавить файлы...",
         UiText::AddTargetPath => "Добавить плагин/путь",
         UiText::SetUnclipOutputPlugin => "Задать вывод...",
-        UiText::ClearUnclipOutputPlugin => "Очистить вывод",
+        UiText::ClearUnclipOutputPlugin => "Очистить плагин вывода",
         UiText::RemoveSelectedTarget => "Удалить выбранный плагин",
         UiText::ClearTargets => "Очистить список плагинов",
         UiText::EmptyTargetList => "Целевые плагины не добавлены.",

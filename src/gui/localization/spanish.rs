@@ -51,7 +51,7 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::AddFiles => "Añadir archivos...",
         UiText::AddTargetPath => "Añadir objetivo/ruta",
         UiText::SetUnclipOutputPlugin => "Definir salida...",
-        UiText::ClearUnclipOutputPlugin => "Borrar salida",
+        UiText::ClearUnclipOutputPlugin => "Borrar plugin de salida",
         UiText::RemoveSelectedTarget => "Quitar objetivo seleccionado",
         UiText::ClearTargets => "Borrar objetivos",
         UiText::EmptyTargetList => "No hay plugins objetivo añadidos.",
