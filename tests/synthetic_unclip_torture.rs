@@ -21,7 +21,7 @@ use tes3::{
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
-type NifVec3 = rapier3d::math::Vec3;
+type NifVec3 = tes3::nif::glam::Vec3;
 
 #[derive(Clone, Copy)]
 struct Profile {

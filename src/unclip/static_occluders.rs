@@ -231,7 +231,7 @@ mod tests {
         setup::{ContextPlugin, build_static_index},
     };
 
-    type NifVec3 = rapier3d::math::Vec3;
+    type NifVec3 = tes3::nif::glam::Vec3;
 
     use super::{
         EffectiveRefKey, EffectiveRefState, ExclusionReason, build_static_occluders,

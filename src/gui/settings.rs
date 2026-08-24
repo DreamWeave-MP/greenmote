@@ -295,7 +295,7 @@ impl GreenmoteApp {
         egui::Panel::bottom("settings_footer")
             .resizable(false)
             .show_separator_line(true)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let settings_error = self.settings.error.clone();
                 let settings_status = self.settings.status.clone();
                 let settings_dirty = self.settings.is_dirty();

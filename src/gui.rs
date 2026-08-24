@@ -66,7 +66,7 @@ impl eframe::App for GreenmoteApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             self.show_tab_bar(ui);
             ui.separator();
             self.show_active_screen(ui, &ctx);

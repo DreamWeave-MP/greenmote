@@ -325,7 +325,7 @@ impl GreenmoteApp {
         egui::Panel::bottom("convert_output_actions")
             .resizable(false)
             .show_separator_line(true)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 self.show_convert_output_actions(ui, ctx);
             });
 
