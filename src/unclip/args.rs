@@ -113,8 +113,9 @@ pub struct UnclipArgs {
     #[arg(long = "no-default-road-textures")]
     pub no_default_road_textures: bool,
 
-    /// Continue when a static occluder mesh cannot be loaded instead of failing.
-    #[arg(long = "ignore-missing-meshes", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+    /// Deprecated and ignored: unclip always continues past static occluder meshes it cannot
+    /// load and lists them as a warning in the report.
+    #[arg(long = "ignore-missing-meshes", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL", hide = true)]
     pub ignore_missing_meshes: Option<bool>,
 }
 

@@ -448,6 +448,12 @@ impl PartialEq for MeshContact {
 }
 
 impl MeshAabb {
+    /// The bounds of a mesh without any triangle vertices.
+    pub const EMPTY: Self = Self {
+        min: [0.0; 3],
+        max: [0.0; 3],
+    };
+
     #[cfg(test)]
     #[must_use]
     pub fn world_aabb(
@@ -911,23 +917,25 @@ fn load_geometry(vfs: &VFS, mesh_path: &str) -> io::Result<MeshGeometry> {
 
 /// The bounds-only cache entry for a mesh: its stream, occluder bounds and collider parts,
 /// or the load failure.
+///
+/// A mesh that loads but has no triangle vertices at all (`EditorMarker.nif`, sound and light
+/// markers) occludes nothing, so it is cached as an empty no-collision entry rather than a
+/// failure. Only a target grass mesh needs geometry, and `geometry` still reports that case.
 fn load_bounds_only(vfs: &VFS, static_mesh: &StaticMesh) -> CachedMesh {
-    load_bounds(vfs, &static_mesh.mesh_path).map_or_else(
-        |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
-        |(stream, bounds)| CachedMesh::BoundsOnly {
-            collider_parts: mesh_collider_parts(&stream, bounds),
-            stream,
-            bounds,
-            geometry_error: None,
-        },
-    )
-}
-
-fn load_bounds(vfs: &VFS, mesh_path: &str) -> io::Result<(NiStream, MeshAabb)> {
-    let stream = load_stream(vfs, mesh_path)?;
-    let bounds = mesh_bounds(&stream).ok_or_else(|| no_triangle_vertices_error(mesh_path))?;
-
-    Ok((stream, bounds))
+    let stream = match load_stream(vfs, &static_mesh.mesh_path) {
+        Ok(stream) => stream,
+        Err(error) => return CachedMesh::Failed(CachedMeshError::from_io(&error)),
+    };
+    let (bounds, collider_parts) = match mesh_bounds(&stream) {
+        Some(bounds) => (bounds, mesh_collider_parts(&stream, bounds)),
+        None => (MeshAabb::EMPTY, MeshColliderParts::no_collision()),
+    };
+    CachedMesh::BoundsOnly {
+        collider_parts,
+        stream,
+        bounds,
+        geometry_error: None,
+    }
 }
 
 fn load_stream(vfs: &VFS, mesh_path: &str) -> io::Result<NiStream> {
@@ -1758,6 +1766,31 @@ mod tests {
         assert_eq!(cache.bounds(&static_mesh).unwrap(), expected_bounds());
 
         assert_eq!(cache.cached_mesh_state(&static_mesh), Some("bounds_only"));
+    }
+
+    #[test]
+    fn mesh_cache_treats_geometry_free_mesh_as_empty_no_collision_occluder() {
+        let temp_dir = TempDir::new("geometry-free");
+        let path = temp_dir.path().join("Meshes/EditorMarker.nif");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut stream = NiStream::new();
+        let root = insert_node(&mut stream, "EditorMarker", Vec::new(), None, 0);
+        push_root(&mut stream, root);
+        std::fs::write(&path, stream.save_bytes().unwrap()).unwrap();
+        let vfs = VFS::from_directories(vec![temp_dir.path().to_path_buf()], None);
+        let static_mesh = test_static_mesh("Meshes/EditorMarker.nif");
+        let mut cache = MeshCache::new(&vfs);
+
+        assert_eq!(cache.bounds(&static_mesh).unwrap(), MeshAabb::EMPTY);
+        let parts = cache.collider_parts(&static_mesh).unwrap();
+        assert_eq!(parts.source(), MeshColliderSource::NoCollision);
+        assert!(parts.is_empty());
+        assert_eq!(cache.cached_mesh_state(&static_mesh), Some("bounds_only"));
+
+        // A grass mesh without geometry still cannot be measured.
+        let error = cache.geometry(&static_mesh).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("no triangle vertices"));
     }
 
     #[test]

@@ -176,7 +176,7 @@ Flags and `[unclip]` keys:
 - `--include-grass-id` / `--exclude-grass-id` select target references by full ID regex.
 - `--include-occluder-id` / `--exclude-occluder-id` select statics that count as solid. Built-in exclusions cover tree-like statics; `--no-default-occluder-excludes` drops them.
 - `--road-texture-path` adds road texture regexes to the built-in list; `--no-default-road-textures` drops the built-ins.
-- `--ignore-missing-meshes` continues when a static's mesh cannot be loaded. Without it unclip stops, because clipping into those statics could not be detected.
+- Statics whose mesh cannot be loaded, or that have no collision geometry such as `EditorMarker.nif`, never stop a run. Meshes that fail to load are listed as a warning in the report because clipping into those statics cannot be detected. The old `--ignore-missing-meshes` flag is still accepted and does nothing.
 - Unknown `[unclip]` keys are reported as warnings and dropped when the GUI saves settings.
 ## GUI Features
 

@@ -135,9 +135,6 @@ pub fn run(
             .map(|cell| [cell.0, cell.1])
             .collect();
         report.occluders = world.occluder_report.clone();
-        if !report.occluders.missing_meshes.is_empty() && !config.ignore_missing_meshes {
-            return Err(missing_meshes_error(&report.occluders));
-        }
         check()?;
 
         let verdicts = decide_all(&world, &policy, &source, &target_refs);
@@ -149,7 +146,10 @@ pub fn run(
     report.mesh_errors = mesh_errors(&verdicts);
 
     if config.write && report.counts.fix + report.counts.delete > 0 {
-        report.write = Some(write_changes(&mut source, &source_path, &mode, &verdicts)?);
+        report.write = Some(
+            write_changes(&mut source, &source_path, &mode, &verdicts)
+                .map_err(super::write::WriteFailure::wrap)?,
+        );
         profiler.phase("write and verify");
     }
 
@@ -464,32 +464,4 @@ fn write_log(
         report::write_ref_lines(&mut log, verdicts)?;
     }
     log.flush()
-}
-
-fn missing_meshes_error(report: &StaticOccluderBuildReport) -> io::Error {
-    let mut lines = report
-        .missing_meshes
-        .iter()
-        .take(20)
-        .map(|missing| {
-            format!(
-                "  {} ({}): {}",
-                missing.mesh_path, missing.static_id, missing.error
-            )
-        })
-        .collect::<Vec<_>>();
-    if report.missing_meshes.len() > 20 {
-        lines.push(format!(
-            "  ... and {} more",
-            report.missing_meshes.len() - 20
-        ));
-    }
-    io::Error::new(
-        io::ErrorKind::NotFound,
-        format!(
-            "{} static occluder meshes could not be loaded, so clipping into those statics cannot be detected. Fix the load order or pass --ignore-missing-meshes to continue without them:\n{}",
-            report.missing_meshes.len(),
-            lines.join("\n")
-        ),
-    )
 }

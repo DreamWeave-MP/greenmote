@@ -6,6 +6,9 @@ use std::{collections::BTreeMap, io, io::Write, path::PathBuf};
 
 use serde::Serialize;
 
+/// How many unloadable occluder meshes the text report lists before summarising the rest.
+const MAX_LISTED_MISSING_MESHES: usize = 20;
+
 use super::{
     args::UnclipPolicy,
     decide::{RefVerdict, Verdict, VerdictCounts},
@@ -181,9 +184,27 @@ fn write_world(out: &mut dyn Write, report: &Report) -> io::Result<()> {
     if !occluders.missing_meshes.is_empty() {
         writeln!(
             out,
-            "  {} occluder meshes could not be loaded (ignored)",
+            "WARNING: {} static occluder meshes could not be loaded, so clipping into those statics was not detected. Check the load order if they are not markers:",
             occluders.missing_meshes.len()
         )?;
+        for missing in occluders
+            .missing_meshes
+            .iter()
+            .take(MAX_LISTED_MISSING_MESHES)
+        {
+            writeln!(
+                out,
+                "  {} ({}): {}",
+                missing.mesh_path, missing.static_id, missing.error
+            )?;
+        }
+        if occluders.missing_meshes.len() > MAX_LISTED_MISSING_MESHES {
+            writeln!(
+                out,
+                "  ... and {} more",
+                occluders.missing_meshes.len() - MAX_LISTED_MISSING_MESHES
+            )?;
+        }
     }
     writeln!(out)
 }

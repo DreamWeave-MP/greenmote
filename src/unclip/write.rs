@@ -22,6 +22,41 @@ pub(crate) const ORIGINAL_BACKUP_SUFFIX: &str = ".greenmote-original";
 /// Copy of the previous file, refreshed on every write.
 pub(crate) const PREVIOUS_BACKUP_SUFFIX: &str = ".bak";
 
+/// Marker wrapped around any error raised while writing or verifying the rewritten plugin.
+///
+/// Errors before this point (loading, measuring, deciding) leave the plugin untouched, so a
+/// batch can safely move on to its next target. A failure during the write itself may have
+/// left backups or a partial output behind, which is why callers stop the batch on it.
+#[derive(Debug)]
+pub(crate) struct WriteFailure(io::Error);
+
+impl WriteFailure {
+    pub(crate) fn wrap(error: io::Error) -> io::Error {
+        let kind = error.kind();
+        io::Error::new(kind, Self(error))
+    }
+
+    /// Whether `error` came out of the write phase.
+    pub(crate) fn is_write_failure(error: &io::Error) -> bool {
+        match error.get_ref() {
+            Some(inner) => inner.is::<Self>(),
+            None => false,
+        }
+    }
+}
+
+impl std::fmt::Display for WriteFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for WriteFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 /// Where the rewritten plugin goes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum OutputMode {

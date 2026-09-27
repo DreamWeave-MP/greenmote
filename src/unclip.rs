@@ -26,6 +26,7 @@ mod write;
 
 pub use app::UNCLIP_LOG_NAME;
 pub use args::{ActionArg, UnclipArgs};
+pub(crate) use write::WriteFailure;
 
 /// Runs the groundcover unclipping subcommand.
 ///

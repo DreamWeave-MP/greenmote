@@ -9,7 +9,7 @@ use crate::{
         self, CancellationToken, ConversionEvent, ConversionPhase, GROUNDCOVER_PLUGIN_NAME,
         openmw::{self, GroundcoverEntry},
     },
-    unclip::{self, UnclipArgs},
+    unclip::{self, UnclipArgs, WriteFailure},
 };
 
 use super::{ConvertRunOptions, GreenmoteApp, UiText, UnclipRunOptions};
@@ -1349,14 +1349,20 @@ where
                     write_unclip_batch_summary(stdout, summary, true);
                     return Err(error);
                 }
-                let error = error.to_string();
+                let message = error.to_string();
                 summary.failed += 1;
                 set_status(index, UnclipTargetStatus::Failed);
                 writeln!(stdout, "Unclip target failed: {target}").ok();
                 writeln!(stdout, "error:").ok();
-                writeln!(stdout, "{error}\n").ok();
+                writeln!(stdout, "{message}\n").ok();
+                // Only a failure inside the write phase stops the batch: it may have left
+                // backups or a partial plugin behind. Anything earlier (a missing master, an
+                // unreadable mesh) leaves the plugin untouched and says nothing about the
+                // next target.
                 if write {
-                    first_error = Some(error);
+                    first_error.get_or_insert(message);
+                }
+                if write && WriteFailure::is_write_failure(&error) {
                     for (skipped_index, skipped_args) in
                         args_list.iter().enumerate().skip(index + 1)
                     {
@@ -1564,7 +1570,7 @@ mod tests {
     use crate::{
         groundcover::CancellationToken,
         gui::{AppTab, GreenmoteApp, UiLanguage},
-        unclip::UnclipArgs,
+        unclip::{UnclipArgs, WriteFailure},
     };
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -1850,7 +1856,9 @@ mod tests {
                 let target = args.plugin.as_ref().unwrap().display().to_string();
                 order.push(target.clone());
                 if target == "second.omwaddon" {
-                    Err(std::io::Error::other("simulated failure"))
+                    Err(WriteFailure::wrap(std::io::Error::other(
+                        "simulated failure",
+                    )))
                 } else {
                     Ok(())
                 }
@@ -1866,6 +1874,47 @@ mod tests {
             output.contains("Unclip target skipped after previous write failure: third.omwaddon")
         );
         assert!(output.contains("Unclip batch summary: 1 succeeded, 1 failed, 1 skipped."));
+    }
+
+    #[test]
+    fn unclip_write_batch_continues_after_failure_before_the_write_phase() {
+        let args = test_unclip_args(
+            ["first.omwaddon", "second.omwaddon", "third.omwaddon"],
+            true,
+        );
+        let mut output = Vec::new();
+        let mut order = Vec::new();
+        let mut statuses = Vec::new();
+        let cancellation = CancellationToken::default();
+
+        let error = run_unclip_batch(
+            None,
+            &args,
+            true,
+            &mut output,
+            &cancellation,
+            |index, status| statuses.push((index, status)),
+            |_openmw_cfg, args, _stdout, _cancellation| {
+                let target = args.plugin.as_ref().unwrap().display().to_string();
+                order.push(target.clone());
+                if target == "second.omwaddon" {
+                    Err(std::io::Error::other("missing master"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(error.unwrap().as_deref(), Some("missing master"));
+        assert_eq!(
+            order,
+            ["first.omwaddon", "second.omwaddon", "third.omwaddon"]
+        );
+        assert!(statuses.contains(&(1, UnclipTargetStatus::Failed)));
+        assert!(statuses.contains(&(2, UnclipTargetStatus::Succeeded)));
+        let output = String::from_utf8(output).unwrap();
+        assert!(!output.contains("skipped after previous write failure"));
+        assert!(output.contains("Unclip batch summary: 2 succeeded, 1 failed, 0 skipped."));
     }
 
     #[test]

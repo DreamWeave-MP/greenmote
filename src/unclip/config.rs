@@ -33,7 +33,6 @@ pub(crate) struct UnclipConfig {
     pub(crate) write: bool,
     pub(crate) verbose: bool,
     pub(crate) structured: bool,
-    pub(crate) ignore_missing_meshes: bool,
     pub(crate) actions: Vec<ActionArg>,
     pub(crate) float_tolerance: f32,
     pub(crate) max_sink: f32,
@@ -170,7 +169,6 @@ impl UnclipConfig {
             write: args.write.unwrap_or(false),
             verbose: args.verbose.unwrap_or(false),
             structured: args.structured.unwrap_or(false),
-            ignore_missing_meshes: args.ignore_missing_meshes.unwrap_or(false),
             actions: if args.actions.is_empty() {
                 persisted.actions.unwrap_or_else(default_actions)
             } else {
