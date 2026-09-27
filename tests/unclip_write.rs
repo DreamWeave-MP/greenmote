@@ -153,6 +153,31 @@ fn missing_grass_meshes_are_reported_loudly() {
     assert_eq!(errors.values().next().unwrap(), 6);
 }
 
+#[test]
+fn output_plugin_is_written_even_when_nothing_changes() {
+    let fixture = Fixture::new("output-unchanged");
+    let output = fixture.data_dir.path().join("Unchanged.omwaddon");
+    let report = fixture.run(&[
+        "--write",
+        "--output-plugin",
+        output.to_str().unwrap(),
+        "--include-grass-id",
+        "^nothing_matches$",
+    ]);
+
+    assert_eq!(report["counts"]["total"], 0);
+    assert_eq!(report["write"]["refs_fixed"], 0);
+    assert_eq!(report["write"]["refs_deleted"], 0);
+    assert_eq!(report["write"]["verified"], true);
+    assert!(output.is_file());
+    let written = Plugin::from_path(&output).unwrap();
+    let source = Plugin::from_path(&fixture.target).unwrap();
+    assert_eq!(
+        written.objects_of_type::<Cell>().count(),
+        source.objects_of_type::<Cell>().count()
+    );
+}
+
 fn verdict_of(report: &Value, key: (u32, u32)) -> &Value {
     report["refs"]
         .as_array()

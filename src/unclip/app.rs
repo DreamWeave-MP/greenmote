@@ -145,7 +145,10 @@ pub fn run(
     report.counts = VerdictCounts::from_verdicts(&verdicts);
     report.mesh_errors = mesh_errors(&verdicts);
 
-    if config.write && report.counts.fix + report.counts.delete > 0 {
+    // In place, an unchanged plugin is left untouched. With --output-plugin the caller asked
+    // for a file, so an unchanged copy is still written rather than silently nothing.
+    let has_changes = report.counts.fix + report.counts.delete > 0;
+    if config.write && (has_changes || matches!(mode, OutputMode::Copy { .. })) {
         report.write = Some(
             write_changes(&mut source, &source_path, &mode, &verdicts)
                 .map_err(super::write::WriteFailure::wrap)?,
