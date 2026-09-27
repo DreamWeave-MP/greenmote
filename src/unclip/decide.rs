@@ -488,27 +488,6 @@ fn place(
     };
     let mut notes = Vec::new();
 
-    // A base whose vertices see terrain further apart than the mesh is tall (and than two land
-    // vertices could legitimately drop) straddles a discontinuity. Nothing sensible can be
-    // measured there: a candidate spot is rejected, the ref's own spot is left alone.
-    let contact_current = surveyor.ground_contact(geometry, &transform)?;
-    let spread = contact_current.gap - contact_current.min_gap;
-    if spread > seam_threshold(geometry) {
-        if !respect_actions {
-            return None;
-        }
-        return Some(Placement {
-            transform,
-            terrain,
-            contact_before,
-            contact_after: contact_current,
-            tilt_delta_degrees: 0.0,
-            oriented: false,
-            grounded: false,
-            notes: vec![KeepReason::TerrainSeam { spread }],
-        });
-    }
-
     let target_rotation = terrain_rotation(current.rotation, &terrain);
     let tilt_delta_degrees = tilt_delta_degrees(current.rotation, target_rotation);
     let terrain_tilt_degrees = terrain_tilt_degrees(target_rotation);
@@ -530,6 +509,38 @@ fn place(
     };
 
     let contact_here = surveyor.ground_contact(geometry, &transform)?;
+
+    // A base whose vertices see terrain further apart than the mesh is tall (and than two land
+    // vertices could legitimately drop) straddles a discontinuity, and a base that has gone
+    // entirely over the edge would ground the origin far from the terrain beneath it. This is
+    // judged on the oriented transform, since a tilt can swing a base vertex across a cell
+    // edge. Nothing sensible can be measured there: a candidate spot is rejected, the ref's
+    // own spot is left exactly as it was.
+    let threshold = seam_threshold(geometry);
+    let spread = contact_here.gap - contact_here.min_gap;
+    let grounded_z = transform.translation[2] - (contact_here.gap + policy.sink);
+    let origin_offset = (grounded_z - terrain.height).abs();
+    if spread > threshold || origin_offset > threshold {
+        if !respect_actions {
+            return None;
+        }
+        return Some(Placement {
+            transform: RefTransform {
+                rotation: current.rotation,
+                ..transform
+            },
+            terrain,
+            contact_before,
+            contact_after: contact_before,
+            tilt_delta_degrees: 0.0,
+            oriented: false,
+            grounded: false,
+            notes: vec![KeepReason::TerrainSeam {
+                spread: spread.max(origin_offset),
+            }],
+        });
+    }
+
     let max_sink = policy.burial_limit(geometry.contact.height());
     let wants_ground = contact_here.gap > policy.float_tolerance || contact_here.gap < -max_sink;
     let grounded = if wants_ground && (policy.actions.terrain_z() || !respect_actions) {
@@ -925,6 +936,43 @@ mod tests {
                 Verdict::Keep {
                     reason: KeepReason::TerrainSeam { spread }
                 } if spread > 256.0
+            ),
+            "{:?}",
+            result.verdict
+        );
+    }
+
+    #[test]
+    fn ref_whose_whole_base_is_over_the_edge_is_left_alone() {
+        let world = World::new(seam_terrain());
+        // A mesh whose base hangs 140 to 160 units in front of its origin.
+        let vertices = vec![
+            [140.0, 0.0, 0.0],
+            [160.0, 0.0, 0.0],
+            [150.0, -10.0, 0.0],
+            [150.0, 10.0, 0.0],
+            [150.0, 0.0, 40.0],
+        ];
+        let geometry: Result<Arc<MeshGeometry>, String> = Ok(Arc::new(MeshGeometry::new_for_test(
+            MeshContact::new(vertices),
+            MeshAabb {
+                min: [140.0, -10.0, 0.0],
+                max: [160.0, 10.0, 40.0],
+            },
+        )));
+        // Origin on the plateau, every base vertex on the seafloor: the base itself is level,
+        // but grounding it would put the origin 5000 units under the plateau.
+        let x = 32.0 * 128.0 - 5.0;
+        let result = decide(
+            &input(&geometry, [x, 1000.0, 3000.0], [0.0; 3]),
+            &world.surveyor(),
+        );
+        assert!(
+            matches!(
+                result.verdict,
+                Verdict::Keep {
+                    reason: KeepReason::TerrainSeam { .. }
+                }
             ),
             "{:?}",
             result.verdict
