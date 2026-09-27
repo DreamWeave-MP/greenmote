@@ -11,7 +11,9 @@ use rapier3d::{
     },
 };
 
-use super::mesh::{LocalTriangle, MeshAabb, MeshColliderParts, WorldAabb, aabb_corners};
+use super::mesh::{
+    LocalTriangle, MeshAabb, MeshColliderParts, TRIANGLE_BLOCK, WorldAabb, aabb_corners,
+};
 
 /// A reference's collision volume plus the world AABB of all parts for broad-phase pruning.
 ///
@@ -35,6 +37,8 @@ enum RapierPart {
         triangles: Arc<[LocalTriangle]>,
         /// Bounds of each triangle, parallel to `triangles` and shared the same way.
         triangle_bounds: Arc<[MeshAabb]>,
+        /// Bounds of each block of [`TRIANGLE_BLOCK`] triangles, shared the same way.
+        block_bounds: Arc<[MeshAabb]>,
         /// Unscaled mesh-local bounds of `triangles`.
         bounds: MeshAabb,
         /// Mesh-local (scaled) to world.
@@ -90,6 +94,7 @@ impl RapierCollider {
             .map(|part| RapierPart::Mesh {
                 triangles: Arc::clone(&part.triangles),
                 triangle_bounds: Arc::clone(&part.triangle_bounds),
+                block_bounds: Arc::clone(&part.block_bounds),
                 bounds: part.bounds,
                 pose,
                 scale,
@@ -196,6 +201,7 @@ impl RapierPart {
         let Self::Mesh {
             triangles,
             triangle_bounds,
+            block_bounds,
             bounds,
             pose,
             scale,
@@ -213,18 +219,26 @@ impl RapierPart {
             return false;
         }
 
-        let touches_surface =
-            triangles
-                .iter()
-                .zip(triangle_bounds.iter())
-                .any(|(triangle, bounds)| {
-                    aabbs_overlap(local_min, local_max, bounds.min.into(), bounds.max.into())
-                        && intersection_test_support_map_support_map(
-                            &local_pose,
-                            &local_triangle(triangle),
-                            &local_cuboid,
-                        )
-                });
+        let touches_surface = triangles
+            .chunks(TRIANGLE_BLOCK)
+            .zip(triangle_bounds.chunks(TRIANGLE_BLOCK))
+            .zip(block_bounds.iter())
+            .filter(|(_, block)| {
+                aabbs_overlap(local_min, local_max, block.min.into(), block.max.into())
+            })
+            .any(|((triangles, triangle_bounds), _)| {
+                triangles
+                    .iter()
+                    .zip(triangle_bounds)
+                    .any(|(triangle, bounds)| {
+                        aabbs_overlap(local_min, local_max, bounds.min.into(), bounds.max.into())
+                            && intersection_test_support_map_support_map(
+                                &local_pose,
+                                &local_triangle(triangle),
+                                &local_cuboid,
+                            )
+                    })
+            });
         let centre = local_pose.translation;
         let within_bounds = centre.x >= bounds.min[0]
             && centre.x <= bounds.max[0]
@@ -233,7 +247,8 @@ impl RapierPart {
             && centre.z >= bounds.min[2]
             && centre.z <= bounds.max[2];
         touches_surface
-            || (within_bounds && point_inside_triangles(triangles, triangle_bounds, centre))
+            || (within_bounds
+                && point_inside_triangles(triangles, triangle_bounds, block_bounds, centre))
     }
 
     fn contains_world_point(&self, point: RapierVec3) -> bool {
@@ -244,6 +259,7 @@ impl RapierPart {
             Self::Mesh {
                 triangles,
                 triangle_bounds,
+                block_bounds,
                 bounds,
                 pose,
                 scale,
@@ -259,7 +275,7 @@ impl RapierPart {
                     && local.y <= max.y
                     && local.z >= min.z
                     && local.z <= max.z
-                    && point_inside_triangles(triangles, triangle_bounds, local)
+                    && point_inside_triangles(triangles, triangle_bounds, block_bounds, local)
             }
         }
     }
@@ -294,6 +310,7 @@ impl RapierPart {
 fn point_inside_triangles(
     triangles: &[LocalTriangle],
     triangle_bounds: &[MeshAabb],
+    block_bounds: &[MeshAabb],
     point: RapierVec3,
 ) -> bool {
     const DIRECTIONS: [RapierVec3; 2] = [
@@ -303,22 +320,31 @@ fn point_inside_triangles(
     let mut parity = false;
     for (pass, direction) in DIRECTIONS.into_iter().enumerate() {
         let straight_up = pass == 0;
-        let mut hits = 0_u32;
-        let mut ambiguous = false;
-        for (triangle, bounds) in triangles.iter().zip(triangle_bounds) {
-            // Cheap rejection: the ray only rises, and a vertical ray also stays at its x/y.
-            if bounds.max[2] < point.z
+        // Cheap rejection: the ray only rises, and a vertical ray also stays at its x/y.
+        let rejects = |bounds: &MeshAabb| {
+            bounds.max[2] < point.z
                 || (straight_up
                     && (point.x < bounds.min[0]
                         || point.x > bounds.max[0]
                         || point.y < bounds.min[1]
                         || point.y > bounds.max[1]))
-            {
-                continue;
-            }
-            if let Some(hit) = ray_hits_triangle(point, direction, triangle) {
-                hits += 1;
-                ambiguous |= hit.on_edge;
+        };
+        let mut hits = 0_u32;
+        let mut ambiguous = false;
+        for ((triangles, triangle_bounds), _) in triangles
+            .chunks(TRIANGLE_BLOCK)
+            .zip(triangle_bounds.chunks(TRIANGLE_BLOCK))
+            .zip(block_bounds)
+            .filter(|(_, block)| !rejects(block))
+        {
+            for (triangle, bounds) in triangles.iter().zip(triangle_bounds) {
+                if rejects(bounds) {
+                    continue;
+                }
+                if let Some(hit) = ray_hits_triangle(point, direction, triangle) {
+                    hits += 1;
+                    ambiguous |= hit.on_edge;
+                }
             }
         }
         parity = hits % 2 == 1;
@@ -713,20 +739,13 @@ mod tests {
     }
 
     fn inside(triangles: &[LocalTriangle], point: RapierVec3) -> bool {
-        let bounds: Vec<MeshAabb> = triangles
-            .iter()
-            .map(|[a, b, c]| MeshAabb {
-                min: Vec3::from(*a)
-                    .min(Vec3::from(*b))
-                    .min(Vec3::from(*c))
-                    .to_array(),
-                max: Vec3::from(*a)
-                    .max(Vec3::from(*b))
-                    .max(Vec3::from(*c))
-                    .to_array(),
-            })
-            .collect();
-        point_inside_triangles(triangles, &bounds, point)
+        let part = crate::unclip::mesh::MeshColliderPart::new(triangles.to_vec()).unwrap();
+        point_inside_triangles(
+            &part.triangles,
+            &part.triangle_bounds,
+            &part.block_bounds,
+            point,
+        )
     }
 
     /// Thin trunk from z 0..400 under a wide flat cap z 400..450 spanning +-300 in x and y.

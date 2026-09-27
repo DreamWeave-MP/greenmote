@@ -9,7 +9,7 @@ use glam::Vec3;
 
 use super::{
     args::UnclipPolicy,
-    mesh::MeshGeometry,
+    mesh::{MeshGeometry, WorldAabb},
     occlusion::{StaticOccluder, StaticOccluderIndex},
     physics::RapierCollider,
     terrain::{TerrainIndex, TerrainSample, TerrainTextureIndex},
@@ -61,6 +61,12 @@ impl Surveyor<'_> {
     #[must_use]
     pub(crate) fn terrain_at(&self, x: f32, y: f32) -> Option<TerrainSample> {
         self.terrain.sample_at(x, y)
+    }
+
+    /// Terrain height alone under a world XY position; much cheaper than [`Self::terrain_at`].
+    #[must_use]
+    pub(crate) fn height_at(&self, x: f32, y: f32) -> Option<f32> {
+        self.terrain.height_at(x, y)
     }
 
     /// Measures the mesh base against the terrain for a transform.
@@ -125,8 +131,23 @@ impl Surveyor<'_> {
     #[must_use]
     pub(crate) fn occlusion(&self, collider: &RapierCollider) -> Occlusion<'_> {
         let candidates = self.occluders.candidates_for(collider.bounds());
+        Self::occlusion_among(&candidates, collider)
+    }
+
+    /// Occluders whose bounds overlap a world region, for repeated tests inside that region.
+    #[must_use]
+    pub(crate) fn occluders_within(&self, bounds: WorldAabb) -> Vec<&StaticOccluder> {
+        self.occluders.candidates_for(bounds)
+    }
+
+    /// Tests a collider against a fixed list of occluders.
+    #[must_use]
+    pub(crate) fn occlusion_among<'o>(
+        candidates: &[&'o StaticOccluder],
+        collider: &RapierCollider,
+    ) -> Occlusion<'o> {
         let mut intersecting = None;
-        for occluder in candidates {
+        for &occluder in candidates {
             if occluder.collider.contains(collider) {
                 return Occlusion::Inside(occluder);
             }

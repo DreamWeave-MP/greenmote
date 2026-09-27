@@ -79,8 +79,9 @@ pub(super) fn load_context_plugins<'a>(
     target_plugin: &'a Plugin,
     cancellation: &CancellationToken,
 ) -> io::Result<Vec<ContextPlugin<'a>>> {
+    use rayon::prelude::*;
     paths
-        .iter()
+        .par_iter()
         .map(|path| {
             super::check_cancellation(cancellation)?;
             if path_matches(path, target_path) {

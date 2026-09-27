@@ -69,6 +69,18 @@ impl StaticMeshIndex {
 #[derive(Debug)]
 pub struct MeshContact {
     vertices: Vec<[f32; 3]>,
+    /// The vertices that can lie in the base band under any groundcover tilt and scale; see
+    /// [`MeshContact::new`]. Only these are rotated per reference.
+    base_candidates: Vec<[f32; 3]>,
+    /// The vertices that can be the highest one under any groundcover tilt, for the band.
+    top_candidates: Vec<[f32; 3]>,
+    /// False when the candidate sets together are no smaller than all vertices (small tufts,
+    /// where a 60-degree tilt can bring any vertex into the band); rotating everything once
+    /// is then cheaper than two passes.
+    trimming_helps: bool,
+    /// Bounded cache of transforms per `(rotation bits, scale bits)`. Hand-placed and
+    /// quantised groundcover repeats rotations, generator grass with random yaw does not; the
+    /// cap keeps the latter from paying for a cache that never hits.
     transform_cache: Mutex<HashMap<ContactTransformKey, ContactTransform>>,
 }
 
@@ -77,6 +89,22 @@ struct ContactTransformKey {
     rotation: [u32; 3],
     scale: u32,
 }
+
+/// Entries kept per mesh before the transform cache is cleared and refilled.
+const CONTACT_TRANSFORM_CACHE_CAP: usize = 4096;
+
+/// Groundcover is never tilted further than 60 degrees from upright. The trimmed candidate
+/// sets are only used when the reference's tilt (the angle between local and world z) has at
+/// least this cosine; steeper references fall back to all vertices, so results stay exact.
+const MAX_GROUNDCOVER_TILT_COS: f32 = 0.5;
+
+/// The tilt the candidate sets are built for: slightly beyond the gate so rounding at exactly
+/// 60 degrees can never leave a needed vertex out.
+const CANDIDATE_TILT_RADIANS: f32 = 61.0 * std::f32::consts::PI / 180.0;
+
+/// The trimmed candidate sets assume at least this reference scale (the band's 1-unit floor
+/// grows relative to the mesh as the scale shrinks); smaller scales use all vertices.
+const MIN_TRIMMED_SCALE: f32 = 0.5;
 
 /// Rotated and scaled contact data for one `(rotation, scale)` pair.
 #[derive(Clone, Debug)]
@@ -138,6 +166,9 @@ pub(crate) struct MeshColliderPart {
     pub(crate) triangles: Arc<[LocalTriangle]>,
     /// Axis-aligned bounds of each triangle, parallel to `triangles`, for cheap rejection.
     pub(crate) triangle_bounds: Arc<[MeshAabb]>,
+    /// Bounds of each run of [`TRIANGLE_BLOCK`] consecutive triangles (NIF triangle order is
+    /// spatially coherent), so whole blocks can be rejected before their triangles.
+    pub(crate) block_bounds: Arc<[MeshAabb]>,
     /// Axis-aligned bounds of all triangles in mesh-local space.
     pub(crate) bounds: MeshAabb,
 }
@@ -172,13 +203,85 @@ pub(crate) enum MeshColliderSource {
 
 const MAX_COLLIDER_PARTS: usize = 256;
 
+/// Triangles per block in [`MeshColliderPart::block_bounds`].
+pub(crate) const TRIANGLE_BLOCK: usize = 16;
+
 impl MeshContact {
+    /// Besides all vertices, keeps the subsets that can matter under any groundcover tilt.
+    ///
+    /// Under a rotation whose local z axis is tilted by `theta` from world z, a vertex at
+    /// height `z` and horizontal radius `r` rotates to a z within
+    /// `[z cos(theta) - r sin(theta), z cos(theta) + r sin(theta)]` (in unscaled units; the
+    /// uniform scale multiplies everything). Taking the extremes over `theta <= 61 deg` gives
+    /// every vertex a lower bound `low` and upper bound `high` on its rotated z that hold for
+    /// every groundcover rotation. The lowest rotated vertex is then never above
+    /// `min(high)`, the rotated height never exceeds the mesh's diameter, and the band never
+    /// exceeds `max(1 / MIN_TRIMMED_SCALE, 0.05 * diameter)`, so a vertex whose `low` lies
+    /// beyond `min(high) + that band` can never be in the base band; likewise a vertex whose
+    /// `high` lies below `max(low)` can never be the highest. The trimmed sets are therefore
+    /// exact supersets, and [`Self::base_offsets`] returns exactly what rotating every vertex
+    /// would, for tilts up to 60 degrees and scales of at least `MIN_TRIMMED_SCALE`; anything
+    /// beyond that falls back to all vertices.
     #[must_use]
     pub fn new(vertices: Vec<[f32; 3]>) -> Self {
+        let ranges: Vec<(f32, f32)> = vertices
+            .iter()
+            .map(|vertex| rotated_z_range(*vertex, CANDIDATE_TILT_RADIANS))
+            .collect();
+        let diameter = 2.0
+            * vertices
+                .iter()
+                .map(|vertex| Vec3::from(*vertex).length())
+                .fold(0.0_f32, f32::max);
+        let band_bound = (0.05 * diameter).max(1.0 / MIN_TRIMMED_SCALE);
+        // Rounding slack so a vertex exactly on a bound is kept.
+        let slack = 0.001 * diameter.max(1.0);
+        let lowest_at_most = ranges
+            .iter()
+            .map(|(_, high)| *high)
+            .fold(f32::INFINITY, f32::min);
+        let highest_at_least = ranges
+            .iter()
+            .map(|(low, _)| *low)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let base_candidates: Vec<[f32; 3]> = vertices
+            .iter()
+            .zip(&ranges)
+            .filter(|(_, (low, _))| *low <= lowest_at_most + band_bound + slack)
+            .map(|(vertex, _)| *vertex)
+            .collect();
+        let top_candidates: Vec<[f32; 3]> = vertices
+            .iter()
+            .zip(&ranges)
+            .filter(|(_, (_, high))| *high >= highest_at_least - slack)
+            .map(|(vertex, _)| *vertex)
+            .collect();
+        let trimming_helps = base_candidates.len() + top_candidates.len() < vertices.len();
         Self {
             vertices,
+            base_candidates,
+            top_candidates,
+            trimming_helps,
             transform_cache: Mutex::default(),
         }
+    }
+
+    #[cfg(test)]
+    fn cached_transform_count(&self) -> usize {
+        self.transform_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    #[cfg(test)]
+    fn base_candidate_count(&self) -> usize {
+        self.base_candidates.len()
+    }
+
+    #[cfg(test)]
+    fn top_candidate_count(&self) -> usize {
+        self.top_candidates.len()
     }
 
     #[cfg(test)]
@@ -200,19 +303,20 @@ impl MeshContact {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn local_contact_offset(&self, rotation: [f32; 3], scale: Option<f32>) -> [f32; 3] {
-        self.contact_transform(rotation, scale).lowest
+        self.contact_transform(rotation, scale.unwrap_or(1.0))
+            .lowest
     }
 
     /// Rotated and scaled local positions of the mesh's base vertices: every vertex whose
     /// rotated z lies within `band` of the lowest rotated z, where
-    /// `band = max(1.0, 0.05 * rotated height)`. Cached per (rotation bits, scale bits) like
-    /// [`Self::local_contact_offset`].
+    /// `band = max(1.0, 0.05 * scaled height)`. Only the base candidates chosen in
+    /// [`Self::new`] are rotated.
     #[must_use]
     pub(crate) fn base_offsets(&self, rotation: [f32; 3], scale: Option<f32>) -> Arc<[[f32; 3]]> {
-        self.contact_transform(rotation, scale).base
+        self.contact_transform(rotation, scale.unwrap_or(1.0)).base
     }
 
-    /// Unrotated local z extent of the contact vertices, for reporting.
+    /// Unrotated local z extent of all contact vertices, for reporting.
     #[must_use]
     pub(crate) fn height(&self) -> f32 {
         let (min, max) = self
@@ -228,13 +332,12 @@ impl MeshContact {
         }
     }
 
-    fn contact_transform(&self, rotation: [f32; 3], scale: Option<f32>) -> ContactTransform {
-        let scale = scale.unwrap_or(1.0);
+    /// Looks the transform up in the bounded cache before computing it.
+    fn contact_transform(&self, rotation: [f32; 3], scale: f32) -> ContactTransform {
         let key = ContactTransformKey {
             rotation: rotation.map(f32::to_bits),
             scale: scale.to_bits(),
         };
-
         if let Some(transform) = self
             .transform_cache
             .lock()
@@ -243,28 +346,35 @@ impl MeshContact {
         {
             return transform.clone();
         }
-
         let transform = self.contact_transform_uncached(rotation, scale);
-        self.transform_cache
+        let mut cache = self
+            .transform_cache
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry(key)
-            .or_insert(transform)
-            .clone()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cache.len() >= CONTACT_TRANSFORM_CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(key, transform.clone());
+        transform
     }
 
-    #[cfg(test)]
-    fn cached_transform_count(&self) -> usize {
-        self.transform_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
-    }
-
+    /// Rotates the candidate vertices (see [`Self::new`] for why they give the same answer as
+    /// all vertices) and picks the base band.
     fn contact_transform_uncached(&self, rotation: [f32; 3], scale: f32) -> ContactTransform {
         let rotation = world_rotation(rotation);
-        let rotated: Vec<Vec3> = self
-            .vertices
+        // Rotated z is `vertex . a` with `a` the last row of the matrix; `a.z` is the cosine
+        // of the tilt between local and world z.
+        let tilt_cos = rotation.z_axis.z;
+        let trimmed = self.trimming_helps
+            && tilt_cos >= MAX_GROUNDCOVER_TILT_COS
+            && scale.is_finite()
+            && scale >= MIN_TRIMMED_SCALE;
+        let base_vertices = if trimmed {
+            &self.base_candidates
+        } else {
+            &self.vertices
+        };
+        let rotated: Vec<Vec3> = base_vertices
             .iter()
             .map(|vertex| rotation * (Vec3::from(*vertex) * scale))
             .collect();
@@ -279,12 +389,19 @@ impl MeshContact {
                 base: Arc::from(Vec::new()),
             };
         };
-        let highest_z = rotated
-            .iter()
-            .map(|position| position.z)
-            .fold(f32::NEG_INFINITY, f32::max);
+        let highest_z = if trimmed {
+            self.top_candidates
+                .iter()
+                .map(|vertex| (rotation * (Vec3::from(*vertex) * scale)).z)
+                .fold(f32::NEG_INFINITY, f32::max)
+        } else {
+            rotated
+                .iter()
+                .map(|position| position.z)
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
         let band = (0.05 * (highest_z - lowest.z)).max(1.0);
-        let base: Vec<[f32; 3]> = rotated
+        let base: Arc<[[f32; 3]]> = rotated
             .iter()
             .filter(|position| position.z <= lowest.z + band)
             .map(Vec3::to_array)
@@ -292,9 +409,30 @@ impl MeshContact {
 
         ContactTransform {
             lowest: lowest.to_array(),
-            base: Arc::from(base),
+            base,
         }
     }
+}
+
+/// The range a vertex's z can take under any rotation that tilts local z by at most
+/// `max_tilt` radians: `z cos(t) -+ r sin(t)` over `t in [0, max_tilt]`, evaluated exactly at
+/// the extremes of the two sinusoids.
+fn rotated_z_range([x, y, z]: [f32; 3], max_tilt: f32) -> (f32, f32) {
+    let radius = x.hypot(y);
+    let norm = z.hypot(radius);
+    // `z cos(t) - r sin(t) = norm cos(t + psi)` and `z cos(t) + r sin(t) = norm cos(t - psi)`.
+    let psi = radius.atan2(z);
+    let low = if max_tilt + psi <= std::f32::consts::PI {
+        norm * (max_tilt + psi).cos()
+    } else {
+        -norm
+    };
+    let high = if psi <= max_tilt {
+        norm
+    } else {
+        norm * (max_tilt - psi).cos()
+    };
+    (low, high)
 }
 
 impl Clone for MeshContact {
@@ -449,9 +587,22 @@ impl MeshColliderPart {
                 triangle_bounds.push(bounds);
             })
             .collect();
+        let block_bounds: Vec<MeshAabb> = triangle_bounds
+            .chunks(TRIANGLE_BLOCK)
+            .map(|block| {
+                block
+                    .iter()
+                    .skip(1)
+                    .fold(block[0], |union, bounds| MeshAabb {
+                        min: Vec3::from(union.min).min(Vec3::from(bounds.min)).to_array(),
+                        max: Vec3::from(union.max).max(Vec3::from(bounds.max)).to_array(),
+                    })
+            })
+            .collect();
         (!triangles.is_empty()).then(|| Self {
             triangles: Arc::from(triangles),
             triangle_bounds: Arc::from(triangle_bounds),
+            block_bounds: Arc::from(block_bounds),
             bounds: MeshAabb {
                 min: min.to_array(),
                 max: max.to_array(),
@@ -660,21 +811,39 @@ impl<'a> MeshCache<'a> {
         }
     }
 
+    /// Loads the distinct, not yet cached meshes among `meshes` in parallel and caches them
+    /// as bounds-only entries (or failures). Later `bounds`/`collider_parts` calls then hit the
+    /// cache; meshes left out keep loading lazily as before.
+    pub(crate) fn preload<'m>(&mut self, meshes: impl IntoIterator<Item = &'m StaticMesh>) {
+        use rayon::prelude::*;
+
+        let mut pending: Vec<&StaticMesh> = Vec::new();
+        let mut seen = HashSet::new();
+        for static_mesh in meshes {
+            if !self.meshes.contains_key(&static_mesh.mesh_key)
+                && seen.insert(static_mesh.mesh_key.as_str())
+            {
+                pending.push(static_mesh);
+            }
+        }
+        let vfs = self.vfs;
+        let loaded: Vec<(String, CachedMesh)> = pending
+            .into_par_iter()
+            .map(|static_mesh| {
+                (
+                    static_mesh.mesh_key.clone(),
+                    load_bounds_only(vfs, static_mesh),
+                )
+            })
+            .collect();
+        self.meshes.extend(loaded);
+    }
+
     pub fn bounds(&mut self, static_mesh: &StaticMesh) -> io::Result<MeshAabb> {
         let cached = self
             .meshes
             .entry(static_mesh.mesh_key.clone())
-            .or_insert_with(|| {
-                load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
-                    |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
-                    |(stream, bounds)| CachedMesh::BoundsOnly {
-                        collider_parts: mesh_collider_parts(&stream, bounds),
-                        stream,
-                        bounds,
-                        geometry_error: None,
-                    },
-                )
-            });
+            .or_insert_with(|| load_bounds_only(self.vfs, static_mesh));
 
         match cached {
             CachedMesh::BoundsOnly { bounds, .. } => Ok(*bounds),
@@ -690,17 +859,7 @@ impl<'a> MeshCache<'a> {
         let cached = self
             .meshes
             .entry(static_mesh.mesh_key.clone())
-            .or_insert_with(|| {
-                load_bounds(self.vfs, &static_mesh.mesh_path).map_or_else(
-                    |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
-                    |(stream, bounds)| CachedMesh::BoundsOnly {
-                        collider_parts: mesh_collider_parts(&stream, bounds),
-                        stream,
-                        bounds,
-                        geometry_error: None,
-                    },
-                )
-            });
+            .or_insert_with(|| load_bounds_only(self.vfs, static_mesh));
 
         match cached {
             CachedMesh::BoundsOnly { collider_parts, .. } => Ok(collider_parts),
@@ -748,6 +907,20 @@ fn load_geometry(vfs: &VFS, mesh_path: &str) -> io::Result<MeshGeometry> {
     let stream = load_stream(vfs, mesh_path)?;
 
     mesh_geometry(&stream).ok_or_else(|| no_triangle_vertices_error(mesh_path))
+}
+
+/// The bounds-only cache entry for a mesh: its stream, occluder bounds and collider parts,
+/// or the load failure.
+fn load_bounds_only(vfs: &VFS, static_mesh: &StaticMesh) -> CachedMesh {
+    load_bounds(vfs, &static_mesh.mesh_path).map_or_else(
+        |error| CachedMesh::Failed(CachedMeshError::from_io(&error)),
+        |(stream, bounds)| CachedMesh::BoundsOnly {
+            collider_parts: mesh_collider_parts(&stream, bounds),
+            stream,
+            bounds,
+            geometry_error: None,
+        },
+    )
 }
 
 fn load_bounds(vfs: &VFS, mesh_path: &str) -> io::Result<(NiStream, MeshAabb)> {
@@ -1430,7 +1603,7 @@ mod tests {
     }
 
     #[test]
-    fn mesh_contact_world_position_uses_cached_transform_for_repeated_calls() {
+    fn mesh_contact_world_position_is_deterministic_for_repeated_calls() {
         let contact = test_contact();
         let rotation = [0.1, 0.2, 0.3];
         let scale = Some(1.5);
@@ -1447,7 +1620,25 @@ mod tests {
     }
 
     #[test]
-    fn mesh_contact_world_position_reuses_cached_offset_for_different_translations() {
+    fn mesh_contact_transform_cache_is_bounded() {
+        let vertices = cross_plane_grass_vertices();
+        let contact = MeshContact::new(vertices.clone());
+        let yaws = u16::try_from(CONTACT_TRANSFORM_CACHE_CAP).unwrap() + 3;
+        for index in 0..yaws {
+            let yaw = 0.001 * f32::from(index);
+            let cached = contact.base_offsets([0.0, 0.0, yaw], None);
+            assert_eq!(
+                cached.to_vec(),
+                untrimmed_base_offsets(&vertices, [0.0, 0.0, yaw], 1.0)
+            );
+        }
+
+        assert!(contact.cached_transform_count() <= CONTACT_TRANSFORM_CACHE_CAP);
+        assert_eq!(contact.cached_transform_count(), 3);
+    }
+
+    #[test]
+    fn mesh_contact_world_position_offset_is_independent_of_translation() {
         let contact = test_contact();
         let rotation = [0.1, 0.2, 0.3];
         let scale = Some(1.5);
@@ -1463,11 +1654,10 @@ mod tests {
             second,
             reference_world_position(&contact, [-5.0, 12.0, 80.0], rotation, scale),
         );
-        assert_eq!(contact.cached_transform_count(), 1);
     }
 
     #[test]
-    fn mesh_contact_world_position_caches_different_rotation_and_scale_separately() {
+    fn mesh_contact_world_position_follows_rotation_and_scale() {
         let contact = test_contact();
 
         let first = contact.world_position([10.0, 20.0, 30.0], [0.1, 0.2, 0.3], Some(1.5));
@@ -1481,7 +1671,6 @@ mod tests {
             second,
             reference_world_position(&contact, [10.0, 20.0, 30.0], [0.3, 0.2, 0.1], Some(0.75)),
         );
-        assert_eq!(contact.cached_transform_count(), 2);
     }
 
     #[test]
@@ -1497,7 +1686,6 @@ mod tests {
             implicit,
             reference_world_position(&contact, [10.0, 20.0, 30.0], rotation, None),
         );
-        assert_eq!(contact.cached_transform_count(), 1);
     }
 
     #[test]
@@ -2227,6 +2415,187 @@ mod tests {
     }
 
     #[test]
+    fn tall_mesh_top_vertices_are_never_base_candidates() {
+        // A 200-unit stalk with a small root spread: the tips are far above any band a
+        // 60-degree tilt could bring down to the root level.
+        let contact = MeshContact::new(vec![
+            [0.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [0.0, 5.0, 0.0],
+            [2.0, 0.0, 200.0],
+            [0.0, 2.0, 200.0],
+        ]);
+
+        assert_eq!(contact.base_candidate_count(), 3);
+        assert_eq!(contact.top_candidate_count(), 2);
+        assert!((contact.height() - 200.0).abs() < f32::EPSILON);
+        let base = contact.base_offsets([0.0, 0.0, 1.234], Some(2.0));
+        assert_eq!(base.len(), 3);
+        assert!(base.iter().all(|vertex| vertex[2].abs() < 0.000_1));
+    }
+
+    #[test]
+    fn wide_low_vertices_stay_base_candidates_for_tilted_refs() {
+        // A vertex 40 units out and 20 units up can still be lowest under a 60-degree tilt.
+        let contact = MeshContact::new(vec![[0.0, 0.0, 0.0], [40.0, 0.0, 20.0], [0.0, 0.0, 30.0]]);
+
+        assert_eq!(contact.base_candidate_count(), 2);
+        let base = contact.base_offsets([0.0, -std::f32::consts::FRAC_PI_3, 0.0], None);
+        assert!(base.iter().any(|vertex| vertex[2] < -10.0), "{base:?}");
+    }
+
+    /// The untrimmed computation: rotate every vertex and take the band from all of them.
+    fn untrimmed_base_offsets(
+        vertices: &[[f32; 3]],
+        rotation: [f32; 3],
+        scale: f32,
+    ) -> Vec<[f32; 3]> {
+        let rotation = world_rotation(rotation);
+        let rotated: Vec<Vec3> = vertices
+            .iter()
+            .map(|vertex| rotation * (Vec3::from(*vertex) * scale))
+            .collect();
+        let lowest = rotated.iter().map(|v| v.z).fold(f32::INFINITY, f32::min);
+        let highest = rotated
+            .iter()
+            .map(|v| v.z)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let band = (0.05 * (highest - lowest)).max(1.0);
+        rotated
+            .iter()
+            .filter(|position| position.z <= lowest + band)
+            .map(Vec3::to_array)
+            .collect()
+    }
+
+    #[test]
+    fn trimmed_base_offsets_match_untrimmed_over_groundcover_rotations() {
+        let degrees = |value: i16| f32::from(value).to_radians();
+        // A tall reed with a wide, uneven base; a small 7-unit tuft like Grass Vanilla's; and
+        // an off-centre clump whose lowest vertex is far from the axis.
+        let meshes: Vec<Vec<[f32; 3]>> = vec![
+            vec![
+                [-30.0, 0.0, 0.0],
+                [30.0, 0.0, 0.5],
+                [0.0, -30.0, 1.5],
+                [0.0, 30.0, 2.0],
+                [-10.0, 10.0, 6.0],
+                [2.0, 0.0, 150.0],
+                [0.0, 2.0, 160.0],
+                [-1.0, -1.0, 180.0],
+            ],
+            vec![
+                [-4.0, -1.0, 0.0],
+                [4.0, 1.0, 0.13],
+                [1.0, -4.0, 2.15],
+                [-1.0, 4.0, 2.3],
+                [3.0, 3.0, 5.0],
+                [0.0, 0.0, 7.0],
+            ],
+            vec![
+                [20.0, 20.0, -3.0],
+                [22.0, 18.0, -2.0],
+                [25.0, 25.0, 4.0],
+                [0.0, 0.0, 10.0],
+                [-5.0, 0.0, 12.0],
+                [18.0, 24.0, 30.0],
+            ],
+        ];
+        let mut trimmed_used = 0;
+        for (index, vertices) in meshes.iter().enumerate() {
+            let contact = MeshContact::new(vertices.clone());
+            // Only the tall reed has vertices that no groundcover tilt can bring into the
+            // band; the small meshes keep everything, which is correct if not faster.
+            assert_eq!(contact.base_candidate_count() < vertices.len(), index == 0);
+            assert_eq!(contact.top_candidate_count() < vertices.len(), index == 0);
+            for rx in (-60_i16..=60).step_by(15) {
+                for ry in (-60_i16..=60).step_by(15) {
+                    for rz in (0_i16..360).step_by(45) {
+                        for scale in [0.5_f32, 0.8, 1.0, 1.37, 2.0] {
+                            let rotation = [degrees(rx), degrees(ry), degrees(rz)];
+                            let expected = untrimmed_base_offsets(vertices, rotation, scale);
+                            let actual = contact.base_offsets(rotation, Some(scale)).to_vec();
+                            assert_eq!(actual, expected, "{rotation:?} x{scale} {vertices:?}");
+                            if world_rotation(rotation).z_axis.z >= MAX_GROUNDCOVER_TILT_COS {
+                                trimmed_used += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            // Beyond the gate the full set is used, so steep tilts and tiny scales also agree.
+            for rotation in [[degrees(90), 0.0, 0.3], [0.2, degrees(-75), 1.0]] {
+                assert_eq!(
+                    contact.base_offsets(rotation, None).to_vec(),
+                    untrimmed_base_offsets(vertices, rotation, 1.0)
+                );
+            }
+            assert_eq!(
+                contact.base_offsets([0.3, 0.2, 1.0], Some(0.25)).to_vec(),
+                untrimmed_base_offsets(vertices, [0.3, 0.2, 1.0], 0.25)
+            );
+        }
+        assert!(trimmed_used > 0);
+    }
+
+    #[test]
+    fn mesh_cache_preload_loads_distinct_meshes_and_keeps_lazy_loading() {
+        let dir = TempDir::new("preload");
+        let mesh_dir = dir.path().join("Meshes").join("grass");
+        std::fs::create_dir_all(&mesh_dir).unwrap();
+        write_collision_only_nif(&mesh_dir.join("a.nif"));
+        write_nif(&mesh_dir.join("b.nif"));
+        let vfs = VFS::from_directories(vec![dir.path().to_path_buf()], None);
+        let mut cache = MeshCache::new(&vfs);
+        let a = test_static_mesh("grass/a.nif");
+        let a_again = test_static_mesh("Meshes\\grass\\A.NIF");
+        let b = test_static_mesh("grass/b.nif");
+        let missing = test_static_mesh("grass/missing.nif");
+
+        cache.preload([&a, &a_again, &b, &missing]);
+
+        assert_eq!(cache.cached_mesh_count(), 3);
+        assert_eq!(cache.cached_mesh_state(&a), Some("bounds_only"));
+        assert_eq!(cache.cached_mesh_state(&b), Some("bounds_only"));
+        assert_eq!(cache.cached_mesh_state(&missing), Some("failed"));
+        assert_eq!(cache.bounds(&a).unwrap(), collision_bounds());
+        assert!(cache.bounds(&missing).is_err());
+        let lazy = test_static_mesh("grass/lazy.nif");
+        assert_eq!(cache.cached_mesh_state(&lazy), None);
+        assert!(cache.bounds(&lazy).is_err());
+        assert_eq!(cache.cached_mesh_state(&lazy), Some("failed"));
+    }
+
+    #[test]
+    fn block_bounds_cover_their_triangles() {
+        let triangles = box_triangles(aabb_corners([-3.0, -2.0, -1.0], [4.0, 5.0, 6.0]));
+        let mut many = Vec::new();
+        for offset in 0..3_u8 {
+            many.extend(
+                triangles.iter().map(|triangle| {
+                    triangle.map(|[x, y, z]| [x + 100.0 * f32::from(offset), y, z])
+                }),
+            );
+        }
+        let part = MeshColliderPart::new(many).unwrap();
+
+        assert_eq!(part.triangles.len(), 36);
+        assert_eq!(part.block_bounds.len(), 3);
+        for (block, bounds) in part
+            .triangle_bounds
+            .chunks(TRIANGLE_BLOCK)
+            .zip(part.block_bounds.iter())
+        {
+            for triangle in block {
+                for axis in 0..3 {
+                    assert!(bounds.min[axis] <= triangle.min[axis]);
+                    assert!(bounds.max[axis] >= triangle.max[axis]);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn base_offsets_flat_bottom_cross_plane_grass_returns_all_bottom_vertices() {
         let contact = MeshContact::new(cross_plane_grass_vertices());
 
@@ -2245,7 +2614,7 @@ mod tests {
 
         let base = contact.base_offsets([0.0; 3], Some(1.0));
 
-        assert_eq!(base.as_ref(), &[[0.0, 0.0, -5.0]]);
+        assert_eq!(&base[..], &[[0.0_f32, 0.0, -5.0]]);
         assert_position_close(
             contact.local_contact_offset([0.0; 3], None),
             [0.0, 0.0, -5.0],
@@ -2256,25 +2625,23 @@ mod tests {
     fn base_offsets_rotation_changes_membership() {
         let contact = MeshContact::new(cross_plane_grass_vertices());
 
-        // Rx(-90 deg) maps (x, y, z) to (x, z, -y): only the two y = 5 vertices end up lowest.
-        let base = contact.base_offsets([std::f32::consts::FRAC_PI_2, 0.0, 0.0], None);
+        // Rx(-60 deg) maps z to -0.866 y + 0.5 z: only the bottom y = 5 vertex ends up lowest
+        // (at -4.33), a 60-degree tilt being the steepest groundcover ever gets.
+        let base = contact.base_offsets([std::f32::consts::FRAC_PI_3, 0.0, 0.0], None);
 
-        assert_eq!(base.len(), 2);
-        for vertex in base.iter() {
-            assert!((vertex[2] + 5.0).abs() < 0.000_01, "{vertex:?}");
-        }
+        assert_eq!(base.len(), 1);
+        assert!((base[0][2] + 4.330_127).abs() < 0.000_1, "{base:?}");
     }
 
     #[test]
-    fn base_offsets_are_cached_per_rotation_and_scale() {
+    fn base_offsets_are_deterministic_and_include_the_lowest_vertex() {
         let contact = MeshContact::new(cross_plane_grass_vertices());
 
         let first = contact.base_offsets([0.1, 0.2, 0.3], Some(1.5));
         let second = contact.base_offsets([0.1, 0.2, 0.3], Some(1.5));
         let lowest = contact.local_contact_offset([0.1, 0.2, 0.3], Some(1.5));
 
-        assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(contact.cached_transform_count(), 1);
+        assert_eq!(first, second);
         assert!(first.iter().any(|vertex| {
             vertex
                 .iter()
@@ -2794,9 +3161,15 @@ mod tests {
         rotation: [f32; 3],
         scale: Option<f32>,
     ) -> [f32; 3] {
+        // Independent of the base-candidate subset: rotate every vertex and take the lowest.
+        let world_rotation = world_rotation(rotation);
         let offset = contact
-            .contact_transform_uncached(rotation, scale.unwrap_or(1.0))
-            .lowest;
+            .vertices
+            .iter()
+            .map(|vertex| world_rotation * (Vec3::from(*vertex) * scale.unwrap_or(1.0)))
+            .min_by(|left, right| left.z.total_cmp(&right.z))
+            .expect("contact has vertices")
+            .to_array();
         [
             offset[0] + translation[0],
             offset[1] + translation[1],

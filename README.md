@@ -23,8 +23,8 @@ Typical GUI flow:
 1. Open Greenmote.
 2. Review or regenerate settings if prompted.
 3. Use the Convert tab to run a dry run or conversion.
-4. Use the Unclip tab to inspect generated plugins or select explicit output plugins.
-5. Enable Unclip dry run when you want read-only inspection; leave it off only when you are ready to confirm a backup and write.
+4. Use the Unclip tab to pick groundcover plugins, optionally with an output path per plugin.
+5. Leave "Write changes" off to get a report only; tick it to rewrite the plugins with backups after a confirmation.
 
 ### CLI
 
@@ -43,13 +43,13 @@ greenmote convert --dry-run
 Inspect generated groundcover clipping:
 
 ```sh
-greenmote unclip --plugin groundcover.omwaddon --dry-run --verbose
+greenmote unclip --plugin groundcover.omwaddon --verbose
 ```
 
-Write Unclip fixes after inspection with the default write actions:
+Rewrite the plugin in place (with backups) after inspecting the report:
 
 ```sh
-greenmote unclip --plugin groundcover.omwaddon
+greenmote unclip --plugin groundcover.omwaddon --write
 ```
 
 Top-level options such as `--openmw-cfg`, `--config`, `--generate-completion`, and `--generate-manpage` must appear before the subcommand.
@@ -143,12 +143,13 @@ greenmote unclip --plugin Rem_AI.esp --write --output-plugin Rem_AI_unclipped.es
 
 How a reference is judged, in order:
 
-1. References that are deleted, have no `STAT` record, have an unloadable mesh, sit outside their own cell, or have no terrain under them are skipped with that reason.
-2. `road-delete` deletes references whose `LAND` texture matches a road pattern. The texture is sampled where `OpenMW` renders it, including the engine's blendmap offset.
-3. `water-delete` deletes references standing on ground below the exterior water plane.
-4. `orient` tilts the reference to the terrain slope using the same formula groundcover generators use, so a generator's own output measures as already aligned.
-5. `terrain-z` looks at the mesh's base vertices under the final tilt. If the highest base vertex floats more than `--float-tolerance` above the terrain, or is buried deeper than the larger of `--max-sink` units and `--max-sink-fraction` of the mesh height, the reference is lowered or raised so that vertex sits `--sink` units below the surface. Floating is the visible defect; burial only counts when most of the plant is underground, because generators bury tall grass deliberately (Remiros by 4 to 16 units, Fantasia by up to 48).
-6. `static-move` moves references whose visible volume overlaps a static's collision shape to the nearest clear spot in the same cell, re-grounding them there. `static-delete` removes references that are entirely inside a static, or that overlap one and cannot be moved.
+1. References that are deleted, have no `STAT` record, have an unloadable mesh, or have no terrain under them are skipped with that reason.
+2. References whose position lies outside the cell record that holds them are always deleted. `OpenMW` draws such a reference only in chunks a full cell or larger and drops it in the near, sub-cell chunks, so it pops in from afar and vanishes as you approach.
+3. `road-delete` deletes references whose `LAND` texture matches a road pattern. The texture is sampled where `OpenMW` renders it, including the engine's blendmap offset.
+4. `water-delete` deletes references standing on ground below the exterior water plane.
+5. `orient` tilts the reference to the terrain slope using the same formula groundcover generators use, so a generator's own output measures as already aligned.
+6. `terrain-z` looks at the mesh's base vertices under the final tilt. If the highest base vertex floats more than `--float-tolerance` above the terrain, or is buried deeper than the larger of `--max-sink` units and `--max-sink-fraction` of the mesh height, the reference is lowered or raised so that vertex sits `--sink` units below the surface. Floating is the visible defect; burial only counts when most of the plant is underground, because generators bury tall grass deliberately (Remiros by 4 to 16 units, Fantasia by up to 48).
+7. `static-move` moves references whose visible volume overlaps a static's collision shape to the nearest clear spot in the same cell, re-grounding them there. `static-delete` removes references that are entirely inside a static, or that overlap one and cannot be moved.
 
 A disabled action never changes a verdict silently: the report says why a reference was left alone, for example `keep_terrain_z_disabled`.
 
@@ -166,6 +167,7 @@ Output:
 - Every write is reloaded and checked against the planned changes before unclip reports success. Running unclip again on its own output plans zero changes.
 - `greenmote-unclip.log` next to `openmw.cfg` holds the text report and, with `--verbose`, one line per reference.
 - `--structured` prints the report as JSON; with `--verbose` it includes every verdict.
+- Set `GREENMOTE_PROFILE=1` to print phase timings to stderr.
 
 Flags and `[unclip]` keys:
 
@@ -181,7 +183,7 @@ Flags and `[unclip]` keys:
 The default GUI provides:
 
 - A Convert main view with run controls, progress, status output, and generated-output safeguards.
-- An Unclip main view with batch targets, selectable output plugins, dry-run inspection, and guarded write controls.
+- An Unclip main view with batch targets, optional output plugins, report-only runs by default, and a confirmed write toggle.
 - Settings sections for OpenMW/config paths, Convert options, Unclip options, filters, road texture filters, and write policy.
 - Runtime-only localization for English, Swedish, Russian, Spanish, German, and French.
 - Non-persistent language selection. Changing the GUI language affects the current GUI session only.
@@ -213,8 +215,11 @@ auto_enable = false
 
 [unclip]
 plugin = "groundcover.omwaddon"
-write_actions = ["terrain-z", "water-delete", "road-delete", "static-delete", "static-move", "orient"]
-origin_epsilon = 2.0
+actions = ["terrain-z", "water-delete", "road-delete", "static-delete", "static-move", "orient"]
+float_tolerance = 1.0
+max_sink = 24.0
+max_sink_fraction = 0.75
+sink = 4.0
 relocation_step = 32.0
 relocation_steps = 8
 orientation_epsilon = 1.0
@@ -251,9 +256,9 @@ Key notes:
 - `[convert].ignored_plugins` removes matching plugin file names from conversion.
 - `[convert].debug` and `[convert].auto_enable` persist their corresponding Convert toggles. Convert dry-run is runtime-only via `--dry-run`.
 - `[unclip].plugin` is the default Unclip target plugin.
-- Unclip `--dry-run`, `--verbose`, `--structured`, and `--meshgenerator-ini` are runtime-only CLI options and are not read from or written to `greenmote.toml`.
-- `[unclip].write_actions` selects which write fixes are allowed.
-- `[unclip].*_epsilon`, `relocation_step`, and `relocation_steps` tune inspection/write policy.
+- Unclip `--write`, `--output-plugin`, `--verbose`, and `--structured` are runtime-only CLI options and are not read from or written to `greenmote.toml`.
+- `[unclip].actions` selects which fixes are planned.
+- `[unclip].float_tolerance`, `max_sink`, `max_sink_fraction`, `sink`, `orientation_epsilon`, `relocation_step`, and `relocation_steps` tune the policy.
 - Include/exclude ID filters are case-insensitive regex lists.
 - Road texture path filters are case-insensitive regex lists used by the `road-delete` write action.
 - Default occluder excludes skip common vanilla, Bloodmoon, and `Tamriel_Data` tree statics whose broad canopy bounds often produce false static-occlusion hits. Set `exclude_occluder_ids = []` to opt back into treating them as blockers.
@@ -300,9 +305,9 @@ No matching statics
 
 Review `[convert].grass_ids`, `[convert].exclude`, `--ignore`, and the active `OpenMW` content list.
 
-Unexpected Unclip write plan
+Unexpected Unclip changes
 
-Run with `--dry-run` first, add `--verbose`, and inspect `greenmote.log` for exact per-reference diagnostics.
+Run without `--write` first, add `--verbose`, and inspect `greenmote-unclip.log` for one line per reference with the measured gap, tilt, and the reason for its verdict.
 
 ## Development And Validation
 

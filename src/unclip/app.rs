@@ -36,6 +36,38 @@ use super::{
 /// Log file written next to `openmw.cfg` on every run.
 pub const UNCLIP_LOG_NAME: &str = "greenmote-unclip.log";
 
+/// Set this environment variable to print phase timings to stderr.
+pub const PROFILE_ENV: &str = "GREENMOTE_PROFILE";
+
+struct Profiler {
+    enabled: bool,
+    last: std::time::Instant,
+    start: std::time::Instant,
+}
+
+impl Profiler {
+    fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            enabled: std::env::var_os(PROFILE_ENV).is_some(),
+            last: now,
+            start: now,
+        }
+    }
+
+    fn phase(&mut self, name: &str) {
+        if self.enabled {
+            let now = std::time::Instant::now();
+            eprintln!(
+                "[profile] {name:<28} {:8.3}s  (total {:7.3}s)",
+                (now - self.last).as_secs_f64(),
+                (now - self.start).as_secs_f64()
+            );
+            self.last = now;
+        }
+    }
+}
+
 /// Runs unclip for one configuration.
 ///
 /// # Errors
@@ -47,6 +79,7 @@ pub fn run(
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
     let check = || super::check_cancellation(cancellation);
+    let mut profiler = Profiler::new();
     check()?;
     let policy = config
         .policy()
@@ -56,6 +89,7 @@ pub fn run(
     let vfs = openmw::build_vfs_with_extra_directories(&openmw_config, &plugin_directories);
     let source_path = resolve_target_plugin(&config.plugin, &vfs)?;
     let mut source = load_target_plugin(&source_path)?;
+    profiler.phase("config, vfs, target plugin");
     check()?;
 
     let target_refs = TargetRefIndex::build(&source, &policy, cancellation)?;
@@ -81,13 +115,16 @@ pub fn run(
         Vec::new()
     } else {
         let world = load_world(
-            &openmw_config,
-            &vfs,
-            &source_path,
-            &source,
-            &target_refs,
-            &policy,
-            cancellation,
+            &mut profiler,
+            &WorldInput {
+                openmw_config: &openmw_config,
+                vfs: &vfs,
+                source_path: &source_path,
+                source: &source,
+                target_refs: &target_refs,
+                policy: &policy,
+                cancellation,
+            },
         )?;
         report.cells.active_cells = world.active_cells.len();
         report.cells.terrain_cells_loaded = world.terrain.len();
@@ -97,37 +134,14 @@ pub fn run(
             .filter(|cell| !world.terrain.has_cell(**cell))
             .map(|cell| [cell.0, cell.1])
             .collect();
-        report.occluders = world.occluder_report;
+        report.occluders = world.occluder_report.clone();
         if !report.occluders.missing_meshes.is_empty() && !config.ignore_missing_meshes {
             return Err(missing_meshes_error(&report.occluders));
         }
         check()?;
 
-        let surveyor = Surveyor {
-            terrain: &world.terrain,
-            textures: &world.textures,
-            occluders: &world.occluders,
-            policy: &policy,
-        };
-        let inputs = target_refs
-            .iter_ref_entries(&source)
-            .map(|entry| RefInput {
-                cell: entry.cell,
-                key: entry.key,
-                id: &entry.reference.id,
-                deleted: entry.reference.deleted == Some(true),
-                transform: RefTransform {
-                    translation: entry.reference.translation,
-                    rotation: entry.reference.rotation,
-                    scale: entry.reference.scale,
-                },
-                geometry: world.geometry.get(entry.normalized_id),
-            })
-            .collect::<Vec<_>>();
-        let verdicts = inputs
-            .par_iter()
-            .map(|input| decide(input, &surveyor))
-            .collect::<Vec<_>>();
+        let verdicts = decide_all(&world, &policy, &source, &target_refs);
+        profiler.phase("decide");
         check()?;
         verdicts
     };
@@ -136,6 +150,7 @@ pub fn run(
 
     if config.write && report.counts.fix + report.counts.delete > 0 {
         report.write = Some(write_changes(&mut source, &source_path, &mode, &verdicts)?);
+        profiler.phase("write and verify");
     }
 
     write_log(&openmw_config, &report, &verdicts, config.verbose)?;
@@ -158,17 +173,63 @@ struct World {
     geometry: GeometryTable,
 }
 
-fn load_world(
-    openmw_config: &openmw_config::OpenMWConfiguration,
-    vfs: &vfstool_lib::VFS,
-    source_path: &Path,
+/// Decides every target reference in parallel; the verdict order follows the target index.
+fn decide_all(
+    world: &World,
+    policy: &UnclipPolicy,
     source: &Plugin,
     target_refs: &TargetRefIndex,
-    policy: &UnclipPolicy,
-    cancellation: &CancellationToken,
-) -> io::Result<World> {
+) -> Vec<RefVerdict> {
+    let surveyor = Surveyor {
+        terrain: &world.terrain,
+        textures: &world.textures,
+        occluders: &world.occluders,
+        policy,
+    };
+    let inputs = target_refs
+        .iter_ref_entries(source)
+        .map(|entry| RefInput {
+            cell: entry.cell,
+            key: entry.key,
+            id: &entry.reference.id,
+            deleted: entry.reference.deleted == Some(true),
+            transform: RefTransform {
+                translation: entry.reference.translation,
+                rotation: entry.reference.rotation,
+                scale: entry.reference.scale,
+            },
+            geometry: world.geometry.get(entry.normalized_id),
+        })
+        .collect::<Vec<_>>();
+    inputs
+        .par_iter()
+        .map(|input| decide(input, &surveyor))
+        .collect()
+}
+
+struct WorldInput<'a> {
+    openmw_config: &'a openmw_config::OpenMWConfiguration,
+    vfs: &'a vfstool_lib::VFS,
+    source_path: &'a Path,
+    source: &'a Plugin,
+    target_refs: &'a TargetRefIndex,
+    policy: &'a UnclipPolicy,
+    cancellation: &'a CancellationToken,
+}
+
+fn load_world(profiler: &mut Profiler, input: &WorldInput<'_>) -> io::Result<World> {
+    let WorldInput {
+        openmw_config,
+        vfs,
+        source_path,
+        source,
+        target_refs,
+        policy,
+        cancellation,
+    } = *input;
     let context_paths = resolve_content_plugin_paths(&openmw::content_files(openmw_config)?, vfs)?;
     let context_plugins = load_context_plugins(&context_paths, source_path, source, cancellation)?;
+    profiler.phase("context plugins");
     let target_is_active = path_matches_any(source_path, &context_paths);
     let active_static_index =
         build_static_index(context_plugins.iter().map(ContextPlugin::as_plugin), None);
@@ -192,6 +253,7 @@ fn load_world(
         context_plugins.iter().map(ContextPlugin::as_plugin),
         &active_cells,
     );
+    profiler.phase("statics, terrain, textures");
     super::check_cancellation(cancellation)?;
 
     let mut mesh_cache = MeshCache::new(vfs);
@@ -206,6 +268,7 @@ fn load_world(
             .map_err(|error| error.to_string());
         geometry.insert(id.clone(), loaded);
     }
+    profiler.phase("grass meshes");
     super::check_cancellation(cancellation)?;
 
     let named = context_paths
@@ -228,6 +291,7 @@ fn load_world(
         &policy.occluder_filter,
         cancellation,
     )?;
+    profiler.phase("occluders");
 
     Ok(World {
         active_cells,

@@ -22,8 +22,8 @@ use serde::Serialize;
 
 use super::{
     cells::CellCoord,
-    measure::{GroundContact, Occlusion, RefTransform, Surveyor},
-    mesh::MeshGeometry,
+    measure::{EXTERIOR_WATER_LEVEL, GroundContact, Occlusion, RefTransform, Surveyor},
+    mesh::{MeshGeometry, WorldAabb},
     orientation::{terrain_rotation, tilt_delta_degrees},
     terrain::TerrainSample,
 };
@@ -139,10 +139,21 @@ pub(crate) struct Fix {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum DeleteReason {
-    Road { texture: String },
-    Water { terrain_z: f32 },
-    InsideStatic { occluder: String },
-    NoRelocation { occluder: String },
+    Road {
+        texture: String,
+    },
+    Water {
+        terrain_z: f32,
+    },
+    InsideStatic {
+        occluder: String,
+    },
+    NoRelocation {
+        occluder: String,
+    },
+    /// The ref's XY lies outside its own cell record. `OpenMW` renders it only from far away and
+    /// drops it up close, so it pops in and out.
+    OutsideCell,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -150,12 +161,8 @@ pub(crate) enum DeleteReason {
 pub(crate) enum SkipReason {
     DeletedRef,
     UnresolvedStatic,
-    MeshError {
-        error: String,
-    },
+    MeshError { error: String },
     NoTerrain,
-    /// The ref's XY lies outside its own cell, so `OpenMW` never renders it.
-    OutsideCell,
 }
 
 impl Verdict {
@@ -206,6 +213,7 @@ impl DeleteReason {
             Self::Water { .. } => "delete_water",
             Self::InsideStatic { .. } => "delete_inside_static",
             Self::NoRelocation { .. } => "delete_no_relocation",
+            Self::OutsideCell => "delete_outside_cell",
         }
     }
 }
@@ -217,7 +225,6 @@ impl SkipReason {
             Self::UnresolvedStatic => "skip_unresolved_static",
             Self::MeshError { .. } => "skip_mesh_error",
             Self::NoTerrain => "skip_no_terrain",
-            Self::OutsideCell => "skip_outside_cell",
         }
     }
 }
@@ -262,10 +269,16 @@ fn decide_verdict(input: &RefInput<'_>, surveyor: &Surveyor<'_>) -> (Verdict, Op
         Some(Ok(geometry)) => geometry,
     };
     let [x, y, _] = input.transform.translation;
-    if !cell_contains_xy(input.cell, x, y) {
-        return skip(SkipReason::OutsideCell);
-    }
     let policy = surveyor.policy;
+    if !cell_contains_xy(input.cell, x, y) {
+        // Not a policy choice: OpenMW draws such refs only from afar and drops them up close.
+        return (
+            Verdict::Delete {
+                reason: DeleteReason::OutsideCell,
+            },
+            None,
+        );
+    }
     let mut notes = Vec::new();
 
     if let Some(texture) = surveyor.road_at(x, y) {
@@ -280,7 +293,17 @@ fn decide_verdict(input: &RefInput<'_>, surveyor: &Surveyor<'_>) -> (Verdict, Op
         notes.push(KeepReason::RoadDeleteDisabled { texture });
     }
 
-    let Some(placement) = place(geometry, &input.transform, [x, y], surveyor, true) else {
+    let Some(contact_before) = surveyor.ground_contact(geometry, &input.transform) else {
+        return skip(SkipReason::NoTerrain);
+    };
+    let Some(placement) = place(
+        geometry,
+        &input.transform,
+        contact_before,
+        [x, y],
+        surveyor,
+        true,
+    ) else {
         return skip(SkipReason::NoTerrain);
     };
     let measured = Some(Measured {
@@ -358,8 +381,20 @@ fn resolve_statics(
                 occluder: occluder.describe(),
             });
         }
-        Occlusion::Inside(occluder) | Occlusion::Intersects(occluder) => occluder.describe(),
+        Occlusion::Inside(occluder) | Occlusion::Intersects(occluder) => occluder,
     };
+    let away = {
+        let bounds = occluder.bounds;
+        let centre = [
+            f32::midpoint(bounds.min[0], bounds.max[0]),
+            f32::midpoint(bounds.min[1], bounds.max[1]),
+        ];
+        [
+            placement.transform.translation[0] - centre[0],
+            placement.transform.translation[1] - centre[1],
+        ]
+    };
+    let occluder = occluder.describe();
     if !actions.static_move() {
         if actions.static_delete() {
             return StaticOutcome::Delete(DeleteReason::NoRelocation { occluder });
@@ -367,7 +402,15 @@ fn resolve_statics(
         notes.push(KeepReason::StaticActionsDisabled { occluder });
         return StaticOutcome::Stay;
     }
-    match relocate(geometry, &input.transform, input.cell, surveyor) {
+    match relocate(
+        geometry,
+        &input.transform,
+        placement.contact_before,
+        &placement.transform,
+        input.cell,
+        away,
+        surveyor,
+    ) {
         Some(relocated) => StaticOutcome::Moved(relocated, occluder),
         None if actions.static_delete() => {
             StaticOutcome::Delete(DeleteReason::NoRelocation { occluder })
@@ -386,6 +429,7 @@ fn resolve_statics(
 fn place(
     geometry: &MeshGeometry,
     current: &RefTransform,
+    contact_before: GroundContact,
     xy: [f32; 2],
     surveyor: &Surveyor<'_>,
     respect_actions: bool,
@@ -412,7 +456,6 @@ fn place(
         false
     };
 
-    let contact_before = surveyor.ground_contact(geometry, current)?;
     let contact_here = surveyor.ground_contact(geometry, &transform)?;
     let max_sink = policy
         .max_sink
@@ -452,30 +495,76 @@ fn place(
 fn relocate(
     geometry: &MeshGeometry,
     current: &RefTransform,
+    contact_before: GroundContact,
+    grounded: &RefTransform,
     cell: CellCoord,
+    away: [f32; 2],
     surveyor: &Surveyor<'_>,
 ) -> Option<Placement> {
     let relocation = surveyor.policy.relocation;
     let [x, y, _] = current.translation;
+    // Probe the directions pointing away from the blocking occluder first: most refs are clear
+    // one step out, and the spot found is the closest one that is clear, whichever way it lies.
+    let mut directions = RELOCATION_DIRECTIONS;
+    directions.sort_by(|left, right| {
+        let dot = |direction: &[f32; 2]| direction[0] * away[0] + direction[1] * away[1];
+        dot(right).total_cmp(&dot(left))
+    });
+    // Every probe lies within `reach` of the grounded placement, and a probe's box, whatever
+    // its tilt, fits inside a sphere of the mesh diagonal around its origin. A window grown by
+    // both therefore holds every occluder any probe could touch, so it is fetched once. The
+    // extra vertical margin allows for steep ground under distant probes.
+    let reach = relocation.step * f32::from(relocation.steps);
+    let scale = current.scale.unwrap_or(1.0).abs();
+    let diagonal = {
+        let size = [
+            geometry.bounds.max[0] - geometry.bounds.min[0],
+            geometry.bounds.max[1] - geometry.bounds.min[1],
+            geometry.bounds.max[2] - geometry.bounds.min[2],
+        ];
+        (size[0] * size[0] + size[1] * size[1] + size[2] * size[2]).sqrt() * scale
+    };
+    let margin = reach + diagonal;
+    let [gx, gy, gz] = grounded.translation;
+    let nearby = surveyor.occluders_within(WorldAabb {
+        min: [gx - margin, gy - margin, gz - margin - 4.0 * reach],
+        max: [gx + margin, gy + margin, gz + margin + 4.0 * reach],
+    });
     for ring in 1..=u32::from(relocation.steps) {
         #[allow(clippy::cast_precision_loss)]
         let radius = relocation.step * ring as f32;
-        for direction in RELOCATION_DIRECTIONS {
+        for direction in directions {
             let candidate = [x + direction[0] * radius, y + direction[1] * radius];
             if !cell_contains_xy(cell, candidate[0], candidate[1]) {
                 continue;
             }
-            if surveyor.road_at(candidate[0], candidate[1]).is_some() {
+            // Cheap rejection first: the spot must have ground above water that is not a road.
+            let Some(height) = surveyor.height_at(candidate[0], candidate[1]) else {
+                continue;
+            };
+            if height < EXTERIOR_WATER_LEVEL
+                || surveyor.road_at(candidate[0], candidate[1]).is_some()
+            {
                 continue;
             }
-            let Some(placement) = place(geometry, current, candidate, surveyor, false) else {
+            let Some(placement) = place(
+                geometry,
+                current,
+                contact_before,
+                candidate,
+                surveyor,
+                false,
+            ) else {
                 continue;
             };
             if Surveyor::submerged_ground(&placement.terrain) {
                 continue;
             }
             let collider = Surveyor::collider(geometry, &placement.transform);
-            if matches!(surveyor.occlusion(&collider), Occlusion::Clear) {
+            if matches!(
+                Surveyor::occlusion_among(&nearby, &collider),
+                Occlusion::Clear
+            ) {
                 return Some(placement);
             }
         }
@@ -746,8 +835,8 @@ mod tests {
     }
 
     #[test]
-    fn ref_outside_its_cell_is_skipped() {
-        let world = World::new(flat_terrain(0.0));
+    fn ref_outside_its_cell_is_always_deleted() {
+        let mut world = World::new(flat_terrain(0.0));
         let geometry = geometry();
         let result = decide(
             &input(&geometry, [9000.0, 1000.0, 0.0], [0.0; 3]),
@@ -755,8 +844,20 @@ mod tests {
         );
         assert!(matches!(
             result.verdict,
-            Verdict::Skip {
-                reason: SkipReason::OutsideCell
+            Verdict::Delete {
+                reason: DeleteReason::OutsideCell
+            }
+        ));
+
+        world.policy.actions = crate::unclip::args::Actions::empty();
+        let result = decide(
+            &input(&geometry, [9000.0, 1000.0, 0.0], [0.0; 3]),
+            &world.surveyor(),
+        );
+        assert!(matches!(
+            result.verdict,
+            Verdict::Delete {
+                reason: DeleteReason::OutsideCell
             }
         ));
     }

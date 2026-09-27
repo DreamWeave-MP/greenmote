@@ -5,6 +5,7 @@ use std::{
     io,
 };
 
+use rayon::prelude::*;
 use tes3::esp::{Cell, Plugin};
 
 use crate::groundcover::CancellationToken;
@@ -73,7 +74,16 @@ pub(crate) fn build_static_occluders<'a>(
     let mut build_report = initial_build_report(&scan);
     let effective_refs = scan.refs;
     let mut missing_meshes: BTreeMap<String, MissingOccluderMesh> = BTreeMap::new();
-    let mut occluders = Vec::new();
+    let mut pending = Vec::new();
+    mesh_bounds.preload(
+        effective_refs
+            .values()
+            .filter_map(|entry| match &entry.state {
+                EffectiveRefState::Candidate { static_mesh, .. } => Some(*static_mesh),
+                EffectiveRefState::Excluded(_) => None,
+            }),
+    );
+    super::check_cancellation(cancellation)?;
 
     for (_identity, entry) in effective_refs {
         super::check_cancellation(cancellation)?;
@@ -95,7 +105,7 @@ pub(crate) fn build_static_occluders<'a>(
             continue;
         }
         let collider_parts = match mesh_bounds.collider_parts(static_mesh) {
-            Ok(collider_parts) => collider_parts,
+            Ok(collider_parts) => collider_parts.clone(),
             Err(error) => {
                 record_missing_mesh(
                     &mut build_report,
@@ -120,25 +130,33 @@ pub(crate) fn build_static_occluders<'a>(
             MeshColliderSource::VisibleFallback => build_report.visible_fallback_source += 1,
             MeshColliderSource::NoCollision => unreachable!("no-collision meshes are skipped"),
         }
-        let collider = RapierCollider::from_mesh_collider_parts(
-            collider_parts,
-            reference.translation,
-            reference.rotation,
-            reference.scale,
-        );
-        let bounds = collider.bounds();
-        if huge_footprint(bounds) {
-            build_report.huge_footprint += 1;
-        }
-
-        occluders.push(StaticOccluder {
-            id: reference.id.clone(),
-            cell: [entry.cell.0, entry.cell.1],
-            reference_key: [entry.reference_key.0, entry.reference_key.1],
-            bounds,
-            collider,
-        });
+        pending.push((entry.cell, entry.reference_key, reference, collider_parts));
     }
+
+    // Placing every collision mesh in the world is independent per reference.
+    let mut occluders: Vec<StaticOccluder> = pending
+        .par_iter()
+        .map(|(cell, reference_key, reference, collider_parts)| {
+            let collider = RapierCollider::from_mesh_collider_parts(
+                collider_parts,
+                reference.translation,
+                reference.rotation,
+                reference.scale,
+            );
+            StaticOccluder {
+                id: reference.id.clone(),
+                cell: [cell.0, cell.1],
+                reference_key: [reference_key.0, reference_key.1],
+                bounds: collider.bounds(),
+                collider,
+            }
+        })
+        .collect();
+    build_report.huge_footprint = occluders
+        .iter()
+        .filter(|occluder| huge_footprint(occluder.bounds))
+        .count();
+    occluders.shrink_to_fit();
 
     build_report.missing_meshes = missing_meshes.into_values().collect();
 
@@ -240,20 +258,38 @@ fn effective_static_occluder_refs<'a>(
     occluder_filter: &IdFilter,
     cancellation: &CancellationToken,
 ) -> io::Result<EffectiveRefScan<'a>> {
-    let mut refs: BTreeMap<RefIdentity, EffectiveRef<'a>> = BTreeMap::new();
+    // Millions of references flow through here on a full load order, so the hot loop avoids
+    // allocating: owners are interned to indices and each distinct object ID is classified
+    // (regex filters, static lookup) once instead of per reference.
+    let mut owners: Vec<String> = Vec::new();
+    let mut owner_index: rustc_hash::FxHashMap<String, u32> = rustc_hash::FxHashMap::default();
+    let mut intern = |name: &str| -> u32 {
+        let lower = name.to_lowercase();
+        if let Some(&index) = owner_index.get(&lower) {
+            return index;
+        }
+        let index = u32::try_from(owners.len()).expect("owner count fits u32");
+        owners.push(lower.clone());
+        owner_index.insert(lower, index);
+        index
+    };
+    let mut id_classes: rustc_hash::FxHashMap<&'a str, IdClass<'a>> =
+        rustc_hash::FxHashMap::default();
+    let mut refs: rustc_hash::FxHashMap<(u32, u32), EffectiveRef<'a>> =
+        rustc_hash::FxHashMap::default();
     let mut invalid_master_index = 0;
 
     for named in active_plugins {
         super::check_cancellation(cancellation)?;
-        let plugin_name = named.name.to_lowercase();
-        let masters: Vec<String> = named
+        let plugin_owner = intern(&named.name);
+        let masters: Vec<u32> = named
             .plugin
             .header()
             .map(|header| {
                 header
                     .masters
                     .iter()
-                    .map(|(master, _)| master.to_lowercase())
+                    .map(|(master, _)| intern(master))
                     .collect()
             })
             .unwrap_or_default();
@@ -266,36 +302,37 @@ fn effective_static_occluder_refs<'a>(
 
             for (&(mast_index, refr_index), reference) in &cell.references {
                 let owner = if mast_index == 0 {
-                    plugin_name.clone()
+                    plugin_owner
                 } else {
-                    let Some(master) = usize::try_from(mast_index)
+                    let Some(&master) = usize::try_from(mast_index)
                         .ok()
                         .and_then(|index| masters.get(index - 1))
                     else {
                         invalid_master_index += 1;
                         continue;
                     };
-                    master.clone()
+                    master
                 };
-                let identity = RefIdentity { owner, refr_index };
+                let identity = (owner, refr_index);
                 if reference.deleted == Some(true) {
                     refs.remove(&identity);
                     continue;
                 }
 
-                let reference_id_key = reference.id.to_lowercase();
-                let state = if target_static_ids.contains(&reference_id_key) {
-                    EffectiveRefState::Excluded(ExclusionReason::Target)
-                } else if !occluder_filter.includes(&reference.id) {
-                    EffectiveRefState::Excluded(ExclusionReason::Regex)
-                } else if let Some(static_mesh) = static_index.get_normalized_key(&reference_id_key)
-                {
-                    EffectiveRefState::Candidate {
+                let class = *id_classes.entry(reference.id.as_str()).or_insert_with(|| {
+                    classify_id(
+                        &reference.id,
+                        static_index,
+                        target_static_ids,
+                        occluder_filter,
+                    )
+                });
+                let state = match class {
+                    IdClass::Static(static_mesh) => EffectiveRefState::Candidate {
                         reference,
                         static_mesh,
-                    }
-                } else {
-                    EffectiveRefState::Excluded(ExclusionReason::UnresolvedStatic)
+                    },
+                    IdClass::Excluded(reason) => EffectiveRefState::Excluded(reason),
                 };
                 refs.insert(
                     identity,
@@ -309,12 +346,48 @@ fn effective_static_occluder_refs<'a>(
         }
     }
 
-    refs.retain(|_, entry| active_cells.contains(&entry.cell));
+    let refs = refs
+        .into_iter()
+        .filter(|(_, entry)| active_cells.contains(&entry.cell))
+        .map(|((owner, refr_index), entry)| {
+            (
+                RefIdentity {
+                    owner: owners[owner as usize].clone(),
+                    refr_index,
+                },
+                entry,
+            )
+        })
+        .collect();
 
     Ok(EffectiveRefScan {
         refs,
         invalid_master_index,
     })
+}
+
+#[derive(Clone, Copy)]
+enum IdClass<'a> {
+    Static(&'a super::mesh::StaticMesh),
+    Excluded(ExclusionReason),
+}
+
+fn classify_id<'a>(
+    id: &str,
+    static_index: &'a StaticMeshIndex,
+    target_static_ids: &BTreeSet<String>,
+    occluder_filter: &IdFilter,
+) -> IdClass<'a> {
+    let key = id.to_lowercase();
+    if target_static_ids.contains(&key) {
+        IdClass::Excluded(ExclusionReason::Target)
+    } else if !occluder_filter.includes(id) {
+        IdClass::Excluded(ExclusionReason::Regex)
+    } else if let Some(static_mesh) = static_index.get_normalized_key(&key) {
+        IdClass::Static(static_mesh)
+    } else {
+        IdClass::Excluded(ExclusionReason::UnresolvedStatic)
+    }
 }
 
 #[cfg(test)]
