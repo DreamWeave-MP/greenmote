@@ -12,7 +12,7 @@ mod args;
 mod auto_enable;
 mod config;
 pub(crate) mod default;
-mod load;
+pub(crate) mod load;
 pub(crate) mod mesh;
 pub(crate) mod openmw;
 mod output;

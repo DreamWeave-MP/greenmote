@@ -324,7 +324,8 @@ fn is_greenmote_generated_plugin(path: &Path) -> io::Result<bool> {
         .is_some_and(is_greenmote_header))
 }
 
-fn is_greenmote_header(header: &Header) -> bool {
+/// Whether a plugin header identifies one of greenmote's own generated outputs.
+pub(crate) fn is_greenmote_header(header: &Header) -> bool {
     header
         .author
         .0
