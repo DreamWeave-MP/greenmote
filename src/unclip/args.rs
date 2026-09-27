@@ -416,6 +416,15 @@ fn relocation_steps(value: &str) -> Result<u16, String> {
     }
 }
 
+impl UnclipPolicy {
+    /// How deep a mesh of `mesh_height` may sit below the terrain before it counts as buried:
+    /// `max(max_sink, max_sink_fraction * mesh_height)`.
+    #[must_use]
+    pub(crate) fn burial_limit(&self, mesh_height: f32) -> f32 {
+        self.max_sink.max(self.max_sink_fraction * mesh_height)
+    }
+}
+
 #[cfg(test)]
 impl UnclipPolicy {
     pub(crate) fn for_test() -> Self {

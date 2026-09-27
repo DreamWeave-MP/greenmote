@@ -117,10 +117,28 @@ impl Surveyor<'_> {
             .is_road_at(x, y, &self.policy.road_texture_filter)
     }
 
-    /// Whether the terrain under a world XY position lies below the exterior water plane.
+    /// Whether a height is at or above the exterior water plane. A ref placed exactly on the
+    /// plane counts as above water, matching where the water surface renders.
     #[must_use]
-    pub(crate) fn submerged_ground(terrain: &TerrainSample) -> bool {
-        terrain.height < EXTERIOR_WATER_LEVEL
+    pub(crate) fn above_water(z: f32) -> bool {
+        z >= EXTERIOR_WATER_LEVEL
+    }
+
+    /// Whether a ref clearly started under water: buried deeper below the water plane than the
+    /// burial limit allows for ground at the plane. Anything shallower may be land grass that a
+    /// generator sank a few units, so it is not treated as a water plant.
+    #[must_use]
+    pub(crate) fn started_under_water(&self, geometry: &MeshGeometry, original_z: f32) -> bool {
+        original_z < -self.policy.burial_limit(geometry.contact.height())
+    }
+
+    /// Whether grounding a ref would move it down across the exterior water plane: it was
+    /// placed at or above the plane and the terrain under it now lies below. That is land
+    /// grass over ground this load order sinks under water. A ref that started under water is
+    /// never a water problem, whatever the ground does; the other actions handle it.
+    #[must_use]
+    pub(crate) fn crosses_water_plane(original_z: f32, terrain: &TerrainSample) -> bool {
+        Self::above_water(original_z) && !Self::above_water(terrain.height)
     }
 
     /// Visible-volume collider for a reference transform.

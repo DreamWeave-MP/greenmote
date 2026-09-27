@@ -333,7 +333,10 @@ mod tests {
             key: [key.0, key.1],
             id: "flora_grass_01".to_owned(),
             verdict: Verdict::Delete {
-                reason: DeleteReason::Water { terrain_z: -5.0 },
+                reason: DeleteReason::Water {
+                    original_z: 20.0,
+                    terrain_z: -5.0,
+                },
             },
             measured: None,
         }

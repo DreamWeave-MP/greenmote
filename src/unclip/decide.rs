@@ -7,7 +7,8 @@
 //!
 //! 1. Refs that are deleted, unresolved, or unmeasurable are skipped with a reason.
 //! 2. `road-delete` deletes refs standing on a road texture.
-//! 3. `water-delete` deletes refs standing on ground below the exterior water plane.
+//! 3. `water-delete` deletes refs placed above the exterior water plane whose ground now lies
+//!    below it. Refs that started under water (kelp, seaweed) are left to the other actions.
 //! 4. `orient` tilts the ref to the terrain, then `terrain-z` re-grounds the mesh base.
 //! 5. `static-move` moves refs that clip into a static occluder to the nearest clear spot in the
 //!    same cell; `static-delete` removes refs that are inside an occluder or cannot be moved.
@@ -22,7 +23,7 @@ use serde::Serialize;
 
 use super::{
     cells::CellCoord,
-    measure::{EXTERIOR_WATER_LEVEL, GroundContact, Occlusion, RefTransform, Surveyor},
+    measure::{GroundContact, Occlusion, RefTransform, Surveyor},
     mesh::{MeshGeometry, WorldAabb},
     orientation::{terrain_rotation, tilt_delta_degrees},
     terrain::TerrainSample,
@@ -104,6 +105,7 @@ pub(crate) enum KeepReason {
         texture: String,
     },
     WaterDeleteDisabled {
+        original_z: f32,
         terrain_z: f32,
     },
     OrientDisabled {
@@ -143,6 +145,7 @@ pub(crate) enum DeleteReason {
         texture: String,
     },
     Water {
+        original_z: f32,
         terrain_z: f32,
     },
     InsideStatic {
@@ -318,20 +321,8 @@ fn decide_verdict(input: &RefInput<'_>, surveyor: &Surveyor<'_>) -> (Verdict, Op
         tilt_delta_degrees: placement.tilt_delta_degrees,
     });
 
-    if Surveyor::submerged_ground(&placement.terrain) {
-        if policy.actions.water_delete() {
-            return (
-                Verdict::Delete {
-                    reason: DeleteReason::Water {
-                        terrain_z: placement.terrain.height,
-                    },
-                },
-                measured,
-            );
-        }
-        notes.push(KeepReason::WaterDeleteDisabled {
-            terrain_z: placement.terrain.height,
-        });
+    if let Some(reason) = water_crossing(input, &placement, surveyor, &mut notes) {
+        return (Verdict::Delete { reason }, measured);
     }
     notes.extend(placement.notes.iter().cloned());
 
@@ -370,6 +361,32 @@ enum StaticOutcome {
 }
 
 /// Applies the static occluder rules to a placed reference.
+/// The water-delete verdict for a grounded placement, or `None` with a keep note when the
+/// action is disabled or the ref never crosses the water plane.
+fn water_crossing(
+    input: &RefInput<'_>,
+    placement: &Placement,
+    surveyor: &Surveyor<'_>,
+    notes: &mut Vec<KeepReason>,
+) -> Option<DeleteReason> {
+    let original_z = input.transform.translation[2];
+    let terrain_z = placement.terrain.height;
+    if !Surveyor::crosses_water_plane(original_z, &placement.terrain) {
+        return None;
+    }
+    if surveyor.policy.actions.water_delete() {
+        return Some(DeleteReason::Water {
+            original_z,
+            terrain_z,
+        });
+    }
+    notes.push(KeepReason::WaterDeleteDisabled {
+        original_z,
+        terrain_z,
+    });
+    None
+}
+
 fn resolve_statics(
     geometry: &MeshGeometry,
     input: &RefInput<'_>,
@@ -463,9 +480,7 @@ fn place(
     };
 
     let contact_here = surveyor.ground_contact(geometry, &transform)?;
-    let max_sink = policy
-        .max_sink
-        .max(policy.max_sink_fraction * geometry.contact.height());
+    let max_sink = policy.burial_limit(geometry.contact.height());
     let wants_ground = contact_here.gap > policy.float_tolerance || contact_here.gap < -max_sink;
     let grounded = if wants_ground && (policy.actions.terrain_z() || !respect_actions) {
         transform.translation[2] -= contact_here.gap + policy.sink;
@@ -496,8 +511,8 @@ fn place(
     })
 }
 
-/// Searches outward in rings for the nearest spot in the same cell that is clear of occluders,
-/// roads, and water.
+/// Searches outward in rings for the nearest spot in the same cell that is clear of occluders
+/// and roads. Submerged spots are only allowed for refs that clearly started under water.
 fn relocate(
     geometry: &MeshGeometry,
     current: &RefTransform,
@@ -508,7 +523,8 @@ fn relocate(
     surveyor: &Surveyor<'_>,
 ) -> Option<Placement> {
     let relocation = surveyor.policy.relocation;
-    let [x, y, _] = current.translation;
+    let [x, y, original_z] = current.translation;
+    let allow_submerged = surveyor.started_under_water(geometry, original_z);
     // Probe the directions pointing away from the blocking occluder first: most refs are clear
     // one step out, and the spot found is the closest one that is clear, whichever way it lies.
     let mut directions = RELOCATION_DIRECTIONS;
@@ -544,11 +560,13 @@ fn relocate(
             if !cell_contains_xy(cell, candidate[0], candidate[1]) {
                 continue;
             }
-            // Cheap rejection first: the spot must have ground above water that is not a road.
+            // Cheap rejection first: the spot must not cross the water plane or sit on a road.
             let Some(height) = surveyor.height_at(candidate[0], candidate[1]) else {
                 continue;
             };
-            if height < EXTERIOR_WATER_LEVEL || surveyor.is_road_at(candidate[0], candidate[1]) {
+            if !(allow_submerged || Surveyor::above_water(height))
+                || surveyor.is_road_at(candidate[0], candidate[1])
+            {
                 continue;
             }
             let placed = place(
@@ -562,7 +580,7 @@ fn relocate(
             let Some(placement) = placed else {
                 continue;
             };
-            if Surveyor::submerged_ground(&placement.terrain) {
+            if !(allow_submerged || Surveyor::above_water(placement.terrain.height)) {
                 continue;
             }
             let collider = Surveyor::collider(geometry, &placement.transform);
@@ -810,23 +828,27 @@ mod tests {
     }
 
     #[test]
-    fn submerged_ground_deletes_or_reports() {
+    fn land_grass_over_submerged_ground_is_deleted_or_reported() {
         let mut world = World::new(flat_terrain(-50.0));
         let geometry = geometry();
         let result = decide(
-            &input(&geometry, [1000.0, 1000.0, -50.0], [0.0; 3]),
+            &input(&geometry, [1000.0, 1000.0, 20.0], [0.0; 3]),
             &world.surveyor(),
         );
         assert!(matches!(
             result.verdict,
             Verdict::Delete {
-                reason: DeleteReason::Water { .. }
-            }
+                reason: DeleteReason::Water {
+                    original_z,
+                    terrain_z
+                }
+            } if original_z == 20.0 && terrain_z == -50.0
         ));
 
-        world.policy.actions.disable(ActionArg::WaterDelete);
+        // With every action off the crossing is still measured and reported as the keep note.
+        world.policy.actions = crate::unclip::args::Actions::empty();
         let result = decide(
-            &input(&geometry, [1000.0, 1000.0, -52.0], [0.0; 3]),
+            &input(&geometry, [1000.0, 1000.0, 20.0], [0.0; 3]),
             &world.surveyor(),
         );
         assert!(matches!(
@@ -835,6 +857,70 @@ mod tests {
                 reason: KeepReason::WaterDeleteDisabled { .. }
             }
         ));
+    }
+
+    #[test]
+    fn ref_that_started_under_water_over_dry_ground_is_grounded_not_water_deleted() {
+        // Buried shoreline grass and kelp on a raised seabed look the same; both just get
+        // grounded rather than deleted.
+        let world = World::new(flat_terrain(10.0));
+        let geometry = geometry();
+        let result = decide(
+            &input(&geometry, [1000.0, 1000.0, -100.0], [0.0; 3]),
+            &world.surveyor(),
+        );
+        assert!(
+            matches!(result.verdict, Verdict::Fix(_)),
+            "{:?}",
+            result.verdict
+        );
+        assert!(!result.verdict.label().contains("water"));
+    }
+
+    #[test]
+    fn ref_that_stays_on_its_side_of_the_water_is_never_a_water_delete() {
+        let geometry = geometry();
+        // Kelp on the seabed: below water before and after, so terrain-z just grounds it.
+        let world = World::new(flat_terrain(-50.0));
+        let result = decide(
+            &input(&geometry, [1000.0, 1000.0, -40.0], [0.0; 3]),
+            &world.surveyor(),
+        );
+        assert!(
+            matches!(result.verdict, Verdict::Fix(_)),
+            "{:?}",
+            result.verdict
+        );
+        assert!(!result.verdict.label().contains("water"));
+
+        // Shoreline grass a generator sank a few units below the plane is still land grass.
+        let world = World::new(flat_terrain(0.0));
+        let result = decide(
+            &input(&geometry, [1000.0, 1000.0, -1.0], [0.0; 3]),
+            &world.surveyor(),
+        );
+        assert!(
+            !result.verdict.label().contains("water"),
+            "{:?}",
+            result.verdict
+        );
+
+        // Exactly on the water plane counts as above water, like the terrain it stands on.
+        let world = World::new(flat_terrain(0.0));
+        let result = decide(
+            &input(&geometry, [1000.0, 1000.0, 0.0], [0.0; 3]),
+            &world.surveyor(),
+        );
+        assert!(
+            !matches!(
+                result.verdict,
+                Verdict::Delete {
+                    reason: DeleteReason::Water { .. }
+                }
+            ),
+            "{:?}",
+            result.verdict
+        );
     }
 
     #[test]
