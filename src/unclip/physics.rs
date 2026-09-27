@@ -225,8 +225,15 @@ impl RapierPart {
                             &local_cuboid,
                         )
                 });
+        let centre = local_pose.translation;
+        let within_bounds = centre.x >= bounds.min[0]
+            && centre.x <= bounds.max[0]
+            && centre.y >= bounds.min[1]
+            && centre.y <= bounds.max[1]
+            && centre.z >= bounds.min[2]
+            && centre.z <= bounds.max[2];
         touches_surface
-            || point_inside_triangles(triangles, triangle_bounds, local_pose.translation)
+            || (within_bounds && point_inside_triangles(triangles, triangle_bounds, centre))
     }
 
     fn contains_world_point(&self, point: RapierVec3) -> bool {
