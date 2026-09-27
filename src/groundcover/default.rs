@@ -48,6 +48,9 @@ pub fn exclude() -> Vec<String> {
         "ex_cave_grass00".into(),
         "secret_fern".into(),
         "flora_grass_entrance".into(),
+        // Verdant Bitter Coast ships fern trees as statics (ash_flora_bc_fern_01s and so on);
+        // they only match because "fern" is a grass ID.
+        "^ash_flora_bc_fern_[0-9]+s$".into(),
     ]
 }
 

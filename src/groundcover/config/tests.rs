@@ -78,6 +78,9 @@ fn missing_config_default_initializes_next_to_user_config() {
     assert_eq!(config.output_directory, default_output_directory);
     assert!(config.matches_static_id("flora_grass_01"));
     assert!(!config.matches_static_id("ab_furn_impplantergrass"));
+    assert!(config.matches_static_id("flora_bc_fern_02"));
+    assert!(!config.matches_static_id("ash_flora_bc_fern_01s"));
+    assert!(!config.matches_static_id("ASH_Flora_BC_Fern_12s"));
     assert!(default_config_path(&dir).is_file());
     let contents = read_to_string(default_config_path(&dir)).unwrap();
     assert!(contents.contains("[convert]"));
