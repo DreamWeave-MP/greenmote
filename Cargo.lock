@@ -693,18 +693,18 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "dream-path"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a19898f64cdf9fab61a1fa0f839b1ce360bc6a858db67717ff57b3e653f5c877"
+checksum = "e583db715c69f57e21a9a6583a5eef99b707582dff189842a3cd595fa18cac31"
 dependencies = [
  "bstr",
 ]
 
 [[package]]
 name = "dream_archive"
-version = "0.1.6"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b430d6bfd34d48ba33ac26ea6d78099e205fbb1b04b54a916bed8bb3905fa08f"
+checksum = "5e7837eaef7dd893694b275e94f3e46559514adecdfe503d630332d951ff7a73"
 dependencies = [
  "dream-path",
  "encoding_rs",
@@ -1530,9 +1530,9 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lz4_flex"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 dependencies = [
  "twox-hash",
 ]
@@ -2084,9 +2084,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openmw-config"
-version = "1.1.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "016350068cba3d4d4f93c85448c1ad9d1d34934a56c11bd2813dcb57f88dd849"
+checksum = "1a51b248273e07a85c592dd370b74e6449f0c36fb338e1e0d01e4f614f4ace08"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -3073,9 +3073,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vfstool_lib"
-version = "0.9.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "743edd3c4cee4dbf770783631c042e258f1503c545c9d09137df3aa3dfb07170"
+checksum = "fa683d03c638112193eccf6bd9aed7218e3fded4ae2fa8025dd600d56b8aa2b2"
 dependencies = [
  "ahash",
  "blake3",
