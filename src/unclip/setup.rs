@@ -109,8 +109,11 @@ pub(super) fn load_context_plugins<'a>(
                 return Ok(ContextPlugin::Borrowed(target_plugin));
             }
 
+            // The header must come along: owner resolution reads its master list, and
+            // without it every inherited ref (mast_index > 0) is dropped as invalid.
             Plugin::from_path_filtered(path, |tag| {
-                &tag == LandscapeTexture::TAG
+                &tag == Header::TAG
+                    || &tag == LandscapeTexture::TAG
                     || &tag == Landscape::TAG
                     || &tag == Static::TAG
                     || &tag == Cell::TAG
@@ -244,6 +247,35 @@ mod tests {
             std::ptr::from_ref(context_plugins[0].as_plugin()),
             std::ptr::from_ref(&target_plugin),
         ));
+    }
+
+    #[test]
+    fn context_plugins_keep_their_header_master_list() {
+        let temp_dir = TempDir::new("context-header");
+        let path = temp_dir.path().join("Patch.esp");
+        let mut plugin = Plugin {
+            objects: vec![tes3::esp::TES3Object::Header(tes3::esp::Header {
+                masters: vec![
+                    ("Morrowind.esm".to_owned(), 1),
+                    ("Tribunal.esm".to_owned(), 2),
+                ],
+                ..tes3::esp::Header::default()
+            })],
+        };
+        plugin.save_path(&path).unwrap();
+        let target_plugin = Plugin::default();
+
+        let loaded = load_context_plugins(
+            &[path],
+            Path::new("target.omwaddon"),
+            &target_plugin,
+            &crate::groundcover::CancellationToken::default(),
+        )
+        .unwrap();
+
+        let header = loaded[0].as_plugin().header().expect("header is loaded");
+        assert_eq!(header.masters.len(), 2);
+        assert_eq!(header.masters[1].0, "Tribunal.esm");
     }
 
     #[test]
