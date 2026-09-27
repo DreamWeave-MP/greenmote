@@ -55,18 +55,28 @@ fn unclip_no_matching_target_refs_skips_missing_context_plugins() {
     .unwrap();
 
     let report: Value = serde_json::from_slice(&stdout).unwrap();
-    let summary = &report["summary"];
-    assert_eq!(summary["target_refs_total"], 1);
-    assert_eq!(summary["target_refs_matching_filter"], 0);
-    assert_eq!(summary["active_cells"], 0);
-    assert_eq!(summary["loaded_terrain_cells_total"], 0);
-    assert_eq!(report["write"]["written"], false);
-    assert_eq!(report["write"]["no_write_reason"], "no_refs_changed");
-    assert!(config_dir.path().join("greenmote.log").is_file());
+    assert_eq!(report["cells"]["target_exterior_refs"], 1);
+    assert_eq!(report["cells"]["target_cells"], 0);
+    assert_eq!(report["cells"]["active_cells"], 0);
+    assert_eq!(report["counts"]["total"], 0);
+    assert_eq!(report["mode"]["mode"], "dry_run");
+    assert!(report.get("write").is_none());
+    assert!(
+        config_dir
+            .path()
+            .join(greenmote::unclip::UNCLIP_LOG_NAME)
+            .is_file()
+    );
     assert!(
         !data_dir
             .path()
-            .join("TargetGroundcover.omwaddon.001")
+            .join("TargetGroundcover_unclip.omwaddon")
+            .exists()
+    );
+    assert!(
+        !data_dir
+            .path()
+            .join("TargetGroundcover.omwaddon.bak")
             .exists()
     );
 }

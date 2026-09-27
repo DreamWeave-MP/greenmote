@@ -58,6 +58,9 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPathEntry => "Nombre o ruta del plugin",
         UiText::StartConversion => "Iniciar conversión",
         UiText::WriteChanges => "Escribir cambios",
+        UiText::RewriteInPlace => {
+            "Reescribir el plugin de origen en el lugar (conserva copias de seguridad)"
+        }
         UiText::InspectPlugin => "Inspeccionar plugin",
         UiText::DryRun => "Simulación",
         UiText::DebugDiagnostics => "Diagnósticos de depuración",
@@ -90,8 +93,12 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Confirmar escritura de Unclip",
-        UiText::ConfirmUnclipWriteMessage => {
-            "Unclip modificará los plugins objetivo seleccionados y creará archivos de copia de seguridad."
+        UiText::ConfirmUnclipPatchMessage => {
+            "Unclip escribirá un plugin de parche (<nombre de origen>_unclip.omwaddon en data-local) por cada objetivo y dejará intactos los plugins de origen."
+        }
+
+        UiText::ConfirmUnclipInPlaceMessage => {
+            "Unclip reescribirá en el lugar los plugins de origen seleccionados y creará archivos de copia de seguridad."
         }
         UiText::EnabledWriteActions => "Acciones de escritura activadas:",
         UiText::UnsavedSettingsTitle => "Ajustes sin guardar",
@@ -157,9 +164,22 @@ const fn settings_text(key: UiText) -> &'static str {
             "Advertencia: el modo escritura no producirá acciones de política."
         }
         UiText::PolicyNumbers => "Valores de política",
-        UiText::OriginHeightTolerance => "Tolerancia de altura de origen",
-        UiText::OriginHeightToleranceTooltip => {
-            "Delta máximo entre origen de referencia y terrain Z tratado como ya sobre el terrain. Config key: origin_epsilon."
+        UiText::FloatTolerance => "Tolerancia de flotación",
+
+        UiText::FloatToleranceTooltip => {
+            "Mayor separación (unidades) entre la base del mesh y el terrain que aún cuenta como apoyada. Config key: float_tolerance."
+        }
+
+        UiText::MaxSink => "Hundimiento máximo",
+
+        UiText::MaxSinkTooltip => {
+            "Mayor enterramiento (unidades) de la base del mesh que aún se considera aceptable. Config key: max_sink."
+        }
+
+        UiText::SinkDepth => "Profundidad de hundimiento",
+
+        UiText::SinkDepthTooltip => {
+            "Profundidad (unidades) a la que terrain-z entierra la base del mesh al corregir una ref. Config key: sink."
         }
         UiText::OrientationTolerance => "Tolerancia de orientación",
         UiText::OrientationToleranceTooltip => {

@@ -1,1024 +1,393 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+//! End-to-end `greenmote unclip` flow: load, measure, decide, write, report.
+
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
-    env,
+    collections::BTreeSet,
     fs::File,
     io::{self, BufWriter, Write},
-    time::{Duration, Instant},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
+use rayon::prelude::*;
 use tes3::esp::{Landscape, Plugin};
 
-use crate::groundcover::{CancellationToken, LOG_NAME, openmw};
+use crate::groundcover::{CancellationToken, openmw};
 
 use super::{
     args::UnclipPolicy,
     config::UnclipConfig,
-    contact_baseline::{ContactBaselineIndex, build_contact_baselines},
-    generated_placement::GeneratedPlacementIndex,
-    inspection::{ReferenceInspectionContext, count_target_refs, inspect_target_refs},
+    decide::{GeometryTable, RefInput, RefVerdict, VerdictCounts, decide},
+    measure::{RefTransform, Surveyor},
     mesh::{MeshCache, StaticMeshIndex},
-    model::{TerrainInspectionReport, UnclipReportContext, UnclipReportContextInput},
-    occlusion::StaticOccluderIndex,
-    report,
+    patch::{
+        OutputMode, WriteOutcome, apply_in_place, build_patch, default_patch_path, verify_written,
+        write_plugin,
+    },
+    report::{self, CellSummary, OutputSummary, PolicySummary, Report},
     setup::{
         ContextPlugin, active_cells, build_static_index, load_context_plugins, load_target_plugin,
         path_matches_any, resolve_content_plugin_paths, resolve_target_plugin,
     },
-    static_occluders::{StaticOccluderBuildReport, build_static_occluders},
+    static_occluders::{NamedPlugin, StaticOccluderBuildReport, build_static_occluders},
     target::TargetRefIndex,
     terrain::{TerrainIndex, TerrainTextureIndex},
-    write_plan::{WritePlan, WriteReport, WriteStatusIndex},
-    write_policy::{UnclipWritePlanningInput, apply_unclip_write_plan, plan_unclip_adjustments},
-    writer::save_plugin_with_backup,
 };
 
-#[allow(clippy::too_many_lines)]
+/// Log file written next to `openmw.cfg` on every run.
+pub const UNCLIP_LOG_NAME: &str = "greenmote-unclip.log";
+
+/// Runs unclip for one configuration.
+///
+/// # Errors
+///
+/// Returns configuration, plugin, mesh, and filesystem errors.
 pub fn run(
     config: &UnclipConfig,
     stdout: &mut dyn Write,
     cancellation: &CancellationToken,
 ) -> io::Result<()> {
-    let mut profiler = UnclipProfiler::from_env();
-    super::check_cancellation(cancellation)?;
+    let check = || super::check_cancellation(cancellation);
+    check()?;
     let policy = config
         .policy()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    super::check_cancellation(cancellation)?;
-    let openmw_config = profiler.measure("openmw_config_load", || {
-        openmw::load_config_from_path(config.openmw_cfg.as_deref())
-    })?;
-    let vfs = profiler.measure("vfs_build", || openmw::build_vfs(&openmw_config));
-    let (target_plugin, mut target_plugin_data) =
-        profiler.measure("target_plugin_resolve_load", || {
-            let target_plugin =
-                resolve_target_plugin(&config.plugin, config.output_plugin.as_deref(), &vfs)?;
-            super::check_cancellation(cancellation)?;
-            let target_plugin_data = load_target_plugin(&target_plugin.source_path)?;
-            Ok::<_, io::Error>((target_plugin, target_plugin_data))
-        })?;
-    let target_refs = profiler.measure("target_ref_index_build", || {
-        TargetRefIndex::build(&target_plugin_data, &policy, cancellation)
-    })?;
-    profiler.counter("target_exterior_ref_count", target_refs.exterior_ref_count);
-    profiler.counter("target_cells", target_refs.target_cells.len());
-    profiler.counter("target_static_ids", target_refs.target_static_ids.len());
-    if target_refs.target_cells.is_empty() {
-        write_no_target_report(
-            stdout,
-            &mut profiler,
-            NoTargetReportInput {
-                config,
-                openmw_config: &openmw_config,
-                target_plugin: &target_plugin,
-                target_plugin_data: &mut target_plugin_data,
-                target_refs: &target_refs,
-                policy: &policy,
-                cancellation,
-            },
-        )?;
-        profiler.write_stderr();
-        return Ok(());
-    }
-    super::check_cancellation(cancellation)?;
-    let (context_plugin_paths, context_plugins) =
-        profiler.measure("context_path_resolve_load", || {
-            let context_plugin_paths = context_plugin_paths(&openmw_config, &vfs)?;
-            super::check_cancellation(cancellation)?;
-            let context_plugins = load_context_plugins(
-                &context_plugin_paths,
-                &target_plugin.source_path,
-                &target_plugin_data,
-                cancellation,
-            )?;
-            Ok::<_, io::Error>((context_plugin_paths, context_plugins))
-        })?;
-    let target_is_active = path_matches_any(&target_plugin.source_path, &context_plugin_paths);
-    super::check_cancellation(cancellation)?;
-    let active_static_index = profiler.measure("active_static_index_build", || {
-        build_static_index(context_plugins.iter().map(ContextPlugin::as_plugin), None)
-    });
-    super::check_cancellation(cancellation)?;
-    let target_static_index = profiler.measure("target_static_index_preparation", || {
-        target_static_index(
-            context_plugins.iter().map(ContextPlugin::as_plugin),
-            &active_static_index,
-            target_is_active,
-            &target_plugin_data,
-        )
-    });
-    let (active_cells, terrain, terrain_textures) =
-        profiler.measure("active_cells_terrain_build", || {
-            let active_cells = active_cells(&target_refs.target_cells)?;
-            super::check_cancellation(cancellation)?;
-            let terrain = terrain_from_context_plugins(
-                context_plugins.iter().map(ContextPlugin::as_plugin),
-                &active_cells,
-            );
-            let terrain_textures = terrain_textures_from_context_plugins(
-                context_plugins.iter().map(ContextPlugin::as_plugin),
-                &active_cells,
-            );
-            Ok::<_, io::Error>((active_cells, terrain, terrain_textures))
-        })?;
-    profiler.counter("active_cells", active_cells.len());
-    profiler.counter("loaded_terrain_cells", terrain.len());
-    super::check_cancellation(cancellation)?;
-    let mut mesh_cache = MeshCache::new(&vfs);
-    let generated_placements = profiler.measure("generated_placement_build", || {
-        load_generated_placements(
-            config,
-            &target_plugin_data,
-            &target_refs,
-            &terrain,
-            &target_static_index,
-            cancellation,
-        )
-    })?;
-    let contact_baselines = profiler.measure("contact_baseline_build", || {
-        build_contact_baselines(
-            &target_plugin_data,
-            &target_refs,
-            &terrain,
-            &target_static_index,
-            &mut mesh_cache,
-            cancellation,
-        )
-    })?;
-    let (static_occluders, static_occluder_report) =
-        profiler.measure("static_occluder_build", || {
-            build_static_occluders(
-                context_plugins.iter().map(ContextPlugin::as_plugin),
-                &active_cells,
-                &active_static_index,
-                &mut mesh_cache,
-                &target_refs.target_static_ids,
-                &policy.occluder_filter,
-                cancellation,
-            )
-        })?;
-    profiler.static_occluder_counters(&static_occluder_report);
-    drop(context_plugins);
-    let missing_active_terrain_cells = missing_active_terrain_cells(&active_cells, &terrain);
-    let mut report_context = build_report_context(ReportContextBuildInput {
-        target_plugin_path: &target_plugin.source_path,
-        target_refs: &target_refs,
-        active_cells: active_cells.len(),
-        terrain: &terrain,
-        missing_active_terrain_cells,
-        static_occluder_report,
-        write_requested: !config.dry_run,
-        policy: &policy,
-    });
-    let write_actions_enabled = policy.write_actions.any_enabled();
-    let write_plan = Some(profiler.measure("write_plan", || {
-        plan_requested_unclip_adjustments(
-            UnclipWritePlanningInput {
-                plugin: &target_plugin_data,
-                target_refs: &target_refs,
-                terrain: &terrain,
-                terrain_textures: &terrain_textures,
-                static_index: &target_static_index,
-                mesh_contacts: &mut mesh_cache,
-                static_occluders: &static_occluders,
-                policy: &policy,
-                generated_placements: &generated_placements,
-                retain_static_bounds_details: config.verbose,
-                cancellation,
-            },
-            write_actions_enabled,
-        )
-    })?);
-    if let Some(write_plan) = &write_plan {
-        profiler.write_plan_counters(write_plan);
-    }
-    super::check_cancellation(cancellation)?;
-    let write_status = profiler.measure("write_status_index", || {
-        write_plan.as_ref().map(WriteStatusIndex::from_plan)
-    });
-    let log_path = openmw_config.user_config_path().join(LOG_NAME);
-    let mut log = BufWriter::new(File::create(log_path)?);
-    super::check_cancellation(cancellation)?;
-    let mut output = OutputContext {
-        plugin: &target_plugin_data,
-        target_refs: &target_refs,
-        terrain: &terrain,
-        terrain_textures: &terrain_textures,
-        static_index: &target_static_index,
-        mesh_contacts: &mut mesh_cache,
-        static_occluders: &static_occluders,
-        report: &report_context,
-        policy: &policy,
-        contact_baselines: &contact_baselines,
-        generated_placements: &generated_placements,
+    let openmw_config = openmw::load_config_from_path(config.openmw_cfg.as_deref())?;
+    let vfs = openmw::build_vfs(&openmw_config);
+    let source_path = resolve_target_plugin(&config.plugin, &vfs)?;
+    let mut source = load_target_plugin(&source_path)?;
+    check()?;
+
+    let target_refs = TargetRefIndex::build(&source, &policy, cancellation)?;
+    let mode = output_mode(config, &openmw_config, &source_path);
+    let mut report = Report {
+        target: source_path.clone(),
+        mode: describe_mode(config.write, &mode, &source_path),
+        policy: PolicySummary::from_policy(&policy),
+        cells: CellSummary {
+            target_exterior_refs: target_refs.exterior_ref_count,
+            target_cells: target_refs.target_cells.len(),
+            ..CellSummary::default()
+        },
+        occluders: StaticOccluderBuildReport::default(),
+        counts: VerdictCounts::default(),
+        write: None,
+        refs: None,
     };
-    let inspection = profiler.measure("inspection_log", || {
-        inspect_refs_and_write_optional_log(
-            &mut log,
-            config,
-            &mut output,
-            write_status.as_ref(),
+
+    let verdicts = if target_refs.target_cells.is_empty() {
+        Vec::new()
+    } else {
+        let world = load_world(
+            &openmw_config,
+            &vfs,
+            &source_path,
+            &source,
+            &target_refs,
+            &policy,
             cancellation,
-        )
-    })?;
-    super::check_cancellation(cancellation)?;
-    report_context.write = profiler.measure("save_write_plan", || {
-        save_write_plan(
-            &mut target_plugin_data,
-            &target_plugin.source_path,
-            &target_plugin.destination_path,
-            write_plan,
-            !config.dry_run,
-            (!write_actions_enabled).then_some("all_write_actions_disabled"),
-        )
-    })?;
-    super::check_cancellation(cancellation)?;
-    profiler.measure("report_writing", || {
-        write_reports(
-            stdout,
-            config,
-            &mut log,
-            &report_context,
-            &inspection,
-            &contact_baselines,
-        )
-    })?;
-    profiler.write_stderr();
-    Ok(())
-}
-
-struct NoTargetReportInput<'a> {
-    config: &'a UnclipConfig,
-    openmw_config: &'a openmw_config::OpenMWConfiguration,
-    target_plugin: &'a super::setup::TargetPluginPath,
-    target_plugin_data: &'a mut Plugin,
-    target_refs: &'a TargetRefIndex,
-    policy: &'a UnclipPolicy,
-    cancellation: &'a CancellationToken,
-}
-
-fn write_no_target_report(
-    stdout: &mut dyn Write,
-    profiler: &mut UnclipProfiler,
-    input: NoTargetReportInput<'_>,
-) -> io::Result<()> {
-    let NoTargetReportInput {
-        config,
-        openmw_config,
-        target_plugin,
-        target_plugin_data,
-        target_refs,
-        policy,
-        cancellation,
-    } = input;
-    super::check_cancellation(cancellation)?;
-    let terrain = TerrainIndex::from_landscapes(std::iter::empty());
-    let mut report_context = build_report_context(ReportContextBuildInput {
-        target_plugin_path: &target_plugin.source_path,
-        target_refs,
-        active_cells: 0,
-        terrain: &terrain,
-        missing_active_terrain_cells: Vec::new(),
-        static_occluder_report: StaticOccluderBuildReport::default(),
-        write_requested: !config.dry_run,
-        policy,
-    });
-    let write_actions_enabled = policy.write_actions.any_enabled();
-    let write_plan = WritePlan::default();
-    profiler.write_plan_counters(&write_plan);
-    report_context.write = profiler.measure("save_write_plan", || {
-        save_write_plan(
-            target_plugin_data,
-            &target_plugin.source_path,
-            &target_plugin.destination_path,
-            Some(write_plan),
-            !config.dry_run,
-            (!write_actions_enabled).then_some("all_write_actions_disabled"),
-        )
-    })?;
-    let log_path = openmw_config.user_config_path().join(LOG_NAME);
-    let mut log = BufWriter::new(File::create(log_path)?);
-    super::check_cancellation(cancellation)?;
-    profiler.measure("inspection_log", || {
-        if config.verbose {
-            report::write_instance_header(&mut log, &report_context)?;
+        )?;
+        report.cells.active_cells = world.active_cells.len();
+        report.cells.terrain_cells_loaded = world.terrain.len();
+        report.cells.terrain_cells_missing = world
+            .active_cells
+            .iter()
+            .filter(|cell| !world.terrain.has_cell(**cell))
+            .map(|cell| [cell.0, cell.1])
+            .collect();
+        report.occluders = world.occluder_report;
+        if !report.occluders.missing_meshes.is_empty() && !config.ignore_missing_meshes {
+            return Err(missing_meshes_error(&report.occluders));
         }
-        Ok::<_, io::Error>(())
-    })?;
-    profiler.measure("report_writing", || {
-        write_reports(
-            stdout,
-            config,
-            &mut log,
-            &report_context,
-            &TerrainInspectionReport::default(),
-            &ContactBaselineIndex::default(),
-        )
+        check()?;
+
+        let surveyor = Surveyor {
+            terrain: &world.terrain,
+            textures: &world.textures,
+            occluders: &world.occluders,
+            policy: &policy,
+        };
+        let inputs = target_refs
+            .iter_ref_entries(&source)
+            .map(|entry| RefInput {
+                cell: entry.cell,
+                key: entry.key,
+                id: &entry.reference.id,
+                deleted: entry.reference.deleted == Some(true),
+                transform: RefTransform {
+                    translation: entry.reference.translation,
+                    rotation: entry.reference.rotation,
+                    scale: entry.reference.scale,
+                },
+                geometry: world.geometry.get(entry.normalized_id),
+            })
+            .collect::<Vec<_>>();
+        let verdicts = inputs
+            .par_iter()
+            .map(|input| decide(input, &surveyor))
+            .collect::<Vec<_>>();
+        check()?;
+        verdicts
+    };
+    report.counts = VerdictCounts::from_verdicts(&verdicts);
+
+    if config.write && report.counts.fix + report.counts.delete > 0 {
+        report.write = Some(write_changes(&mut source, &source_path, &mode, &verdicts)?);
+    }
+
+    write_log(&openmw_config, &report, &verdicts, config.verbose)?;
+    if config.verbose && config.structured {
+        report.refs = Some(verdicts);
+    }
+    if config.structured {
+        report::write_json(stdout, &report)
+    } else {
+        report::write_text(stdout, &report)
+    }
+}
+
+struct World {
+    active_cells: BTreeSet<(i32, i32)>,
+    terrain: TerrainIndex,
+    textures: TerrainTextureIndex,
+    occluders: super::occlusion::StaticOccluderIndex,
+    occluder_report: StaticOccluderBuildReport,
+    geometry: GeometryTable,
+}
+
+fn load_world(
+    openmw_config: &openmw_config::OpenMWConfiguration,
+    vfs: &vfstool_lib::VFS,
+    source_path: &Path,
+    source: &Plugin,
+    target_refs: &TargetRefIndex,
+    policy: &UnclipPolicy,
+    cancellation: &CancellationToken,
+) -> io::Result<World> {
+    let context_paths = resolve_content_plugin_paths(&openmw::content_files(openmw_config)?, vfs)?;
+    let context_plugins = load_context_plugins(&context_paths, source_path, source, cancellation)?;
+    let target_is_active = path_matches_any(source_path, &context_paths);
+    let active_static_index =
+        build_static_index(context_plugins.iter().map(ContextPlugin::as_plugin), None);
+    let target_static_index: Cow<'_, StaticMeshIndex> = if target_is_active {
+        Cow::Borrowed(&active_static_index)
+    } else {
+        Cow::Owned(build_static_index(
+            context_plugins.iter().map(ContextPlugin::as_plugin),
+            Some(source),
+        ))
+    };
+    let active_cells = active_cells(&target_refs.target_cells)?;
+    let terrain = TerrainIndex::from_landscapes_in_cells(
+        context_plugins
+            .iter()
+            .map(ContextPlugin::as_plugin)
+            .flat_map(Plugin::objects_of_type::<Landscape>),
+        &active_cells,
+    );
+    let textures = TerrainTextureIndex::from_plugins_in_cells(
+        context_plugins.iter().map(ContextPlugin::as_plugin),
+        &active_cells,
+    );
+    super::check_cancellation(cancellation)?;
+
+    let mut mesh_cache = MeshCache::new(vfs);
+    let mut geometry = GeometryTable::new();
+    for id in &target_refs.target_static_ids {
+        let Some(static_mesh) = target_static_index.get_normalized_key(id) else {
+            continue;
+        };
+        let loaded = mesh_cache
+            .geometry(static_mesh)
+            .map(|mesh| Arc::new(mesh.clone()))
+            .map_err(|error| error.to_string());
+        geometry.insert(id.clone(), loaded);
+    }
+    super::check_cancellation(cancellation)?;
+
+    let named = context_paths
+        .iter()
+        .zip(&context_plugins)
+        .map(|(path, plugin)| NamedPlugin {
+            name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_lowercase())
+                .unwrap_or_default(),
+            plugin: plugin.as_plugin(),
+        })
+        .collect::<Vec<_>>();
+    let (occluders, occluder_report) = build_static_occluders(
+        &named,
+        &active_cells,
+        &active_static_index,
+        &mut mesh_cache,
+        &target_refs.target_static_ids,
+        &policy.occluder_filter,
+        cancellation,
+    )?;
+
+    Ok(World {
+        active_cells,
+        terrain,
+        textures,
+        occluders,
+        occluder_report,
+        geometry,
     })
 }
 
-const UNCLIP_PROFILE_ENV: &str = "GREENMOTE_PROFILE";
-
-struct UnclipProfiler {
-    enabled: bool,
-    phases: Vec<ProfilePhase>,
-    counters: BTreeMap<&'static str, usize>,
-}
-
-struct ProfilePhase {
-    name: &'static str,
-    duration: Duration,
-}
-
-impl UnclipProfiler {
-    fn from_env() -> Self {
-        Self {
-            enabled: profile_enabled_from_var(env::var_os(UNCLIP_PROFILE_ENV).as_deref()),
-            phases: Vec::new(),
-            counters: BTreeMap::new(),
-        }
-    }
-
-    fn measure<T>(&mut self, name: &'static str, operation: impl FnOnce() -> T) -> T {
-        if !self.enabled {
-            return operation();
-        }
-
-        let start = Instant::now();
-        let output = operation();
-        self.phases.push(ProfilePhase {
-            name,
-            duration: start.elapsed(),
-        });
-        output
-    }
-
-    fn counter(&mut self, name: &'static str, value: usize) {
-        if self.enabled {
-            self.counters.insert(name, value);
-        }
-    }
-
-    fn static_occluder_counters(&mut self, report: &StaticOccluderBuildReport) {
-        self.counter(
-            "static_occluder_active_refs_scanned",
-            report.active_refs_scanned,
-        );
-        self.counter(
-            "static_occluder_target_refs_excluded",
-            report.target_refs_excluded,
-        );
-        self.counter("static_occluder_regex_excluded", report.regex_excluded);
-        self.counter(
-            "static_occluder_unresolved_static",
-            report.unresolved_static,
-        );
-        self.counter("static_occluder_missing_bounds", report.missing_bounds);
-        self.counter("static_occluder_resolved_bounds", report.resolved_bounds);
-        self.counter("static_occluder_collision_source", report.collision_source);
-        self.counter(
-            "static_occluder_visible_fallback_source",
-            report.visible_fallback_source,
-        );
-        self.counter(
-            "static_occluder_collider_part_fallbacks",
-            report.collider_part_fallbacks,
-        );
-        self.counter("static_occluder_huge_footprint", report.huge_footprint);
-    }
-
-    fn write_plan_counters(&mut self, write_plan: &WritePlan) {
-        self.counter("write_changed_refs", write_plan.changed_refs());
-        self.counter("write_adjusted_refs", write_plan.adjusted_refs);
-        self.counter("write_deleted_refs", write_plan.deleted_refs);
-        self.counter("write_water_deleted_refs", write_plan.water_deleted_refs);
-        self.counter("write_road_deleted_refs", write_plan.road_deleted_refs);
-        self.counter("write_moved_refs", write_plan.moved_refs);
-        self.counter("write_oriented_refs", write_plan.oriented_refs);
-    }
-
-    fn write_stderr(&self) {
-        if !self.enabled {
-            return;
-        }
-
-        let mut stderr = io::stderr().lock();
-        self.write_best_effort_to(&mut stderr);
-    }
-
-    fn write_best_effort_to(&self, output: &mut dyn Write) {
-        let _ = self.write_to(output);
-    }
-
-    fn write_to(&self, output: &mut dyn Write) -> io::Result<()> {
-        if !self.enabled {
-            return Ok(());
-        }
-
-        writeln!(output, "greenmote_unclip_profile env={UNCLIP_PROFILE_ENV}")?;
-        for phase in &self.phases {
-            writeln!(
-                output,
-                "greenmote_unclip_profile phase={} duration_us={}",
-                phase.name,
-                phase.duration.as_micros()
-            )?;
-        }
-        for (name, value) in &self.counters {
-            writeln!(
-                output,
-                "greenmote_unclip_profile counter={name} value={value}"
-            )?;
-        }
-        Ok(())
-    }
-}
-
-fn profile_enabled_from_var(value: Option<&std::ffi::OsStr>) -> bool {
-    value.is_some_and(|value| value == "1")
-}
-
-fn context_plugin_paths(
+fn output_mode(
+    config: &UnclipConfig,
     openmw_config: &openmw_config::OpenMWConfiguration,
-    vfs: &vfstool_lib::VFS,
-) -> io::Result<Vec<std::path::PathBuf>> {
-    resolve_content_plugin_paths(&openmw::content_files(openmw_config)?, vfs)
+    source_path: &Path,
+) -> OutputMode {
+    if config.in_place {
+        return OutputMode::InPlace;
+    }
+    if let Some(path) = &config.output_plugin {
+        return OutputMode::Patch { path: path.clone() };
+    }
+    let directory = openmw_config
+        .data_local()
+        .map(|setting| setting.parsed().to_owned())
+        .or_else(|| source_path.parent().map(Path::to_path_buf))
+        .unwrap_or_default();
+    OutputMode::Patch {
+        path: default_patch_path(&directory, source_path),
+    }
 }
 
-struct ReportContextBuildInput<'a> {
-    target_plugin_path: &'a std::path::Path,
-    target_refs: &'a TargetRefIndex,
-    active_cells: usize,
-    terrain: &'a TerrainIndex,
-    missing_active_terrain_cells: Vec<(i32, i32)>,
-    static_occluder_report: StaticOccluderBuildReport,
-    write_requested: bool,
-    policy: &'a UnclipPolicy,
-}
-
-fn build_report_context(input: ReportContextBuildInput<'_>) -> UnclipReportContext {
-    UnclipReportContext::new(
-        UnclipReportContextInput {
-            target_plugin_path: input.target_plugin_path,
-            target_exterior_cells: input.target_refs.target_cells.len(),
-            target_refs_total: input.target_refs.exterior_ref_count,
-            active_cells: input.active_cells,
-            loaded_terrain_cells_total: input.terrain.len(),
-            missing_active_terrain_cells: input.missing_active_terrain_cells,
-            static_occluder_report: input.static_occluder_report,
-            write_requested: input.write_requested,
+fn describe_mode(write: bool, mode: &OutputMode, source_path: &Path) -> OutputSummary {
+    match (write, mode) {
+        (false, OutputMode::Patch { path }) => OutputSummary::DryRun {
+            would_write: path.clone(),
+            in_place: false,
         },
-        input.policy,
-    )
-}
-
-fn target_static_index<'a, 'p>(
-    context_plugins: impl IntoIterator<Item = &'p Plugin>,
-    active_static_index: &'a StaticMeshIndex,
-    target_is_active: bool,
-    target_plugin_data: &'p Plugin,
-) -> Cow<'a, StaticMeshIndex> {
-    if target_is_active {
-        Cow::Borrowed(active_static_index)
-    } else {
-        Cow::Owned(build_static_index(
-            context_plugins,
-            Some(target_plugin_data),
-        ))
+        (false, OutputMode::InPlace) => OutputSummary::DryRun {
+            would_write: source_path.to_path_buf(),
+            in_place: true,
+        },
+        (true, OutputMode::Patch { path }) => OutputSummary::Patch { path: path.clone() },
+        (true, OutputMode::InPlace) => OutputSummary::InPlace {
+            path: source_path.to_path_buf(),
+        },
     }
 }
 
-fn write_reports(
-    stdout: &mut dyn Write,
-    config: &UnclipConfig,
-    log: &mut dyn Write,
-    report_context: &UnclipReportContext,
-    inspection: &TerrainInspectionReport,
-    contact_baselines: &ContactBaselineIndex,
-) -> io::Result<()> {
-    write_output_footer(stdout, config, report_context, inspection)?;
-    write_log_footer(
-        log,
-        report_context,
-        inspection,
-        contact_baselines,
-        config.verbose,
-    )
-}
-
-fn plan_requested_unclip_adjustments(
-    input: UnclipWritePlanningInput<'_, '_>,
-    write_actions_enabled: bool,
-) -> io::Result<WritePlan> {
-    if write_actions_enabled {
-        plan_unclip_adjustments(input)
-    } else {
-        super::check_cancellation(input.cancellation)?;
-        Ok(WritePlan::default())
-    }
-}
-
-fn missing_active_terrain_cells(
-    active_cells: &BTreeSet<(i32, i32)>,
-    terrain: &TerrainIndex,
-) -> Vec<(i32, i32)> {
-    active_cells
+fn write_changes(
+    source: &mut Plugin,
+    source_path: &Path,
+    mode: &OutputMode,
+    verdicts: &[RefVerdict],
+) -> io::Result<WriteOutcome> {
+    let refs_fixed = verdicts
         .iter()
-        .copied()
-        .filter(|cell| !terrain.has_cell(*cell))
-        .collect()
-}
+        .filter(|entry| matches!(entry.verdict, super::decide::Verdict::Fix(_)))
+        .count();
+    let refs_deleted = verdicts
+        .iter()
+        .filter(|entry| matches!(entry.verdict, super::decide::Verdict::Delete { .. }))
+        .count();
+    let cells = verdicts
+        .iter()
+        .filter(|entry| entry.verdict.changes_plugin())
+        .map(|entry| entry.cell)
+        .collect::<BTreeSet<_>>()
+        .len();
 
-fn terrain_from_context_plugins<'a>(
-    context_plugins: impl IntoIterator<Item = &'a Plugin>,
-    active_cells: &BTreeSet<(i32, i32)>,
-) -> TerrainIndex {
-    TerrainIndex::from_landscapes_in_cells(
-        context_plugins
-            .into_iter()
-            .flat_map(tes3::esp::Plugin::objects_of_type::<Landscape>),
-        active_cells,
-    )
-}
-
-fn terrain_textures_from_context_plugins<'a>(
-    context_plugins: impl IntoIterator<Item = &'a Plugin>,
-    active_cells: &BTreeSet<(i32, i32)>,
-) -> TerrainTextureIndex {
-    TerrainTextureIndex::from_plugins_in_cells(context_plugins, active_cells)
-}
-
-fn save_write_plan(
-    plugin: &mut Plugin,
-    source_path: &std::path::Path,
-    destination_path: &std::path::Path,
-    write_plan: Option<WritePlan>,
-    write_requested: bool,
-    no_change_reason: Option<&'static str>,
-) -> io::Result<Option<WriteReport>> {
-    let Some(write_plan) = write_plan else {
-        return Ok(None);
+    let (path, in_place, backups, masters) = match mode {
+        OutputMode::Patch { path } => {
+            let source_file_name = source_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let source_size = std::fs::metadata(source_path).map(|meta| meta.len())?;
+            let mut patch = build_patch(source, &source_file_name, source_size, verdicts)?;
+            let masters = patch
+                .header()
+                .map(|header| {
+                    header
+                        .masters
+                        .iter()
+                        .map(|(name, _)| name.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let backups = write_plugin(&mut patch, path, false)?;
+            (path.clone(), false, backups, masters)
+        }
+        OutputMode::InPlace => {
+            apply_in_place(source, verdicts);
+            let masters = source
+                .header()
+                .map(|header| {
+                    header
+                        .masters
+                        .iter()
+                        .map(|(name, _)| name.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let backups = write_plugin(source, source_path, true)?;
+            (source_path.to_path_buf(), true, backups, masters)
+        }
     };
-    if write_plan.changed_refs() == 0 {
-        return Ok(Some(WriteReport::not_written(
-            destination_path,
-            write_plan,
-            no_change_reason.unwrap_or("no_refs_changed"),
-        )));
-    }
-    if !write_requested {
-        return Ok(Some(WriteReport::not_written(
-            destination_path,
-            write_plan,
-            "inspect_only",
-        )));
-    }
-    apply_unclip_write_plan(plugin, &write_plan);
-    save_plugin_with_backup(plugin, source_path, destination_path, write_plan).map(Some)
+    verify_written(&path, verdicts, in_place)?;
+
+    Ok(WriteOutcome {
+        path,
+        in_place,
+        backups,
+        refs_fixed,
+        refs_deleted,
+        cells,
+        masters,
+        verified: true,
+    })
 }
 
-struct OutputContext<'a, 'b> {
-    plugin: &'a Plugin,
-    target_refs: &'a TargetRefIndex,
-    terrain: &'a TerrainIndex,
-    terrain_textures: &'a TerrainTextureIndex,
-    static_index: &'a StaticMeshIndex,
-    mesh_contacts: &'a mut MeshCache<'b>,
-    static_occluders: &'a StaticOccluderIndex,
-    report: &'a UnclipReportContext,
-    policy: &'a UnclipPolicy,
-    contact_baselines: &'a ContactBaselineIndex,
-    generated_placements: &'a GeneratedPlacementIndex,
-}
-
-fn inspect_refs_and_write_optional_log(
-    log: &mut dyn Write,
-    config: &UnclipConfig,
-    output: &mut OutputContext<'_, '_>,
-    write_status: Option<&WriteStatusIndex>,
-    cancellation: &CancellationToken,
-) -> io::Result<TerrainInspectionReport> {
-    let mut context = ReferenceInspectionContext {
-        terrain: output.terrain,
-        terrain_textures: output.terrain_textures,
-        static_index: output.static_index,
-        mesh_contacts: output.mesh_contacts,
-        static_occluders: output.static_occluders,
-        policy: output.policy,
-        write: write_status,
-        contact_baselines: output.contact_baselines,
-        generated_placements: output.generated_placements,
-    };
-    if config.verbose {
-        report::write_instance_header(log, output.report)?;
-        inspect_target_refs(
-            output.plugin,
-            output.target_refs,
-            &mut context,
-            cancellation,
-            |reference| report::write_reference_text(log, reference),
-        )
-    } else {
-        count_target_refs(
-            output.plugin,
-            output.target_refs,
-            &mut context,
-            cancellation,
-        )
-    }
-}
-
-fn load_generated_placements(
-    config: &UnclipConfig,
-    plugin: &Plugin,
-    target_refs: &TargetRefIndex,
-    terrain: &TerrainIndex,
-    static_index: &StaticMeshIndex,
-    cancellation: &CancellationToken,
-) -> io::Result<GeneratedPlacementIndex> {
-    GeneratedPlacementIndex::build(
-        config.meshgenerator_ini.as_deref(),
-        plugin,
-        target_refs,
-        terrain,
-        static_index,
-        cancellation,
-    )
-}
-
-fn write_output_footer(
-    stdout: &mut dyn Write,
-    config: &UnclipConfig,
-    context: &UnclipReportContext,
-    inspection: &TerrainInspectionReport,
-) -> io::Result<()> {
-    if config.structured {
-        report::write_structured_summary(stdout, context, inspection)
-    } else {
-        report::write_summary_text(stdout, context, inspection, false)
-    }
-}
-
-fn write_log_footer(
-    log: &mut dyn Write,
-    context: &UnclipReportContext,
-    inspection: &TerrainInspectionReport,
-    contact_baselines: &ContactBaselineIndex,
+fn write_log(
+    openmw_config: &openmw_config::OpenMWConfiguration,
+    report: &Report,
+    verdicts: &[RefVerdict],
     verbose: bool,
 ) -> io::Result<()> {
+    let log_path: PathBuf = openmw_config.user_config_path().join(UNCLIP_LOG_NAME);
+    let mut log = BufWriter::new(File::create(log_path)?);
+    report::write_text(&mut log, report)?;
     if verbose {
         writeln!(log)?;
+        report::write_ref_lines(&mut log, verdicts)?;
     }
-    report::write_contact_baseline_diagnostics(log, contact_baselines, context.write.as_ref())?;
-    writeln!(log)?;
-    report::write_summary_text(log, context, inspection, verbose)
+    log.flush()
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{borrow::Cow, time::Duration};
-
-    use crate::unclip::{
-        args::WriteActionArg,
-        config::UnclipConfig,
-        contact_baseline::ContactBaselineIndex,
-        model::{TerrainInspectionReport, UnclipReportContext},
-        setup::build_static_index,
-        write_plan::{WriteAdjustment, WritePlan, WriteReport},
-    };
-
-    use tes3::esp::{Plugin, Static, TES3Object};
-
-    use super::{
-        ProfilePhase, UnclipProfiler, profile_enabled_from_var, target_static_index,
-        write_log_footer, write_output_footer,
-    };
-
-    #[test]
-    fn active_target_static_index_reuses_active_index_without_overlay() {
-        let context_plugins = [plugin_with_statics([static_record(
-            "grass_shared",
-            "meshes/active.nif",
-        )])];
-        let active_static_index = build_static_index(context_plugins.iter(), None);
-        let target_plugin = plugin_with_statics([
-            static_record("grass_shared", "meshes/target.nif"),
-            static_record("grass_target_only", "meshes/target_only.nif"),
-        ]);
-
-        let index = target_static_index(
-            context_plugins.iter(),
-            &active_static_index,
-            true,
-            &target_plugin,
-        );
-
-        assert!(matches!(index, Cow::Borrowed(_)));
-        assert_eq!(
-            index
-                .get("grass_shared")
-                .map(|static_| static_.mesh_path.as_str()),
-            Some("meshes/active.nif")
-        );
-        assert!(index.get("grass_target_only").is_none());
-    }
-
-    #[test]
-    fn inactive_target_static_index_overlays_target_statics() {
-        let context_plugins = [plugin_with_statics([
-            static_record("grass_context", "meshes/context.nif"),
-            static_record("grass_shared", "meshes/context_shared.nif"),
-        ])];
-        let active_static_index = build_static_index(context_plugins.iter(), None);
-        let target_plugin = plugin_with_statics([
-            static_record("grass_shared", "meshes/target_shared.nif"),
-            static_record("grass_target_only", "meshes/target_only.nif"),
-        ]);
-
-        let index = target_static_index(
-            context_plugins.iter(),
-            &active_static_index,
-            false,
-            &target_plugin,
-        );
-
-        assert!(matches!(index, Cow::Owned(_)));
-        assert_eq!(
-            index
-                .get("grass_context")
-                .map(|static_| static_.mesh_path.as_str()),
-            Some("meshes/context.nif")
-        );
-        assert_eq!(
-            index
-                .get("grass_shared")
-                .map(|static_| static_.mesh_path.as_str()),
-            Some("meshes/target_shared.nif")
-        );
-        assert_eq!(
-            index
-                .get("grass_target_only")
-                .map(|static_| static_.mesh_path.as_str()),
-            Some("meshes/target_only.nif")
-        );
-    }
-
-    #[test]
-    fn unclip_profile_gate_only_accepts_one() {
-        assert!(profile_enabled_from_var(Some(std::ffi::OsStr::new("1"))));
-        assert!(!profile_enabled_from_var(None));
-        assert!(!profile_enabled_from_var(Some(std::ffi::OsStr::new(
-            "true"
-        ))));
-        assert!(!profile_enabled_from_var(Some(std::ffi::OsStr::new("0"))));
-    }
-
-    #[test]
-    fn unclip_profile_output_is_line_oriented_and_counter_sorted() {
-        let profiler = UnclipProfiler {
-            enabled: true,
-            phases: vec![ProfilePhase {
-                name: "openmw_config_load",
-                duration: Duration::from_micros(42),
-            }],
-            counters: std::collections::BTreeMap::from([
-                ("write_changed_refs", 3),
-                ("active_cells", 2),
-            ]),
-        };
-        let mut output = Vec::new();
-
-        profiler.write_to(&mut output).unwrap();
-
-        assert_eq!(
-            String::from_utf8(output).unwrap(),
-            concat!(
-                "greenmote_unclip_profile env=GREENMOTE_PROFILE\n",
-                "greenmote_unclip_profile phase=openmw_config_load duration_us=42\n",
-                "greenmote_unclip_profile counter=active_cells value=2\n",
-                "greenmote_unclip_profile counter=write_changed_refs value=3\n",
+fn missing_meshes_error(report: &StaticOccluderBuildReport) -> io::Error {
+    let mut lines = report
+        .missing_meshes
+        .iter()
+        .take(20)
+        .map(|missing| {
+            format!(
+                "  {} ({}): {}",
+                missing.mesh_path, missing.static_id, missing.error
             )
-        );
-    }
-
-    #[test]
-    fn unclip_profile_best_effort_output_ignores_write_errors() {
-        struct FailingWriter;
-
-        impl std::io::Write for FailingWriter {
-            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "stderr closed",
-                ))
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let profiler = UnclipProfiler {
-            enabled: true,
-            phases: vec![ProfilePhase {
-                name: "openmw_config_load",
-                duration: Duration::from_micros(42),
-            }],
-            counters: std::collections::BTreeMap::new(),
-        };
-        let mut output = FailingWriter;
-
-        profiler.write_best_effort_to(&mut output);
-    }
-
-    #[test]
-    fn structured_footer_omits_write_change_records() {
-        let config = UnclipConfig {
-            openmw_cfg: None,
-            plugin: "plugin.omwaddon".into(),
-            output_plugin: None,
-            meshgenerator_ini: None,
-            verbose: true,
-            structured: true,
-            dry_run: false,
-            write_actions: vec![
-                WriteActionArg::TerrainZ,
-                WriteActionArg::WaterDelete,
-                WriteActionArg::StaticDelete,
-                WriteActionArg::StaticMove,
-                WriteActionArg::Orient,
-            ],
-            origin_epsilon: 0.5,
-            relocation_step: 32.0,
-            relocation_steps: 8,
-            orientation_epsilon: 1.0,
-            include_grass_ids: Vec::new(),
-            exclude_grass_ids: Vec::new(),
-            include_occluder_ids: Vec::new(),
-            exclude_occluder_ids: Vec::new(),
-            road_texture_paths: Vec::new(),
-        };
-        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
-        context.write = Some(WriteReport::not_written(
-            std::path::Path::new("plugin.omwaddon"),
-            WritePlan {
-                adjusted_refs: 1,
-                adjustments: vec![write_adjustment()],
-                ..WritePlan::default()
-            },
-            "no_refs_changed",
+        })
+        .collect::<Vec<_>>();
+    if report.missing_meshes.len() > 20 {
+        lines.push(format!(
+            "  ... and {} more",
+            report.missing_meshes.len() - 20
         ));
-        let mut output = Vec::new();
-
-        write_output_footer(
-            &mut output,
-            &config,
-            &context,
-            &TerrainInspectionReport::default(),
-        )
-        .unwrap();
-
-        let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("\"kind\":\"greenmote_unclip_terrain_inspection\""));
-        assert!(!output.contains("\"type\":\"write_adjustment\""));
-        assert!(!output.contains("\"old_z\""));
     }
-
-    #[test]
-    fn text_footer_omits_write_change_lines_by_default() {
-        let config = UnclipConfig {
-            openmw_cfg: None,
-            plugin: "plugin.omwaddon".into(),
-            output_plugin: None,
-            meshgenerator_ini: None,
-            verbose: false,
-            structured: false,
-            dry_run: false,
-            write_actions: vec![
-                WriteActionArg::TerrainZ,
-                WriteActionArg::WaterDelete,
-                WriteActionArg::StaticDelete,
-                WriteActionArg::StaticMove,
-                WriteActionArg::Orient,
-            ],
-            origin_epsilon: 0.5,
-            relocation_step: 32.0,
-            relocation_steps: 8,
-            orientation_epsilon: 1.0,
-            include_grass_ids: Vec::new(),
-            exclude_grass_ids: Vec::new(),
-            include_occluder_ids: Vec::new(),
-            exclude_occluder_ids: Vec::new(),
-            road_texture_paths: Vec::new(),
-        };
-        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
-        context.write = Some(WriteReport::not_written(
-            std::path::Path::new("plugin.omwaddon"),
-            WritePlan {
-                adjusted_refs: 1,
-                adjustments: vec![write_adjustment()],
-                ..WritePlan::default()
-            },
-            "no_refs_changed",
-        ));
-        let mut output = Vec::new();
-
-        write_output_footer(
-            &mut output,
-            &config,
-            &context,
-            &TerrainInspectionReport::default(),
-        )
-        .unwrap();
-
-        let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("Adjusted refs: 1"));
-        assert!(!output.contains("WRITE CELL"));
-    }
-
-    #[test]
-    fn verbose_log_footer_keeps_write_change_lines() {
-        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
-        context.write = Some(WriteReport::not_written(
-            std::path::Path::new("plugin.omwaddon"),
-            WritePlan {
-                adjusted_refs: 1,
-                adjustments: vec![write_adjustment()],
-                ..WritePlan::default()
-            },
-            "no_refs_changed",
-        ));
-        let mut output = Vec::new();
-
-        write_log_footer(
-            &mut output,
-            &context,
-            &TerrainInspectionReport::default(),
-            &ContactBaselineIndex::default(),
-            true,
-        )
-        .unwrap();
-
-        let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("Adjusted refs: 1"));
-        assert!(output.contains("WRITE CELL"));
-    }
-
-    #[test]
-    fn default_log_footer_omits_write_change_lines() {
-        let mut context = UnclipReportContext::new_for_test("plugin.omwaddon");
-        context.write = Some(WriteReport::not_written(
-            std::path::Path::new("plugin.omwaddon"),
-            WritePlan {
-                adjusted_refs: 1,
-                adjustments: vec![write_adjustment()],
-                ..WritePlan::default()
-            },
-            "no_refs_changed",
-        ));
-        let mut output = Vec::new();
-
-        write_log_footer(
-            &mut output,
-            &context,
-            &TerrainInspectionReport::default(),
-            &ContactBaselineIndex::default(),
-            false,
-        )
-        .unwrap();
-
-        let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("Adjusted refs: 1"));
-        assert!(!output.contains("WRITE CELL"));
-    }
-
-    fn write_adjustment() -> WriteAdjustment {
-        WriteAdjustment {
-            cell: [1, 2],
-            reference_key: [3, 4],
-            id: "grass".to_owned(),
-            old_z: 10.0,
-            new_z: 12.0,
-            applied_delta: 2.0,
-            sample_kind: "contact",
-            contact_position: [0.0, 0.0, 7.0],
-            terrain_z: 9.0,
-        }
-    }
-
-    fn plugin_with_statics<const N: usize>(statics: [Static; N]) -> Plugin {
-        Plugin {
-            objects: statics.into_iter().map(TES3Object::from).collect(),
-        }
-    }
-
-    fn static_record(id: &str, mesh: &str) -> Static {
-        Static {
-            id: id.to_owned(),
-            mesh: mesh.to_owned(),
-            ..Static::default()
-        }
-    }
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "{} static occluder meshes could not be loaded, so clipping into those statics cannot be detected. Fix the load order or pass --ignore-missing-meshes to continue without them:\n{}",
+            report.missing_meshes.len(),
+            lines.join("\n")
+        ),
+    )
 }

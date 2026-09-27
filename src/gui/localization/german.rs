@@ -62,6 +62,7 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPathEntry => "Plugin-Name oder Pfad",
         UiText::StartConversion => "Konvertierung starten",
         UiText::WriteChanges => "Änderungen schreiben",
+        UiText::RewriteInPlace => "Quell-Plugin direkt überschreiben (behält Sicherungen)",
         UiText::InspectPlugin => "Plugin prüfen",
         UiText::DryRun => "Probelauf",
         UiText::DebugDiagnostics => "Debug-Diagnose",
@@ -96,8 +97,12 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Unclip-Schreiben bestätigen",
-        UiText::ConfirmUnclipWriteMessage => {
-            "Unclip wird die ausgewählten Ziel-Plugins ändern und Sicherungsdateien erstellen."
+        UiText::ConfirmUnclipPatchMessage => {
+            "Unclip schreibt für jedes Ziel ein Patch-Plugin (<Quellname>_unclip.omwaddon in data-local) und lässt die Quell-Plugins unverändert."
+        }
+
+        UiText::ConfirmUnclipInPlaceMessage => {
+            "Unclip überschreibt die ausgewählten Quell-Plugins direkt und erstellt Sicherungsdateien."
         }
         UiText::EnabledWriteActions => "Aktivierte Schreibaktionen:",
         UiText::UnsavedSettingsTitle => "Ungespeicherte Einstellungen",
@@ -160,9 +165,22 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::OrientAction => "Refs am Terrain ausrichten (orient)",
         UiText::NoWriteActionsWarning => "Warnung: Schreibmodus erzeugt keine Policy-Aktionen.",
         UiText::PolicyNumbers => "Richtlinienwerte",
-        UiText::OriginHeightTolerance => "Ursprungshöhentoleranz",
-        UiText::OriginHeightToleranceTooltip => {
-            "Maximales Referenzursprung/Terrain-Z-Delta, das als bereits auf dem Terrain gilt. Config key: origin_epsilon."
+        UiText::FloatTolerance => "Schwebetoleranz",
+
+        UiText::FloatToleranceTooltip => {
+            "Größter Abstand (Einheiten) zwischen Mesh-Basis und Terrain, der noch als geerdet gilt. Config key: float_tolerance."
+        }
+
+        UiText::MaxSink => "Maximale Einsinktiefe",
+
+        UiText::MaxSinkTooltip => {
+            "Tiefste Vergrabung (Einheiten) der Mesh-Basis, die noch akzeptabel ist. Config key: max_sink."
+        }
+
+        UiText::SinkDepth => "Einsinktiefe",
+
+        UiText::SinkDepthTooltip => {
+            "Vergrabungstiefe (Einheiten), auf die die Mesh-Basis gesetzt wird, wenn terrain-z eine Ref korrigiert. Config key: sink."
         }
         UiText::OrientationTolerance => "Ausrichtungstoleranz",
         UiText::OrientationToleranceTooltip => {

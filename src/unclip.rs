@@ -10,30 +10,27 @@ mod app;
 mod args;
 mod cells;
 pub(crate) mod config;
-mod contact_baseline;
-mod generated_placement;
-mod inspection;
+mod decide;
+mod measure;
 mod mesh;
-mod model;
 mod occlusion;
 mod orientation;
+mod patch;
 mod physics;
 mod report;
 mod setup;
 mod static_occluders;
 mod target;
 mod terrain;
-mod write_plan;
-mod write_policy;
-mod write_status;
-mod writer;
+mod transform;
 
-pub use args::{UnclipArgs, WriteActionArg};
+pub use app::UNCLIP_LOG_NAME;
+pub use args::{ActionArg, UnclipArgs};
 
 /// Runs the groundcover unclipping subcommand.
 ///
-/// The command discovers `OpenMW` configuration, merges CLI and `[unclip]` TOML settings, inspects
-/// the target plugin, and only writes when write mode is enabled by arguments or configuration.
+/// The command discovers `OpenMW` configuration, merges CLI and `[unclip]` TOML settings, measures
+/// every target reference, and only writes when `--write` is passed.
 ///
 /// # Errors
 ///
@@ -50,8 +47,7 @@ pub fn run(
 
 /// Runs the groundcover unclipping subcommand with an explicit output stream.
 ///
-/// Stderr and interactive write prompts still use the process streams. Use the GUI-specific
-/// crate-private path for non-interactive write confirmation.
+/// Stderr still uses the process stream.
 ///
 /// # Errors
 ///

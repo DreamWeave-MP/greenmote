@@ -117,50 +117,6 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_unclip_plugin() {
-        let cli = Cli::parse_from(["greenmote", "unclip", "--plugin", "groundcover.omwaddon"]);
-
-        let Some(Command::Unclip(args)) = cli.command else {
-            panic!("unclip command should parse");
-        };
-
-        assert_eq!(
-            args.plugin,
-            Some(std::path::PathBuf::from("groundcover.omwaddon"))
-        );
-        assert_eq!(args.meshgenerator_ini, None);
-        assert_eq!(args.instances, None);
-        assert_eq!(args.verbose, None);
-        assert_eq!(args.structured, None);
-        assert_eq!(args.dry_run, None);
-        assert_eq!(args.origin_epsilon, None);
-        assert_eq!(args.relocation_step, None);
-        assert_eq!(args.relocation_steps, None);
-        assert_eq!(args.orientation_epsilon, None);
-    }
-
-    #[test]
-    fn parser_accepts_unclip_meshgenerator_ini() {
-        let cli = Cli::parse_from([
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "groundcover.omwaddon",
-            "--meshgenerator-ini",
-            "FGM_WG.ini",
-        ]);
-
-        let Some(Command::Unclip(args)) = cli.command else {
-            panic!("unclip command should parse");
-        };
-
-        assert_eq!(
-            args.meshgenerator_ini,
-            Some(std::path::PathBuf::from("FGM_WG.ini"))
-        );
-    }
-
-    #[test]
     fn parser_rejects_removed_unclip_placement_model() {
         let error = Cli::try_parse_from([
             "greenmote",
@@ -240,147 +196,6 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_unclip_policy_knobs() {
-        let cli = Cli::parse_from([
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "groundcover.omwaddon",
-            "--write-actions",
-            "terrain-z,water-delete,road-delete,static-move,orient",
-            "--origin-epsilon",
-            "2.5",
-            "--relocation-step",
-            "64",
-            "--relocation-steps",
-            "12",
-            "--orientation-epsilon",
-            "3.5",
-            "--include-grass-id",
-            "^flora_grass_.*$",
-            "--exclude-grass-id",
-            "^flora_grass_bad_.*$",
-            "--include-occluder-id",
-            "^terrain_.*$",
-            "--exclude-occluder-id",
-            "^terrain_tree_huge$",
-            "--road-texture-path",
-            "^textures/road/custom_.*\\.dds$",
-        ]);
-
-        let Some(Command::Unclip(args)) = cli.command else {
-            panic!("unclip command should parse");
-        };
-
-        let policy = args.policy().unwrap();
-        assert!(policy.write_actions.terrain_z());
-        assert!(!policy.write_actions.static_delete());
-        assert!(policy.write_actions.water_delete());
-        assert!(policy.write_actions.road_delete());
-        assert!(policy.write_actions.static_move());
-        assert!(policy.write_actions.orient());
-        assert_close(policy.origin_epsilon, 2.5);
-        assert_close(policy.relocation.step, 64.0);
-        assert_eq!(policy.relocation.steps, 12);
-        assert_close(policy.orientation_epsilon_degrees, 3.5);
-        assert!(policy.target_filter.includes("flora_grass_01"));
-        assert!(!policy.target_filter.includes("flora_grass_bad_01"));
-        assert!(policy.occluder_filter.includes("terrain_rock_01"));
-        assert!(!policy.occluder_filter.includes("terrain_tree_huge"));
-        assert!(
-            policy
-                .road_texture_filter
-                .includes("textures/road/custom_good.dds")
-        );
-    }
-
-    #[test]
-    fn parser_rejects_invalid_unclip_policy_knobs() {
-        for flag in [
-            ["--origin-epsilon", "nan"],
-            ["--relocation-step", "0"],
-            ["--relocation-steps", "0"],
-            ["--orientation-epsilon", "-1"],
-        ] {
-            let result = Cli::command().try_get_matches_from([
-                "greenmote",
-                "unclip",
-                "--plugin",
-                "groundcover.omwaddon",
-                flag[0],
-                flag[1],
-            ]);
-
-            assert!(result.is_err());
-        }
-    }
-
-    #[test]
-    fn parser_accepts_unclip_bool_false_overrides() {
-        let cli = Cli::parse_from([
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "groundcover.omwaddon",
-            "--instances=false",
-            "--verbose=false",
-            "--structured=false",
-            "--dry-run=false",
-        ]);
-
-        let Some(Command::Unclip(args)) = cli.command else {
-            panic!("unclip command should parse");
-        };
-
-        assert_eq!(args.instances, Some(false));
-        assert_eq!(args.verbose, Some(false));
-        assert_eq!(args.structured, Some(false));
-        assert_eq!(args.dry_run, Some(false));
-    }
-
-    #[test]
-    fn unclip_policy_rejects_invalid_regex_filters() {
-        for flag in [
-            "--include-grass-id",
-            "--exclude-occluder-id",
-            "--road-texture-path",
-        ] {
-            let cli = Cli::parse_from([
-                "greenmote",
-                "unclip",
-                "--plugin",
-                "groundcover.omwaddon",
-                flag,
-                "(",
-            ]);
-
-            let Some(Command::Unclip(args)) = cli.command else {
-                panic!("unclip command should parse before policy validation");
-            };
-
-            assert!(args.policy().is_err());
-        }
-    }
-
-    #[test]
-    fn unclip_policy_rejects_mixed_write_action_macros() {
-        let cli = Cli::parse_from([
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "groundcover.omwaddon",
-            "--write-actions",
-            "none,terrain-z",
-        ]);
-
-        let Some(Command::Unclip(args)) = cli.command else {
-            panic!("unclip command should parse before policy validation");
-        };
-
-        assert!(args.policy().is_err());
-    }
-
-    #[test]
     fn parser_accepts_unclip_structured_output() {
         let cli = Cli::parse_from([
             "greenmote",
@@ -395,23 +210,6 @@ mod tests {
         };
 
         assert_eq!(args.structured, Some(true));
-    }
-
-    #[test]
-    fn parser_accepts_unclip_instances() {
-        let cli = Cli::parse_from([
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "groundcover.omwaddon",
-            "--instances",
-        ]);
-
-        let Some(Command::Unclip(args)) = cli.command else {
-            panic!("unclip command should parse");
-        };
-
-        assert_eq!(args.instances, Some(true));
     }
 
     #[test]
@@ -432,36 +230,6 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_unclip_dry_run() {
-        let cli = Cli::parse_from([
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "groundcover.omwaddon",
-            "--dry-run",
-        ]);
-
-        let Some(Command::Unclip(args)) = cli.command else {
-            panic!("unclip command should parse");
-        };
-
-        assert_eq!(args.dry_run, Some(true));
-    }
-
-    #[test]
-    fn parser_rejects_unclip_write() {
-        let result = Cli::command().try_get_matches_from([
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "groundcover.omwaddon",
-            "--write",
-        ]);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn parser_rejects_unclip_output_format() {
         let result = Cli::command().try_get_matches_from([
             "greenmote",
@@ -473,6 +241,243 @@ mod tests {
         ]);
 
         assert!(result.is_err());
+    }
+
+    fn unclip_args(args: &[&str]) -> UnclipArgs {
+        let cli = Cli::parse_from(args);
+        let Some(Command::Unclip(args)) = cli.command else {
+            panic!("unclip command should parse");
+        };
+        *args
+    }
+
+    fn unclip_config(args: &UnclipArgs) -> crate::unclip::config::UnclipConfig {
+        crate::unclip::config::UnclipConfig::merge(
+            args,
+            crate::unclip::config::PersistedUnclipConfig::default(),
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn parser_accepts_unclip_plugin() {
+        let args = unclip_args(&["greenmote", "unclip", "--plugin", "groundcover.omwaddon"]);
+
+        assert_eq!(
+            args.plugin,
+            Some(std::path::PathBuf::from("groundcover.omwaddon"))
+        );
+        assert_eq!(args.write, None);
+        assert_eq!(args.in_place, None);
+        assert_eq!(args.output_plugin, None);
+        assert_eq!(args.verbose, None);
+        assert_eq!(args.structured, None);
+        assert!(args.actions.is_empty());
+        assert_eq!(args.float_tolerance, None);
+        assert_eq!(args.max_sink, None);
+        assert_eq!(args.sink, None);
+        assert_eq!(args.relocation_step, None);
+        assert_eq!(args.relocation_steps, None);
+        assert_eq!(args.orientation_epsilon, None);
+        assert_eq!(args.ignore_missing_meshes, None);
+        assert!(!args.no_default_occluder_excludes);
+        assert!(!args.no_default_road_textures);
+    }
+
+    #[test]
+    fn parser_accepts_unclip_write_and_in_place() {
+        let args = unclip_args(&[
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--write",
+        ]);
+        assert_eq!(args.write, Some(true));
+        assert_eq!(args.in_place, None);
+
+        let args = unclip_args(&[
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--write",
+            "--in-place",
+        ]);
+        assert_eq!(args.write, Some(true));
+        assert_eq!(args.in_place, Some(true));
+    }
+
+    #[test]
+    fn parser_accepts_unclip_ignore_missing_meshes() {
+        let args = unclip_args(&[
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--ignore-missing-meshes",
+        ]);
+
+        assert_eq!(args.ignore_missing_meshes, Some(true));
+    }
+
+    #[test]
+    fn parser_accepts_unclip_policy_knobs() {
+        let args = unclip_args(&[
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--actions",
+            "terrain-z,orient",
+            "--float-tolerance",
+            "0.5",
+            "--max-sink",
+            "10",
+            "--sink",
+            "1",
+            "--relocation-step",
+            "64",
+            "--relocation-steps",
+            "12",
+            "--orientation-epsilon",
+            "3.5",
+            "--include-grass-id",
+            "^flora_grass_.*$",
+            "--exclude-grass-id",
+            "^flora_grass_bad_.*$",
+            "--include-occluder-id",
+            "^terrain_.*$",
+            "--exclude-occluder-id",
+            "^terrain_tree_huge$",
+            "--road-texture-path",
+            "^textures/road/custom_.*\\.dds$",
+        ]);
+
+        assert_eq!(
+            args.actions,
+            vec![
+                crate::unclip::ActionArg::TerrainZ,
+                crate::unclip::ActionArg::Orient
+            ]
+        );
+        assert_eq!(args.float_tolerance, Some(0.5));
+        assert_eq!(args.max_sink, Some(10.0));
+        assert_eq!(args.sink, Some(1.0));
+
+        let policy = unclip_config(&args).policy().unwrap();
+        assert!(policy.actions.terrain_z());
+        assert!(policy.actions.orient());
+        assert!(!policy.actions.water_delete());
+        assert!(!policy.actions.road_delete());
+        assert!(!policy.actions.static_delete());
+        assert!(!policy.actions.static_move());
+        assert_close(policy.float_tolerance, 0.5);
+        assert_close(policy.max_sink, 10.0);
+        assert_close(policy.sink, 1.0);
+        assert_close(policy.relocation.step, 64.0);
+        assert_eq!(policy.relocation.steps, 12);
+        assert_close(policy.orientation_epsilon_degrees, 3.5);
+        assert!(policy.target_filter.includes("flora_grass_01"));
+        assert!(!policy.target_filter.includes("flora_grass_bad_01"));
+        assert!(policy.occluder_filter.includes("terrain_rock_01"));
+        assert!(!policy.occluder_filter.includes("terrain_tree_huge"));
+        assert!(
+            policy
+                .road_texture_filter
+                .includes("textures/road/custom_good.dds")
+        );
+    }
+
+    #[test]
+    fn parser_rejects_invalid_unclip_policy_knobs() {
+        for flag in [
+            ["--float-tolerance", "nan"],
+            ["--max-sink", "-1"],
+            ["--sink", "inf"],
+            ["--relocation-step", "0"],
+            ["--relocation-steps", "0"],
+            ["--orientation-epsilon", "-1"],
+            ["--actions", "all"],
+        ] {
+            let result = Cli::command().try_get_matches_from([
+                "greenmote",
+                "unclip",
+                "--plugin",
+                "groundcover.omwaddon",
+                flag[0],
+                flag[1],
+            ]);
+
+            assert!(
+                result.is_err(),
+                "{} {} should be rejected",
+                flag[0],
+                flag[1]
+            );
+        }
+    }
+
+    #[test]
+    fn parser_accepts_unclip_bool_false_overrides() {
+        let args = unclip_args(&[
+            "greenmote",
+            "unclip",
+            "--plugin",
+            "groundcover.omwaddon",
+            "--verbose=false",
+            "--structured=false",
+            "--write=false",
+            "--in-place=false",
+            "--ignore-missing-meshes=false",
+        ]);
+
+        assert_eq!(args.verbose, Some(false));
+        assert_eq!(args.structured, Some(false));
+        assert_eq!(args.write, Some(false));
+        assert_eq!(args.in_place, Some(false));
+        assert_eq!(args.ignore_missing_meshes, Some(false));
+    }
+
+    #[test]
+    fn unclip_policy_rejects_invalid_regex_filters() {
+        for flag in [
+            "--include-grass-id",
+            "--exclude-grass-id",
+            "--include-occluder-id",
+            "--exclude-occluder-id",
+            "--road-texture-path",
+        ] {
+            let args = unclip_args(&[
+                "greenmote",
+                "unclip",
+                "--plugin",
+                "groundcover.omwaddon",
+                flag,
+                "(",
+            ]);
+
+            assert!(unclip_config(&args).policy().is_err());
+        }
+    }
+
+    #[test]
+    fn parser_rejects_removed_unclip_flags() {
+        for flags in [
+            vec!["--dry-run"],
+            vec!["--instances"],
+            vec!["--meshgenerator-ini", "FGM_WG.ini"],
+            vec!["--ignore-meshgenerator-ini"],
+            vec!["--origin-epsilon", "2.5"],
+            vec!["--write-actions", "all"],
+        ] {
+            let mut command = vec!["greenmote", "unclip", "--plugin", "groundcover.omwaddon"];
+            command.extend(flags.iter().copied());
+            let result = Cli::command().try_get_matches_from(command);
+
+            assert!(result.is_err(), "{flags:?} should be rejected");
+        }
     }
 
     fn assert_close(actual: f32, expected: f32) {

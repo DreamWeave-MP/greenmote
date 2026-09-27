@@ -58,6 +58,7 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPathEntry => "Pluginnamn eller sökväg",
         UiText::StartConversion => "Starta konvertering",
         UiText::WriteChanges => "Skriv ändringar",
+        UiText::RewriteInPlace => "Skriv över källplugin på plats (behåller säkerhetskopior)",
         UiText::InspectPlugin => "Inspektera plugin",
         UiText::DryRun => "Torrkörning",
         UiText::DebugDiagnostics => "Felsökningsdiagnostik",
@@ -90,8 +91,12 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Bekräfta Unclip-skrivning",
-        UiText::ConfirmUnclipWriteMessage => {
-            "Unclip kommer att ändra valda målplugin och skapa säkerhetskopior."
+        UiText::ConfirmUnclipPatchMessage => {
+            "Unclip skriver ett patchplugin (<källnamn>_unclip.omwaddon i data-local) för varje mål och lämnar källpluginen orörda."
+        }
+
+        UiText::ConfirmUnclipInPlaceMessage => {
+            "Unclip skriver över valda källplugin på plats och skapar säkerhetskopior."
         }
         UiText::EnabledWriteActions => "Aktiverade skrivåtgärder:",
         UiText::UnsavedSettingsTitle => "Osparade inställningar",
@@ -150,9 +155,22 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::OrientAction => "Rikta refs mot terräng (orient)",
         UiText::NoWriteActionsWarning => "Varning: skrivläge ger inga policyåtgärder.",
         UiText::PolicyNumbers => "Policyvärden",
-        UiText::OriginHeightTolerance => "Tolerans för origo-höjd",
-        UiText::OriginHeightToleranceTooltip => {
-            "Största referensorigo/terräng-Z-delta som behandlas som redan på terrängen. Config key: origin_epsilon."
+        UiText::FloatTolerance => "Svävtolerans",
+
+        UiText::FloatToleranceTooltip => {
+            "Största avstånd (enheter) mellan meshens bas och terrängen som fortfarande räknas som markbundet. Config key: float_tolerance."
+        }
+
+        UiText::MaxSink => "Största nedsjunkning",
+
+        UiText::MaxSinkTooltip => {
+            "Djupaste nedgrävning (enheter) av meshens bas som fortfarande är godtagbar. Config key: max_sink."
+        }
+
+        UiText::SinkDepth => "Nedsjunkningsdjup",
+
+        UiText::SinkDepthTooltip => {
+            "Nedgrävningsdjup (enheter) som meshens bas placeras på när terrain-z rättar en ref. Config key: sink."
         }
         UiText::OrientationTolerance => "Orienteringstolerans",
         UiText::OrientationToleranceTooltip => {

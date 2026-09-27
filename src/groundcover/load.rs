@@ -361,7 +361,7 @@ mod tests {
 
     impl TempFile {
         fn new(name: &str) -> Self {
-            let (stem, extension) = name.rsplit_once('.').map_or((name, ""), |parts| parts);
+            let (stem, extension) = name.rsplit_once('.').unwrap_or((name, ""));
             let extension = if extension.is_empty() {
                 String::new()
             } else {

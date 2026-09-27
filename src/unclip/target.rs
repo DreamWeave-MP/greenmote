@@ -126,9 +126,7 @@ impl TargetRefIndex {
 mod tests {
     use tes3::esp::{Cell, CellData, Plugin, Reference, TES3Object};
 
-    use crate::unclip::args::{
-        IdFilter, RelocationPolicy, RoadTextureFilter, UnclipPolicy, WriteActions,
-    };
+    use crate::unclip::args::UnclipPolicy;
 
     use super::TargetRefIndex;
 
@@ -295,28 +293,7 @@ mod tests {
     }
 
     fn test_policy_with_filter(include_ids: &[&str], exclude_ids: &[&str]) -> UnclipPolicy {
-        UnclipPolicy {
-            write_actions: WriteActions::all(),
-            origin_epsilon: 0.5,
-            orientation_epsilon_degrees: 1.0,
-            relocation: RelocationPolicy {
-                step: 32.0,
-                steps: 8,
-            },
-            target_filter: IdFilter::new(
-                &include_ids
-                    .iter()
-                    .map(|pattern| (*pattern).to_owned())
-                    .collect::<Vec<_>>(),
-                &exclude_ids
-                    .iter()
-                    .map(|pattern| (*pattern).to_owned())
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap(),
-            occluder_filter: IdFilter::new(&[], &[]).unwrap(),
-            road_texture_filter: RoadTextureFilter::new(&[]).unwrap(),
-        }
+        UnclipPolicy::for_test().with_target_filter(include_ids, exclude_ids)
     }
 
     fn exterior_cell(refs: impl IntoIterator<Item = ((u32, u32), Reference)>) -> Cell {

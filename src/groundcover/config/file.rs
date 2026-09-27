@@ -73,8 +73,6 @@ impl GroundcoverConfigFile {
             PersistedUnclipConfig::generated_default()
         } else {
             file.unclip
-                .normalize_legacy_write()
-                .with_generated_default_road_texture_paths()
         };
 
         Ok(GroundcoverConfig {
@@ -100,9 +98,10 @@ impl GroundcoverConfigFile {
 
 fn is_empty_unclip_config(config: &PersistedUnclipConfig) -> bool {
     config.plugin.is_none()
-        && config.legacy_write.is_none()
-        && config.write_actions.is_none()
-        && config.origin_epsilon.is_none()
+        && config.actions.is_none()
+        && config.float_tolerance.is_none()
+        && config.max_sink.is_none()
+        && config.sink.is_none()
         && config.relocation_step.is_none()
         && config.relocation_steps.is_none()
         && config.orientation_epsilon.is_none()

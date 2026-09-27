@@ -19,7 +19,8 @@ pub(super) struct ConvertRunOptions {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct UnclipRunOptions {
     pub(super) targets: Vec<UnclipTargetRunOption>,
-    pub(super) dry_run: bool,
+    pub(super) write: bool,
+    pub(super) in_place: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,7 +104,8 @@ impl UnclipRunOptions {
 
         Self {
             targets,
-            dry_run: false,
+            write: false,
+            in_place: false,
         }
     }
 
@@ -184,22 +186,11 @@ impl UnclipRunOptions {
                 output_plugin: output_plugin
                     .filter(|output_plugin| !output_plugin.is_empty() && *output_plugin != plugin)
                     .map(PathBuf::from),
-                meshgenerator_ini: None,
-                ignore_meshgenerator_ini: true,
-                instances: None,
-                verbose: None,
+                write: Some(self.write),
+                in_place: Some(self.in_place),
+                verbose: Some(true),
                 structured: Some(false),
-                dry_run: Some(self.dry_run),
-                write_actions: Vec::new(),
-                origin_epsilon: None,
-                relocation_step: None,
-                relocation_steps: None,
-                orientation_epsilon: None,
-                include_grass_ids: Vec::new(),
-                exclude_grass_ids: Vec::new(),
-                include_occluder_ids: Vec::new(),
-                exclude_occluder_ids: Vec::new(),
-                road_texture_paths: Vec::new(),
+                ..UnclipArgs::default()
             })
             .collect::<Vec<_>>();
 
@@ -347,27 +338,33 @@ mod tests {
         let options = UnclipRunOptions::from_config(&config);
 
         assert_eq!(options.targets, [target("groundcover.omwaddon")]);
-        assert!(!options.dry_run);
+        assert!(!options.write);
+        assert!(!options.in_place);
     }
 
     #[test]
-    fn unclip_run_options_default_dry_run_disabled() {
-        assert!(!UnclipRunOptions::default().dry_run);
+    fn unclip_run_options_default_write_disabled() {
+        let options = UnclipRunOptions::default();
+        assert!(!options.write);
+        assert!(!options.in_place);
     }
 
     #[test]
-    fn unclip_run_options_config_default_dry_run_disabled() {
-        assert!(!UnclipRunOptions::from_config(&GroundcoverConfig::default()).dry_run);
+    fn unclip_run_options_config_default_write_disabled() {
+        let options = UnclipRunOptions::from_config(&GroundcoverConfig::default());
+        assert!(!options.write);
+        assert!(!options.in_place);
     }
 
     #[test]
-    fn unclip_run_options_generated_false_keeps_dry_run_default() {
+    fn unclip_run_options_generated_config_keeps_write_disabled() {
         let mut config = GroundcoverConfig::default();
         config.unclip = crate::unclip::config::PersistedUnclipConfig::generated_default();
 
         let options = UnclipRunOptions::from_config(&config);
 
-        assert!(!options.dry_run);
+        assert!(!options.write);
+        assert!(!options.in_place);
     }
 
     #[test]
@@ -384,21 +381,40 @@ mod tests {
     fn unclip_run_options_build_explicit_safe_args() {
         let options = UnclipRunOptions {
             targets: vec![UnclipTargetRunOption::new(" groundcover.omwaddon ", None)],
-            dry_run: true,
+            write: false,
+            in_place: false,
         };
 
         let args = options.to_args_list().unwrap();
         let args = args.first().unwrap();
 
         assert_eq!(args.plugin, Some("groundcover.omwaddon".into()));
-        assert_eq!(args.meshgenerator_ini, None);
-        assert!(args.ignore_meshgenerator_ini);
-        assert_eq!(args.instances, None);
-        assert_eq!(args.verbose, None);
+        assert_eq!(args.verbose, Some(true));
         assert_eq!(args.structured, Some(false));
-        assert_eq!(args.dry_run, Some(true));
+        assert_eq!(args.write, Some(false));
+        assert_eq!(args.in_place, Some(false));
         assert_eq!(args.output_plugin, None);
-        assert!(args.write_actions.is_empty());
+        assert!(args.actions.is_empty());
+        assert_eq!(args.float_tolerance, None);
+        assert_eq!(args.max_sink, None);
+        assert_eq!(args.sink, None);
+        assert!(!args.no_default_occluder_excludes);
+        assert!(!args.no_default_road_textures);
+    }
+
+    #[test]
+    fn unclip_run_options_pass_write_flags_through() {
+        let options = UnclipRunOptions {
+            targets: vec![target("groundcover.omwaddon")],
+            write: true,
+            in_place: true,
+        };
+
+        let args = options.to_args_list().unwrap();
+        let args = args.first().unwrap();
+
+        assert_eq!(args.write, Some(true));
+        assert_eq!(args.in_place, Some(true));
     }
 
     #[test]
@@ -408,7 +424,8 @@ mod tests {
                 "input.omwaddon",
                 Some("output.omwaddon".to_owned()),
             )],
-            dry_run: false,
+            write: false,
+            in_place: false,
         };
 
         let args = options.to_args_list().unwrap();
@@ -468,7 +485,8 @@ mod tests {
     fn unclip_run_options_remove_and_clear_targets() {
         let mut options = UnclipRunOptions {
             targets: vec![target("first.omwaddon"), target("second.omwaddon")],
-            dry_run: true,
+            write: true,
+            in_place: false,
         };
 
         assert!(options.remove_target(0));
@@ -486,7 +504,8 @@ mod tests {
                 UnclipTargetRunOption::new(" first.omwaddon ", None),
                 target("second.omwaddon"),
             ],
-            dry_run: false,
+            write: false,
+            in_place: false,
         };
 
         let args = options.to_args_list().unwrap();
@@ -497,16 +516,18 @@ mod tests {
     }
 
     #[test]
-    fn unclip_run_options_all_args_ignore_meshgenerator_ini() {
+    fn unclip_run_options_all_args_share_write_flags() {
         let options = UnclipRunOptions {
             targets: vec![target("first.omwaddon"), target("second.omwaddon")],
-            dry_run: true,
+            write: true,
+            in_place: false,
         };
 
         let args = options.to_args_list().unwrap();
 
-        assert!(args.iter().all(|args| args.meshgenerator_ini.is_none()));
-        assert!(args.iter().all(|args| args.ignore_meshgenerator_ini));
+        assert!(args.iter().all(|args| args.write == Some(true)));
+        assert!(args.iter().all(|args| args.in_place == Some(false)));
+        assert!(args.iter().all(|args| args.verbose == Some(true)));
     }
 
     fn target(plugin: &str) -> UnclipTargetRunOption {

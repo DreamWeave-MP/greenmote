@@ -124,8 +124,8 @@ include_grass_ids = ["flora_.*"]
     assert!(!contents.contains("dry_run"));
     assert!(!contents.contains("write = true"));
     assert!(contents.contains("include_grass_ids = [\"flora_.*\"]"));
-    assert!(contents.contains("road_texture_paths = ["));
-    assert!(!contents.contains("road_texture_paths = []"));
+    // Absent list keys mean "built-in defaults apply" and stay absent on save.
+    assert!(!contents.contains("road_texture_paths"));
 }
 
 #[test]
@@ -162,10 +162,8 @@ plugin = "x.omwaddon"
     )
     .unwrap();
 
-    assert_eq!(
-        config.unclip.road_texture_paths,
-        crate::unclip::config::PersistedUnclipConfig::generated_default().road_texture_paths
-    );
+    // Absent means the built-in defaults apply at run time.
+    assert_eq!(config.unclip.road_texture_paths, None);
 }
 
 #[test]
@@ -211,7 +209,14 @@ write = false
     )
     .unwrap();
 
-    assert_eq!(config.unclip.legacy_write, None);
+    assert_eq!(
+        config.unclip.plugin.as_deref(),
+        Some(std::path::Path::new("custom-groundcover.omwaddon"))
+    );
+    assert_eq!(
+        config.unclip.unknown.keys().cloned().collect::<Vec<_>>(),
+        vec!["write".to_owned()]
+    );
 }
 
 #[test]
@@ -235,7 +240,10 @@ dry_run = true
     )
     .unwrap();
 
-    assert_eq!(config.unclip.legacy_write, None);
+    // A table holding only stale runtime keys counts as empty and is regenerated.
+    assert!(config.unclip.unknown.is_empty());
+    assert_eq!(config.unclip.plugin, None);
+    assert!(config.unclip.actions.is_some());
 }
 
 #[test]

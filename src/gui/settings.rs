@@ -6,7 +6,7 @@ use eframe::egui;
 use regex::RegexBuilder;
 
 use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectorySource};
-use crate::unclip::WriteActionArg;
+use crate::unclip::ActionArg;
 
 use super::{
     ConvertRunOptions, GreenmoteApp, UiLanguage, UiText, UnclipRunOptions, language_label,
@@ -14,7 +14,8 @@ use super::{
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
 const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
-const UNCLIP_WRITE_ACTION_COUNT: usize = 6;
+/// Number of unclip actions; the draft checkbox array follows `ActionArg::ALL` order.
+const UNCLIP_ACTION_COUNT: usize = ActionArg::ALL.len();
 const UNCLIP_TERRAIN_Z_INDEX: usize = 0;
 const UNCLIP_WATER_DELETE_INDEX: usize = 1;
 const UNCLIP_ROAD_DELETE_INDEX: usize = 2;
@@ -66,8 +67,10 @@ pub(super) struct SettingsDraft {
 
 #[derive(Clone, Debug)]
 struct UnclipPolicyDraft {
-    write_actions: [bool; UNCLIP_WRITE_ACTION_COUNT],
-    origin_epsilon: String,
+    actions: [bool; UNCLIP_ACTION_COUNT],
+    float_tolerance: String,
+    max_sink: String,
+    sink: String,
     orientation_epsilon: String,
     relocation_step: String,
     relocation_steps: String,
@@ -159,7 +162,7 @@ impl SettingsUiState {
 
     #[cfg(test)]
     pub(super) fn clear_unclip_write_actions_for_test(&mut self) {
-        self.draft.unclip_policy.write_actions = [false; UNCLIP_WRITE_ACTION_COUNT];
+        self.draft.unclip_policy.actions = [false; UNCLIP_ACTION_COUNT];
     }
 
     #[cfg(test)]
@@ -471,36 +474,36 @@ impl GreenmoteApp {
 
         ui.label(self.localizer.text(UiText::WriteActions));
         ui.add_space(4.0);
-        let before_actions = policy.write_actions;
+        let before_actions = policy.actions;
         egui::Frame::group(ui.style())
             .inner_margin(egui::Margin::symmetric(8, 6))
             .show(ui, |ui| {
                 ui.checkbox(
-                    &mut policy.write_actions[UNCLIP_TERRAIN_Z_INDEX],
+                    &mut policy.actions[UNCLIP_TERRAIN_Z_INDEX],
                     self.localizer.text(UiText::TerrainZAction),
                 );
                 ui.checkbox(
-                    &mut policy.write_actions[UNCLIP_WATER_DELETE_INDEX],
+                    &mut policy.actions[UNCLIP_WATER_DELETE_INDEX],
                     self.localizer.text(UiText::WaterDeleteAction),
                 );
                 ui.checkbox(
-                    &mut policy.write_actions[UNCLIP_ROAD_DELETE_INDEX],
+                    &mut policy.actions[UNCLIP_ROAD_DELETE_INDEX],
                     self.localizer.text(UiText::RoadDeleteAction),
                 );
                 ui.checkbox(
-                    &mut policy.write_actions[UNCLIP_STATIC_DELETE_INDEX],
+                    &mut policy.actions[UNCLIP_STATIC_DELETE_INDEX],
                     self.localizer.text(UiText::StaticDeleteAction),
                 );
                 ui.checkbox(
-                    &mut policy.write_actions[UNCLIP_STATIC_MOVE_INDEX],
+                    &mut policy.actions[UNCLIP_STATIC_MOVE_INDEX],
                     self.localizer.text(UiText::StaticMoveAction),
                 );
                 ui.checkbox(
-                    &mut policy.write_actions[UNCLIP_ORIENT_INDEX],
+                    &mut policy.actions[UNCLIP_ORIENT_INDEX],
                     self.localizer.text(UiText::OrientAction),
                 );
             });
-        if before_actions != policy.write_actions {
+        if before_actions != policy.actions {
             self.settings.dirty = true;
         }
         if !policy.has_write_actions() {
@@ -518,9 +521,23 @@ impl GreenmoteApp {
         let policy = &mut self.settings.draft.unclip_policy;
         setting_text_field(
             ui,
-            self.localizer.text(UiText::OriginHeightTolerance),
-            self.localizer.text(UiText::OriginHeightToleranceTooltip),
-            &mut policy.origin_epsilon,
+            self.localizer.text(UiText::FloatTolerance),
+            self.localizer.text(UiText::FloatToleranceTooltip),
+            &mut policy.float_tolerance,
+            &mut self.settings.dirty,
+        );
+        setting_text_field(
+            ui,
+            self.localizer.text(UiText::MaxSink),
+            self.localizer.text(UiText::MaxSinkTooltip),
+            &mut policy.max_sink,
+            &mut self.settings.dirty,
+        );
+        setting_text_field(
+            ui,
+            self.localizer.text(UiText::SinkDepth),
+            self.localizer.text(UiText::SinkDepthTooltip),
+            &mut policy.sink,
             &mut self.settings.dirty,
         );
         setting_text_field(
@@ -901,27 +918,26 @@ impl UnclipPolicyDraft {
     fn from_config(config: &crate::unclip::config::PersistedUnclipConfig) -> Self {
         let defaults = crate::unclip::config::PersistedUnclipConfig::generated_default();
         let actions = config
-            .write_actions
+            .actions
             .clone()
-            .or(defaults.write_actions.clone())
+            .or(defaults.actions.clone())
             .unwrap_or_default();
-        let all = actions.contains(&WriteActionArg::All);
-        let none = actions.contains(&WriteActionArg::None);
-
-        let has_action = |action| all || !none && actions.contains(&action);
 
         Self {
-            write_actions: [
-                has_action(WriteActionArg::TerrainZ),
-                has_action(WriteActionArg::WaterDelete),
-                has_action(WriteActionArg::RoadDelete),
-                has_action(WriteActionArg::StaticDelete),
-                has_action(WriteActionArg::StaticMove),
-                has_action(WriteActionArg::Orient),
-            ],
-            origin_epsilon: config
-                .origin_epsilon
-                .or(defaults.origin_epsilon)
+            actions: ActionArg::ALL.map(|action| actions.contains(&action)),
+            float_tolerance: config
+                .float_tolerance
+                .or(defaults.float_tolerance)
+                .unwrap_or_default()
+                .to_string(),
+            max_sink: config
+                .max_sink
+                .or(defaults.max_sink)
+                .unwrap_or_default()
+                .to_string(),
+            sink: config
+                .sink
+                .or(defaults.sink)
                 .unwrap_or_default()
                 .to_string(),
             orientation_epsilon: config
@@ -952,7 +968,7 @@ impl UnclipPolicyDraft {
     }
 
     fn has_write_actions(&self) -> bool {
-        self.write_actions.iter().any(|enabled| *enabled)
+        self.actions.iter().any(|enabled| *enabled)
     }
 
     fn apply_to_config(
@@ -965,11 +981,18 @@ impl UnclipPolicyDraft {
         validate_regex_list("exclude_occluder_ids", &self.exclude_occluder_ids)?;
         validate_regex_list("road_texture_paths", &self.road_texture_paths)?;
 
-        config.write_actions = Some(self.write_actions());
-        config.origin_epsilon = Some(parse_non_negative_f32(
-            "origin_epsilon",
-            &self.origin_epsilon,
-        )?);
+        config.actions = Some(self.actions());
+        let float_tolerance = parse_non_negative_f32("float_tolerance", &self.float_tolerance)?;
+        let max_sink = parse_non_negative_f32("max_sink", &self.max_sink)?;
+        let sink = parse_non_negative_f32("sink", &self.sink)?;
+        if sink > max_sink {
+            return Err(format!(
+                "sink ({sink}) must not exceed max_sink ({max_sink})"
+            ));
+        }
+        config.float_tolerance = Some(float_tolerance);
+        config.max_sink = Some(max_sink);
+        config.sink = Some(sink);
         config.orientation_epsilon = Some(parse_non_negative_f32(
             "orientation_epsilon",
             &self.orientation_epsilon,
@@ -988,50 +1011,16 @@ impl UnclipPolicyDraft {
         Ok(())
     }
 
-    fn write_actions(&self) -> Vec<WriteActionArg> {
-        let mut actions = Vec::new();
-        if self.write_actions[UNCLIP_TERRAIN_Z_INDEX] {
-            actions.push(WriteActionArg::TerrainZ);
-        }
-        if self.write_actions[UNCLIP_WATER_DELETE_INDEX] {
-            actions.push(WriteActionArg::WaterDelete);
-        }
-        if self.write_actions[UNCLIP_ROAD_DELETE_INDEX] {
-            actions.push(WriteActionArg::RoadDelete);
-        }
-        if self.write_actions[UNCLIP_STATIC_DELETE_INDEX] {
-            actions.push(WriteActionArg::StaticDelete);
-        }
-        if self.write_actions[UNCLIP_STATIC_MOVE_INDEX] {
-            actions.push(WriteActionArg::StaticMove);
-        }
-        if self.write_actions[UNCLIP_ORIENT_INDEX] {
-            actions.push(WriteActionArg::Orient);
-        }
-        actions
+    fn actions(&self) -> Vec<ActionArg> {
+        ActionArg::ALL
+            .into_iter()
+            .zip(self.actions)
+            .filter_map(|(action, enabled)| enabled.then_some(action))
+            .collect()
     }
 
     fn write_action_names(&self) -> Vec<&'static str> {
-        let mut actions = Vec::new();
-        if self.write_actions[UNCLIP_TERRAIN_Z_INDEX] {
-            actions.push("terrain-z");
-        }
-        if self.write_actions[UNCLIP_WATER_DELETE_INDEX] {
-            actions.push("water-delete");
-        }
-        if self.write_actions[UNCLIP_ROAD_DELETE_INDEX] {
-            actions.push("road-delete");
-        }
-        if self.write_actions[UNCLIP_STATIC_DELETE_INDEX] {
-            actions.push("static-delete");
-        }
-        if self.write_actions[UNCLIP_STATIC_MOVE_INDEX] {
-            actions.push("static-move");
-        }
-        if self.write_actions[UNCLIP_ORIENT_INDEX] {
-            actions.push("orient");
-        }
-        actions
+        self.actions().into_iter().map(ActionArg::name).collect()
     }
 }
 
@@ -1543,7 +1532,7 @@ mod tests {
         ensure_settings_list_item_visible, list_item_from_text, remove_selected_list_item,
     };
     use crate::gui::GreenmoteApp;
-    use crate::unclip::{WriteActionArg, config::PersistedUnclipConfig};
+    use crate::unclip::{ActionArg, config::PersistedUnclipConfig};
 
     #[test]
     fn list_item_from_text_preserves_text_and_rejects_empty_text() {
@@ -1638,7 +1627,7 @@ mod tests {
     fn unclip_policy_save_serializes_concrete_actions_and_preserves_run_keys() {
         let mut draft = SettingsDraft::default();
         draft.unclip.plugin = Some("groundcover.omwaddon".into());
-        draft.unclip_policy.write_actions = [true, false, false, false, true, false];
+        draft.unclip_policy.actions = [true, false, false, false, true, false];
         draft.unclip_policy.include_grass_ids = vec!["flora_.*".to_owned()];
         draft.unclip_policy.road_texture_paths = vec![".*custom_road.*".to_owned()];
 
@@ -1646,8 +1635,8 @@ mod tests {
 
         assert_eq!(config.unclip.plugin, Some("groundcover.omwaddon".into()));
         assert_eq!(
-            config.unclip.write_actions,
-            Some(vec![WriteActionArg::TerrainZ, WriteActionArg::StaticMove])
+            config.unclip.actions,
+            Some(vec![ActionArg::TerrainZ, ActionArg::StaticMove])
         );
         assert_eq!(
             config.unclip.include_grass_ids,
@@ -1702,19 +1691,19 @@ mod tests {
     }
 
     #[test]
-    fn save_settings_preserves_runtime_unclip_dry_run() {
+    fn save_settings_preserves_runtime_unclip_write() {
         let directory = unique_temp_directory("greenmote-gui-settings-save");
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("greenmote.toml");
         let mut app = GreenmoteApp::default();
         app.settings.config_path = Some(path);
-        app.convert.set_unclip_dry_run_for_test(true);
+        app.convert.set_unclip_write_for_test(true);
         app.convert
             .set_pending_unclip_write_confirmation_for_test(true);
 
         assert!(app.save_settings());
 
-        assert!(app.convert.unclip_dry_run_for_test());
+        assert!(app.convert.unclip_write_for_test());
         assert!(!app.convert.pending_unclip_write_confirmation_for_test());
 
         fs::remove_dir_all(directory).unwrap();

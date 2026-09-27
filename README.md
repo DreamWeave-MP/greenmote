@@ -132,57 +132,50 @@ Useful Convert flags:
 
 ## Unclip Workflow
 
-`greenmote unclip` inspects a groundcover plugin against `OpenMW` terrain and static occluders. It writes planned fixes by default and can run in read-only dry-run mode.
+`greenmote unclip` measures every reference in a groundcover plugin against the terrain, water, road textures, and solid statics of your `OpenMW` load order, then reports one verdict per reference. It never writes unless you pass `--write`.
 
-Inspection mode:
+```sh
+greenmote unclip --plugin Rem_AI.esp                 # report only
+greenmote unclip --plugin Rem_AI.esp --verbose       # plus a per-reference table in greenmote-unclip.log
+greenmote unclip --plugin Rem_AI.esp --write         # write Rem_AI_unclip.omwaddon into data-local
+greenmote unclip --plugin Rem_AI.esp --write --in-place   # rewrite Rem_AI.esp itself, keeping backups
+```
 
-- Selects a target plugin by `--plugin PLUGIN` or `[unclip].plugin` in `greenmote.toml`.
-- Accepts a filesystem path or a VFS plugin name.
-- Uses `--dry-run` for read-only planning without modifying the target plugin.
-- Reports aggregate diagnostics by default.
-- Writes detailed per-reference diagnostics to `greenmote.log` with `--verbose`.
-- Treats static occluders as blockers when they overlap either target mesh volume or bounded placement-clearance probes around the target origin.
-- Keeps `--instances` as a deprecated alias for `--verbose`.
-- Emits machine-readable compact JSON with `--structured`.
-- Samples reference origins for terrain Z fixes and orientation. Terrain Z writes and static relocation require an inferred terrain-relative origin offset.
-- Accepts `--meshgenerator-ini INI` as an optional hint for plugins produced by `mw-groundcover-generator`; the target plugin's measured terrain-relative residuals remain the source of truth.
+How a reference is judged, in order:
 
-Write mode:
+1. References that are deleted, have no `STAT` record, have an unloadable mesh, sit outside their own cell, or have no terrain under them are skipped with that reason.
+2. `road-delete` deletes references whose `LAND` texture matches a road pattern. The texture is sampled where `OpenMW` renders it, including the engine's blendmap offset.
+3. `water-delete` deletes references standing on ground below the exterior water plane.
+4. `orient` tilts the reference to the terrain slope using the same formula groundcover generators use, so a generator's own output measures as already aligned.
+5. `terrain-z` looks at the mesh's base vertices under the final tilt. If the highest base vertex floats more than `--float-tolerance` above the terrain, or is buried deeper than `--max-sink`, the reference is lowered or raised so that vertex sits `--sink` units below the surface.
+6. `static-move` moves references whose visible volume overlaps a static's collision shape to the nearest clear spot in the same cell, re-grounding them there. `static-delete` removes references that are entirely inside a static, or that overlap one and cannot be moved.
 
-- Enabled by default. Use `--dry-run` for read-only inspection.
-- Creates a backup before replacing the target plugin, or before writing the explicit `--output-plugin PATH` destination.
-- Defaults to writing back to the resolved source plugin when no output override is provided.
-- In the GUI, write mode requires a confirmation dialog before modifying the target plugin.
-- The GUI exposes Unclip dry-run as a localized runtime option and lets each target choose an explicit output plugin.
+A disabled action never changes a verdict silently: the report says why a reference was left alone, for example `keep_terrain_z_disabled`.
 
-Useful Unclip flags:
+Geometry facts the measurements rely on:
 
-- `--dry-run[=BOOL]` plans and reports without writing plugin changes.
-- `--output-plugin PATH` writes to an explicit destination instead of replacing the resolved source plugin.
-- `--write-actions ACTION[,ACTION...]` limits the enabled write fixes; when omitted, all concrete write actions are enabled.
+- Reference rotations are composed the way `OpenMW` composes them (`Misc::Convert::makeOsgQuat`): about Z, then Y, then X, in the world frame.
+- Terrain heights use `OpenMW`'s alternating triangle split of each 128-unit quad, not bilinear interpolation.
+- Static collision follows `OpenMW`'s Bullet loader: `RootCollisionNode` shapes when present, otherwise the visible geometry, with `NCO`/`NCC`/`MRK` extra data honoured. Each collision shape becomes a convex hull.
+- Static references are resolved by their load-order identity, so a plugin that moves or deletes a master's rock is honoured and no stale copy remains at the old position.
 
-Write actions:
+Output:
 
-- `terrain-z` adjusts reference Z placement toward terrain.
-- `water-delete` deletes references that a terrain-Z adjustment would move across the exterior water plane.
-- `road-delete` deletes references on `LAND` texture paths matching `[unclip].road_texture_paths`.
-- `static-delete` deletes references that cannot be safely moved away from static occluders.
-- `static-move` searches for nearby positions outside static occluders and placement-clearance blockers.
-- `orient` aligns groundcover orientation to terrain within policy limits.
-- `all` enables all write actions.
-- `none` disables all write actions.
+- Default: a patch plugin `<source stem>_unclip.omwaddon` in `data-local` (or `--output-plugin PATH`). It lists the source plugin as a master and contains only the changed references: moved ones as overrides, removed ones as `DELE` records. Add it to `openmw.cfg` as a `groundcover=` entry after the source. The source plugin is never modified.
+- `--in-place`: the source plugin is rewritten. The first in-place write keeps `<plugin>.greenmote-original`; every write refreshes `<plugin>.bak`. References the source inherited from a master are marked deleted rather than dropped so the master's placement stays hidden.
+- Every write is reloaded and checked against the planned changes before unclip reports success. Running unclip again on its own output plans zero changes.
+- `greenmote-unclip.log` next to `openmw.cfg` holds the text report and, with `--verbose`, one line per reference.
+- `--structured` prints the report as JSON; with `--verbose` it includes every verdict.
 
-Policy knobs:
+Flags and `[unclip]` keys:
 
-- `--origin-epsilon` controls reference origin/terrain Z tolerance.
-- `--relocation-step` controls horizontal spacing for static-bounds relocation probes.
-- `--relocation-steps` controls how many relocation probe rings are attempted.
-- `--orientation-epsilon` controls the tilt angle treated as already aligned.
-- `--meshgenerator-ini` reads `mw-groundcover-generator` mesh lists as optional hints for origin-offset inference; measured target-plugin residuals remain the source of truth, and inferred refs preserve `ref.z = terrain_z_at_origin + offset` within the generator-style 4-unit tolerance.
-- `--include-grass-id` and `--exclude-grass-id` filter target groundcover reference IDs with case-insensitive regexes.
-- `--include-occluder-id` and `--exclude-occluder-id` filter static occluder IDs with case-insensitive regexes.
-- `--road-texture-path` replaces the configured road-delete texture path regex list when provided.
-
+- `--actions ACTION[,ACTION...]` limits the actions to plan. Default: all six.
+- `--float-tolerance` (1), `--max-sink` (24), `--sink` (4), `--orientation-epsilon` degrees (1), `--relocation-step` (32), `--relocation-steps` (8).
+- `--include-grass-id` / `--exclude-grass-id` select target references by full ID regex.
+- `--include-occluder-id` / `--exclude-occluder-id` select statics that count as solid. Built-in exclusions cover tree-like statics; `--no-default-occluder-excludes` drops them.
+- `--road-texture-path` adds road texture regexes to the built-in list; `--no-default-road-textures` drops the built-ins.
+- `--ignore-missing-meshes` continues when a static's mesh cannot be loaded. Without it unclip stops, because clipping into those statics could not be detected.
+- Unknown `[unclip]` keys are reported as warnings and dropped when the GUI saves settings.
 ## GUI Features
 
 The default GUI provides:

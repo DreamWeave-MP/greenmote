@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+//! Persisted `[unclip]` settings and their merge with command-line arguments.
+
 use std::{
+    collections::BTreeMap,
     fs::read_to_string,
     io::{self, BufRead, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -13,23 +16,29 @@ use crate::groundcover::openmw;
 use super::{
     UnclipArgs,
     args::{
+        ActionArg, Actions, DEFAULT_FLOAT_TOLERANCE, DEFAULT_MAX_SINK,
         DEFAULT_ORIENTATION_EPSILON_DEGREES, DEFAULT_RELOCATION_STEP, DEFAULT_RELOCATION_STEPS,
-        WriteActionArg, default_road_texture_path_patterns, default_write_actions,
+        DEFAULT_SINK, IdFilter, RelocationPolicy, RoadTextureFilter, UnclipPolicy, default_actions,
+        default_road_texture_path_patterns, default_tree_occluder_exclude_ids,
     },
-    model::ORIGIN_TERRAIN_EPSILON,
 };
 
+/// Effective unclip configuration after merging CLI arguments over `greenmote.toml`.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct UnclipConfig {
     pub(crate) openmw_cfg: Option<PathBuf>,
     pub(crate) plugin: PathBuf,
     pub(crate) output_plugin: Option<PathBuf>,
-    pub(crate) meshgenerator_ini: Option<PathBuf>,
+    pub(crate) write: bool,
+    pub(crate) in_place: bool,
     pub(crate) verbose: bool,
     pub(crate) structured: bool,
-    pub(crate) dry_run: bool,
-    pub(crate) write_actions: Vec<WriteActionArg>,
-    pub(crate) origin_epsilon: f32,
+    pub(crate) ignore_missing_meshes: bool,
+    pub(crate) actions: Vec<ActionArg>,
+    pub(crate) float_tolerance: f32,
+    pub(crate) max_sink: f32,
+    pub(crate) sink: f32,
     pub(crate) relocation_step: f32,
     pub(crate) relocation_steps: u16,
     pub(crate) orientation_epsilon: f32,
@@ -40,19 +49,30 @@ pub(crate) struct UnclipConfig {
     pub(crate) road_texture_paths: Vec<String>,
 }
 
+/// The `[unclip]` table of `greenmote.toml`.
+///
+/// Only policy values are persisted. Runtime choices such as `--write`, `--in-place`,
+/// `--output-plugin`, `--verbose`, and `--structured` are never read from the file.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub(crate) struct PersistedUnclipConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) plugin: Option<PathBuf>,
 
-    #[serde(default, rename = "write", skip_serializing)]
-    pub(crate) legacy_write: Option<bool>,
+    #[serde(
+        default,
+        alias = "write_actions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) actions: Option<Vec<ActionArg>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) write_actions: Option<Vec<WriteActionArg>>,
+    pub(crate) float_tolerance: Option<f32>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) origin_epsilon: Option<f32>,
+    pub(crate) max_sink: Option<f32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sink: Option<f32>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) relocation_step: Option<f32>,
@@ -77,6 +97,10 @@ pub(crate) struct PersistedUnclipConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) road_texture_paths: Option<Vec<String>>,
+
+    /// Keys this version does not understand. They are reported as warnings and dropped on save.
+    #[serde(default, flatten, skip_serializing)]
+    pub(crate) unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -87,8 +111,8 @@ struct UnclipConfigRoot {
 
 impl UnclipConfig {
     pub(crate) fn get(
-        cli_openmw_cfg: Option<&std::path::Path>,
-        config_path_override: Option<&std::path::Path>,
+        cli_openmw_cfg: Option<&Path>,
+        config_path_override: Option<&Path>,
         args: &UnclipArgs,
         stdin: &mut dyn BufRead,
         stderr: &mut dyn Write,
@@ -98,12 +122,25 @@ impl UnclipConfig {
         let config_path = openmw::greenmote_config_path(config_path_override, &runtime_config);
         let persisted_openmw_cfg = openmw::persisted_config_path(&runtime_config);
         let persisted = match std::fs::symlink_metadata(&config_path) {
-            Ok(_) => PersistedUnclipConfig::from_toml(&read_to_string(config_path)?)?,
+            Ok(_) => PersistedUnclipConfig::from_toml(&read_to_string(&config_path)?)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 PersistedUnclipConfig::default()
             }
             Err(error) => return Err(error),
         };
+        if !persisted.unknown.is_empty() {
+            writeln!(
+                stderr,
+                "warning: ignoring unknown [unclip] keys in {}: {}",
+                config_path.display(),
+                persisted
+                    .unknown
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+        }
 
         let config = Self::merge(args, persisted, Some(persisted_openmw_cfg))?;
         config.validate()?;
@@ -127,25 +164,25 @@ impl UnclipConfig {
             openmw_cfg,
             plugin,
             output_plugin: args.output_plugin.clone(),
-            meshgenerator_ini: if args.ignore_meshgenerator_ini {
-                None
-            } else {
-                args.meshgenerator_ini.clone()
-            },
-            verbose: args.verbose.or(args.instances).unwrap_or(false),
+            write: args.write.unwrap_or(false),
+            in_place: args.in_place.unwrap_or(false),
+            verbose: args.verbose.unwrap_or(false),
             structured: args.structured.unwrap_or(false),
-            dry_run: args.dry_run.unwrap_or(false),
-            write_actions: if args.write_actions.is_empty() {
-                persisted
-                    .write_actions
-                    .unwrap_or_else(default_write_actions)
+            ignore_missing_meshes: args.ignore_missing_meshes.unwrap_or(false),
+            actions: if args.actions.is_empty() {
+                persisted.actions.unwrap_or_else(default_actions)
             } else {
-                args.write_actions.clone()
+                args.actions.clone()
             },
-            origin_epsilon: args
-                .origin_epsilon
-                .or(persisted.origin_epsilon)
-                .unwrap_or(ORIGIN_TERRAIN_EPSILON),
+            float_tolerance: args
+                .float_tolerance
+                .or(persisted.float_tolerance)
+                .unwrap_or(DEFAULT_FLOAT_TOLERANCE),
+            max_sink: args
+                .max_sink
+                .or(persisted.max_sink)
+                .unwrap_or(DEFAULT_MAX_SINK),
+            sink: args.sink.or(persisted.sink).unwrap_or(DEFAULT_SINK),
             relocation_step: args
                 .relocation_step
                 .or(persisted.relocation_step)
@@ -158,31 +195,66 @@ impl UnclipConfig {
                 .orientation_epsilon
                 .or(persisted.orientation_epsilon)
                 .unwrap_or(DEFAULT_ORIENTATION_EPSILON_DEGREES),
-            include_grass_ids: merge_list(&args.include_grass_ids, persisted.include_grass_ids),
-            exclude_grass_ids: merge_list(&args.exclude_grass_ids, persisted.exclude_grass_ids),
-            include_occluder_ids: merge_list(
+            include_grass_ids: replace_list(&args.include_grass_ids, persisted.include_grass_ids),
+            exclude_grass_ids: replace_list(&args.exclude_grass_ids, persisted.exclude_grass_ids),
+            include_occluder_ids: replace_list(
                 &args.include_occluder_ids,
                 persisted.include_occluder_ids,
             ),
-            exclude_occluder_ids: merge_list_with_default(
+            exclude_occluder_ids: extend_list(
                 &args.exclude_occluder_ids,
                 persisted.exclude_occluder_ids,
-                default_tree_occluder_exclude_ids(),
+                default_tree_occluder_exclude_ids,
+                args.no_default_occluder_excludes,
             ),
-            road_texture_paths: merge_list_with_default(
+            road_texture_paths: extend_list(
                 &args.road_texture_paths,
                 persisted.road_texture_paths,
-                default_road_texture_path_patterns(),
+                default_road_texture_path_patterns,
+                args.no_default_road_textures,
             ),
         })
     }
 
+    pub(crate) fn policy(&self) -> Result<UnclipPolicy, String> {
+        Ok(UnclipPolicy {
+            actions: Actions::from_args(&self.actions),
+            float_tolerance: self.float_tolerance,
+            max_sink: self.max_sink,
+            sink: self.sink,
+            orientation_epsilon_degrees: self.orientation_epsilon,
+            relocation: RelocationPolicy {
+                step: self.relocation_step,
+                steps: self.relocation_steps,
+            },
+            target_filter: IdFilter::new(&self.include_grass_ids, &self.exclude_grass_ids)
+                .map_err(|error| format!("invalid grass id filter: {error}"))?,
+            occluder_filter: IdFilter::new(&self.include_occluder_ids, &self.exclude_occluder_ids)
+                .map_err(|error| format!("invalid occluder id filter: {error}"))?,
+            road_texture_filter: RoadTextureFilter::new(&self.road_texture_paths)
+                .map_err(|error| format!("invalid road texture path filter: {error}"))?,
+        })
+    }
+
     fn validate(&self) -> io::Result<()> {
-        validate_non_negative_f32("origin_epsilon", self.origin_epsilon)?;
+        validate_non_negative_f32("float_tolerance", self.float_tolerance)?;
+        validate_non_negative_f32("max_sink", self.max_sink)?;
+        validate_non_negative_f32("sink", self.sink)?;
         validate_non_negative_f32("orientation_epsilon", self.orientation_epsilon)?;
         validate_positive_f32("relocation_step", self.relocation_step)?;
+        if self.sink > self.max_sink {
+            return Err(invalid_config(format!(
+                "sink ({}) must not exceed max_sink ({})",
+                self.sink, self.max_sink
+            )));
+        }
         if !(1..=256).contains(&self.relocation_steps) {
             return Err(invalid_config("relocation_steps must be in 1..=256"));
+        }
+        if self.in_place && self.output_plugin.is_some() {
+            return Err(invalid_config(
+                "--in-place writes to the source plugin and cannot be combined with --output-plugin",
+            ));
         }
         if let Some(output_plugin) = &self.output_plugin {
             validate_output_plugin(output_plugin)?;
@@ -196,8 +268,10 @@ impl UnclipConfig {
 impl PersistedUnclipConfig {
     pub(crate) fn generated_default() -> Self {
         Self {
-            write_actions: Some(default_write_actions()),
-            origin_epsilon: Some(ORIGIN_TERRAIN_EPSILON),
+            actions: Some(default_actions()),
+            float_tolerance: Some(DEFAULT_FLOAT_TOLERANCE),
+            max_sink: Some(DEFAULT_MAX_SINK),
+            sink: Some(DEFAULT_SINK),
             relocation_step: Some(DEFAULT_RELOCATION_STEP),
             relocation_steps: Some(DEFAULT_RELOCATION_STEPS),
             orientation_epsilon: Some(DEFAULT_ORIENTATION_EPSILON_DEGREES),
@@ -212,28 +286,11 @@ impl PersistedUnclipConfig {
 
     pub(crate) fn from_toml(contents: &str) -> io::Result<Self> {
         let root = toml::from_str::<UnclipConfigRoot>(contents).map_err(invalid_config)?;
-        Ok(root
-            .unclip
-            .normalize_legacy_write()
-            .with_generated_default_road_texture_paths())
-    }
-
-    pub(crate) fn normalize_legacy_write(mut self) -> Self {
-        self.legacy_write = None;
-
-        self
-    }
-
-    pub(crate) fn with_generated_default_road_texture_paths(mut self) -> Self {
-        if self.road_texture_paths.is_none() {
-            self.road_texture_paths = Self::generated_default().road_texture_paths;
-        }
-
-        self
+        Ok(root.unclip)
     }
 }
 
-fn merge_list(cli: &[String], persisted: Option<Vec<String>>) -> Vec<String> {
+fn replace_list(cli: &[String], persisted: Option<Vec<String>>) -> Vec<String> {
     if cli.is_empty() {
         persisted.unwrap_or_default()
     } else {
@@ -241,28 +298,23 @@ fn merge_list(cli: &[String], persisted: Option<Vec<String>>) -> Vec<String> {
     }
 }
 
-fn merge_list_with_default(
+fn extend_list(
     cli: &[String],
     persisted: Option<Vec<String>>,
-    default: Vec<String>,
+    builtin: fn() -> Vec<String>,
+    no_default: bool,
 ) -> Vec<String> {
-    if cli.is_empty() {
-        persisted.unwrap_or(default)
+    let mut list = if no_default {
+        Vec::new()
     } else {
-        cli.to_vec()
+        persisted.unwrap_or_else(builtin)
+    };
+    for pattern in cli {
+        if !list.contains(pattern) {
+            list.push(pattern.clone());
+        }
     }
-}
-
-pub(crate) fn default_tree_occluder_exclude_ids() -> Vec<String> {
-    vec![
-        "flora_(tree|ashtree|treestump|treedead|root)_.*".to_owned(),
-        "flora_(ash_)?log_.*".to_owned(),
-        "flora_bm_(treebranch|treestump|snowbranch|snowstump|(snow_)?log)_.*".to_owned(),
-        "flora_bc_(tree|knee|log)_.*".to_owned(),
-        "ex_t_(bigroot|root).*".to_owned(),
-        "t_.*flora.*(tree|branch|root|stump|log|palm).*".to_owned(),
-        "t_cyr_flora(gc|str)_bush_.*".to_owned(),
-    ]
+    list
 }
 
 fn validate_non_negative_f32(name: &str, value: f32) -> io::Result<()> {
@@ -285,7 +337,7 @@ fn validate_positive_f32(name: &str, value: f32) -> io::Result<()> {
     }
 }
 
-fn validate_output_plugin(path: &std::path::Path) -> io::Result<()> {
+fn validate_output_plugin(path: &Path) -> io::Result<()> {
     if path.file_name().is_none() {
         return Err(invalid_config(format!(
             "output_plugin {} must include a filename",
@@ -307,15 +359,15 @@ fn invalid_config<E: std::fmt::Display>(error: E) -> io::Error {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::path::PathBuf;
 
     use clap::Parser;
 
-    use crate::Cli;
+    use crate::{Cli, Command};
 
     use super::*;
-    use crate::Command;
 
     fn unclip_args(args: &[&str]) -> UnclipArgs {
         let cli = Cli::parse_from(args);
@@ -325,486 +377,304 @@ mod tests {
         *args
     }
 
-    #[test]
-    fn persisted_plugin_satisfies_missing_cli_plugin() {
-        let args = unclip_args(&["greenmote", "unclip"]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                plugin: Some(PathBuf::from("configured.omwaddon")),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(config.plugin, PathBuf::from("configured.omwaddon"));
+    fn merged(args: &[&str], persisted: PersistedUnclipConfig) -> UnclipConfig {
+        UnclipConfig::merge(&unclip_args(args), persisted, None).unwrap()
     }
 
     #[test]
-    fn cli_plugin_overrides_persisted_plugin() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(
-            &args,
+    fn persisted_plugin_satisfies_missing_cli_plugin() {
+        let config = merged(
+            &["greenmote", "unclip"],
             PersistedUnclipConfig {
                 plugin: Some(PathBuf::from("configured.omwaddon")),
                 ..PersistedUnclipConfig::default()
             },
-            None,
-        )
-        .unwrap();
+        );
+        assert_eq!(config.plugin, PathBuf::from("configured.omwaddon"));
 
+        let config = merged(
+            &["greenmote", "unclip", "--plugin", "cli.omwaddon"],
+            PersistedUnclipConfig {
+                plugin: Some(PathBuf::from("configured.omwaddon")),
+                ..PersistedUnclipConfig::default()
+            },
+        );
         assert_eq!(config.plugin, PathBuf::from("cli.omwaddon"));
     }
 
     #[test]
-    fn cli_output_plugin_merges_into_runtime_config_only() {
-        let args = unclip_args(&[
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--output-plugin",
-            "patched/cli.omwaddon",
-        ]);
-        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
+    fn missing_plugin_everywhere_is_an_error() {
+        let error = UnclipConfig::merge(
+            &unclip_args(&["greenmote", "unclip"]),
+            PersistedUnclipConfig::default(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
 
+    #[test]
+    fn write_defaults_to_dry_run() {
+        let config = merged(
+            &["greenmote", "unclip", "-p", "x.esp"],
+            PersistedUnclipConfig::default(),
+        );
+        assert!(!config.write);
+        assert!(!config.in_place);
+
+        let config = merged(
+            &[
+                "greenmote",
+                "unclip",
+                "-p",
+                "x.esp",
+                "--write",
+                "--in-place",
+            ],
+            PersistedUnclipConfig::default(),
+        );
+        assert!(config.write);
+        assert!(config.in_place);
+    }
+
+    #[test]
+    fn runtime_keys_are_never_persisted_or_read() {
+        let toml = toml::to_string(&PersistedUnclipConfig::generated_default()).unwrap();
+        for key in [
+            "write",
+            "in_place",
+            "output_plugin",
+            "verbose",
+            "structured",
+            "dry_run",
+        ] {
+            assert!(
+                !toml.contains(key),
+                "{key} leaked into generated toml:\n{toml}"
+            );
+        }
+
+        let persisted = PersistedUnclipConfig::from_toml(
+            "[unclip]\nplugin = 'x.esp'\nwrite = true\ndry_run = false\n",
+        )
+        .unwrap();
         assert_eq!(
-            config.output_plugin,
-            Some(PathBuf::from("patched/cli.omwaddon"))
+            persisted.unknown.keys().cloned().collect::<Vec<_>>(),
+            vec!["dry_run".to_owned(), "write".to_owned()]
+        );
+        let config = merged(&["greenmote", "unclip"], persisted);
+        assert!(!config.write);
+    }
+
+    #[test]
+    fn legacy_write_actions_key_is_accepted() {
+        let persisted =
+            PersistedUnclipConfig::from_toml("[unclip]\nwrite_actions = ['orient']\n").unwrap();
+        assert_eq!(persisted.actions, Some(vec![ActionArg::Orient]));
+        assert!(persisted.unknown.is_empty());
+    }
+
+    #[test]
+    fn cli_actions_replace_persisted_actions() {
+        let persisted = PersistedUnclipConfig {
+            plugin: Some(PathBuf::from("x.esp")),
+            actions: Some(vec![ActionArg::Orient]),
+            ..PersistedUnclipConfig::default()
+        };
+        let config = merged(&["greenmote", "unclip"], persisted.clone());
+        assert_eq!(config.actions, vec![ActionArg::Orient]);
+
+        let config = merged(
+            &["greenmote", "unclip", "--actions", "terrain-z"],
+            persisted,
+        );
+        assert_eq!(config.actions, vec![ActionArg::TerrainZ]);
+
+        let config = merged(
+            &["greenmote", "unclip", "-p", "x.esp"],
+            PersistedUnclipConfig::default(),
+        );
+        assert_eq!(config.actions, default_actions());
+    }
+
+    #[test]
+    fn numeric_values_merge_cli_over_persisted_over_defaults() {
+        let persisted = PersistedUnclipConfig {
+            plugin: Some(PathBuf::from("x.esp")),
+            float_tolerance: Some(3.0),
+            max_sink: Some(20.0),
+            relocation_steps: Some(4),
+            ..PersistedUnclipConfig::default()
+        };
+        let config = merged(&["greenmote", "unclip"], persisted.clone());
+        assert_eq!(config.float_tolerance, 3.0);
+        assert_eq!(config.max_sink, 20.0);
+        assert_eq!(config.sink, DEFAULT_SINK);
+        assert_eq!(config.relocation_steps, 4);
+
+        let config = merged(
+            &[
+                "greenmote",
+                "unclip",
+                "--float-tolerance",
+                "0.25",
+                "--relocation-steps",
+                "12",
+            ],
+            persisted,
+        );
+        assert_eq!(config.float_tolerance, 0.25);
+        assert_eq!(config.relocation_steps, 12);
+    }
+
+    #[test]
+    fn sink_larger_than_max_sink_fails_validation() {
+        let config = merged(
+            &[
+                "greenmote",
+                "unclip",
+                "-p",
+                "x.esp",
+                "--sink",
+                "9",
+                "--max-sink",
+                "8",
+            ],
+            PersistedUnclipConfig::default(),
         );
         assert!(
-            !toml::to_string(&PersistedUnclipConfig::generated_default())
-                .unwrap()
-                .contains("output_plugin")
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("max_sink")
         );
     }
 
     #[test]
-    fn output_plugin_validation_rejects_existing_directory() {
+    fn in_place_conflicts_with_output_plugin() {
+        let config = merged(
+            &[
+                "greenmote",
+                "unclip",
+                "-p",
+                "x.esp",
+                "--in-place",
+                "--output-plugin",
+                "y.esp",
+            ],
+            PersistedUnclipConfig::default(),
+        );
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn output_plugin_validation_rejects_bad_paths() {
         let output_dir = std::env::temp_dir().join(format!(
             "greenmote-output-plugin-dir-{}",
             std::process::id()
         ));
-        fs::create_dir_all(&output_dir).unwrap();
-
+        std::fs::create_dir_all(&output_dir).unwrap();
         let mut args = unclip_args(&["greenmote", "unclip", "--plugin", "input.omwaddon"]);
         args.output_plugin = Some(output_dir.clone());
         let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
-
         let error = config.validate().unwrap_err();
-
-        fs::remove_dir(&output_dir).unwrap();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        std::fs::remove_dir(&output_dir).unwrap();
         assert!(
             error
                 .to_string()
                 .contains("must not be an existing directory")
         );
-    }
 
-    #[test]
-    fn output_plugin_validation_rejects_path_without_filename() {
-        let mut args = unclip_args(&["greenmote", "unclip", "--plugin", "input.omwaddon"]);
         args.output_plugin = Some(PathBuf::new());
         let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
-
-        let error = config.validate().unwrap_err();
-
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("must include a filename"));
-    }
-
-    #[test]
-    fn cli_meshgenerator_ini_sets_runtime_path() {
-        let args = unclip_args(&[
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--meshgenerator-ini",
-            "cli.ini",
-        ]);
-        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
-
-        assert_eq!(config.meshgenerator_ini, Some(PathBuf::from("cli.ini")));
-    }
-
-    #[test]
-    fn stale_persisted_meshgenerator_ini_is_ignored() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let persisted = PersistedUnclipConfig::from_toml(
-            r#"
-[unclip]
-meshgenerator_ini = "persisted.ini"
-"#,
-        )
-        .unwrap();
-        let config = UnclipConfig::merge(&args, persisted, None).unwrap();
-
-        assert_eq!(config.meshgenerator_ini, None);
-    }
-
-    #[test]
-    fn internal_ignore_meshgenerator_ini_suppresses_cli_path() {
-        let mut args = unclip_args(&[
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--meshgenerator-ini",
-            "cli.ini",
-        ]);
-        args.ignore_meshgenerator_ini = true;
-        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
-
-        assert_eq!(config.meshgenerator_ini, None);
-    }
-
-    #[test]
-    fn placement_model_cli_flag_is_unknown() {
-        let result = Cli::try_parse_from([
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--placement-model",
-            "contact",
-        ]);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn stale_unknown_keys_are_ignored() {
-        let result = PersistedUnclipConfig::from_toml(
-            r#"
-[unclip]
-placement_model = "contact"
-contact_epsilon = 99.0
-origin_epsilon = 2.5
-"#,
-        )
-        .unwrap();
-
-        assert_close(result.origin_epsilon.unwrap(), 2.5);
-    }
-
-    #[test]
-    fn cli_dry_run_false_ignores_stale_persisted_dry_run_true() {
-        let args = unclip_args(&[
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--dry-run=false",
-        ]);
-        let persisted = PersistedUnclipConfig::from_toml(
-            r"
-[unclip]
-dry_run = true
-",
-        )
-        .unwrap();
-        let config = UnclipConfig::merge(&args, persisted, None).unwrap();
-
-        assert!(!config.dry_run);
-    }
-
-    #[test]
-    fn cli_dry_run_defaults_to_false_and_flag_enables_it() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
-
-        assert!(!config.dry_run);
-
-        let args = unclip_args(&[
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--dry-run",
-        ]);
-        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
-
-        assert!(config.dry_run);
-    }
-
-    #[test]
-    fn stale_persisted_dry_run_true_is_ignored() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let persisted = PersistedUnclipConfig::from_toml(
-            r"
-[unclip]
-dry_run = true
-",
-        )
-        .unwrap();
-        let config = UnclipConfig::merge(&args, persisted, None).unwrap();
-
-        assert!(!config.dry_run);
-    }
-
-    #[test]
-    fn generated_default_toml_omits_runtime_keys() {
-        let contents = toml::to_string(&PersistedUnclipConfig::generated_default()).unwrap();
-
-        assert!(!contents.contains("dry_run"));
-        assert!(!contents.contains("meshgenerator_ini"));
-        assert!(!contents.contains("verbose"));
-        assert!(!contents.contains("structured"));
-        assert!(!contents.contains("write = false"));
-    }
-
-    #[test]
-    fn legacy_persisted_write_is_ignored() {
-        let inspect = PersistedUnclipConfig::from_toml(
-            r"
-[unclip]
-write = false
-",
-        )
-        .unwrap();
-        let write = PersistedUnclipConfig::from_toml(
-            r"
-[unclip]
-write = true
-",
-        )
-        .unwrap();
-
-        assert_eq!(inspect.legacy_write, None);
-        assert_eq!(write.legacy_write, None);
-    }
-
-    #[test]
-    fn conflicting_legacy_write_and_stale_dry_run_is_ignored() {
-        let config = PersistedUnclipConfig::from_toml(
-            r"
-[unclip]
-write = false
-dry_run = false
-",
-        )
-        .unwrap();
-
-        assert_eq!(config.legacy_write, None);
-    }
-
-    #[test]
-    fn old_write_cli_flag_is_unknown() {
-        let result =
-            Cli::try_parse_from(["greenmote", "unclip", "--plugin", "cli.omwaddon", "--write"]);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn cli_verbose_sets_runtime_verbose() {
-        let args = unclip_args(&[
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--verbose=false",
-        ]);
-        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
-
-        assert!(!config.verbose);
-    }
-
-    #[test]
-    fn deprecated_instances_alias_sets_verbose() {
-        let args = unclip_args(&[
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--instances",
-        ]);
-        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
-
-        assert!(config.verbose);
-    }
-
-    #[test]
-    fn stale_persisted_instances_alias_is_ignored() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let persisted = PersistedUnclipConfig::from_toml(
-            r"
-[unclip]
-instances = true
-",
-        )
-        .unwrap();
-        let config = UnclipConfig::merge(&args, persisted, None).unwrap();
-
-        assert!(!config.verbose);
-    }
-
-    #[test]
-    fn persisted_numeric_values_apply_when_cli_omits_them() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                origin_epsilon: Some(2.5),
-                relocation_step: Some(64.0),
-                relocation_steps: Some(12),
-                orientation_epsilon: Some(3.5),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
-
-        assert_close(config.origin_epsilon, 2.5);
-        assert_close(config.relocation_step, 64.0);
-        assert_eq!(config.relocation_steps, 12);
-        assert_close(config.orientation_epsilon, 3.5);
-    }
-
-    #[test]
-    fn cli_numeric_values_override_persisted_values() {
-        let args = unclip_args(&[
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--origin-epsilon",
-            "1.25",
-        ]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                origin_epsilon: Some(4.0),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
-
-        assert_close(config.origin_epsilon, 1.25);
-    }
-
-    #[test]
-    fn cli_filter_list_replaces_persisted_list() {
-        let args = unclip_args(&[
-            "greenmote",
-            "unclip",
-            "--plugin",
-            "cli.omwaddon",
-            "--include-grass-id",
-            "cli_.*",
-        ]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                include_grass_ids: Some(vec!["persisted_.*".to_owned()]),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(config.include_grass_ids, vec!["cli_.*"]);
-    }
-
-    #[test]
-    fn default_occluder_filter_excludes_tree_like_statics() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(&args, PersistedUnclipConfig::default(), None).unwrap();
-        let policy = config.policy().unwrap();
-
-        assert_eq!(
-            config.exclude_occluder_ids,
-            default_tree_occluder_exclude_ids()
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("must include a filename")
         );
-        assert!(!policy.occluder_filter.includes("flora_tree_wg_01"));
-        assert!(!policy.occluder_filter.includes("T_Sky_Flora_TreePine1_01"));
-        assert!(!policy.occluder_filter.includes("T_Cyr_FloraGC_Bush_01"));
-        assert!(policy.occluder_filter.includes("ex_common_rock_01"));
     }
 
     #[test]
-    fn persisted_empty_occluder_filter_overrides_default_tree_exclusions() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                exclude_occluder_ids: Some(Vec::new()),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
+    fn grass_filters_replace_but_default_lists_extend() {
+        let persisted = PersistedUnclipConfig {
+            plugin: Some(PathBuf::from("x.esp")),
+            include_grass_ids: Some(vec!["a".to_owned()]),
+            ..PersistedUnclipConfig::default()
+        };
+        let config = merged(
+            &["greenmote", "unclip", "--include-grass-id", "b"],
+            persisted,
+        );
+        assert_eq!(config.include_grass_ids, vec!["b".to_owned()]);
 
+        let config = merged(
+            &[
+                "greenmote",
+                "unclip",
+                "-p",
+                "x.esp",
+                "--exclude-occluder-id",
+                "custom_.*",
+            ],
+            PersistedUnclipConfig::default(),
+        );
+        let mut expected = default_tree_occluder_exclude_ids();
+        expected.push("custom_.*".to_owned());
+        assert_eq!(config.exclude_occluder_ids, expected);
+
+        let config = merged(
+            &[
+                "greenmote",
+                "unclip",
+                "-p",
+                "x.esp",
+                "--no-default-road-textures",
+                "--road-texture-path",
+                ".*mine.*",
+            ],
+            PersistedUnclipConfig::default(),
+        );
+        assert_eq!(config.road_texture_paths, vec![".*mine.*".to_owned()]);
+    }
+
+    #[test]
+    fn persisted_lists_replace_builtin_defaults() {
+        let persisted = PersistedUnclipConfig {
+            plugin: Some(PathBuf::from("x.esp")),
+            exclude_occluder_ids: Some(Vec::new()),
+            road_texture_paths: Some(vec![".*only.*".to_owned()]),
+            ..PersistedUnclipConfig::default()
+        };
+        let config = merged(&["greenmote", "unclip"], persisted);
         assert!(config.exclude_occluder_ids.is_empty());
+        assert_eq!(config.road_texture_paths, vec![".*only.*".to_owned()]);
     }
 
     #[test]
     fn invalid_persisted_regex_fails_validation() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                include_grass_ids: Some(vec!["(".to_owned()]),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
-
-        assert!(config.validate().is_err());
+        let persisted = PersistedUnclipConfig {
+            plugin: Some(PathBuf::from("x.esp")),
+            exclude_grass_ids: Some(vec!["(".to_owned()]),
+            ..PersistedUnclipConfig::default()
+        };
+        let config = merged(&["greenmote", "unclip"], persisted);
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("grass id filter")
+        );
     }
 
     #[test]
-    fn invalid_persisted_road_texture_regex_fails_validation() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                road_texture_paths: Some(vec!["(".to_owned()]),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
-
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn invalid_persisted_write_action_mix_fails_validation() {
-        let args = unclip_args(&["greenmote", "unclip", "--plugin", "cli.omwaddon"]);
-        let config = UnclipConfig::merge(
-            &args,
-            PersistedUnclipConfig {
-                write_actions: Some(vec![WriteActionArg::All, WriteActionArg::TerrainZ]),
-                ..PersistedUnclipConfig::default()
-            },
-            None,
-        )
-        .unwrap();
-
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn unknown_unclip_key_is_ignored() {
-        let result = PersistedUnclipConfig::from_toml(
-            r"
-[unclip]
-definitely_not_real = true
-origin_epsilon = 1.25
-",
-        )
-        .unwrap();
-
-        assert_close(result.origin_epsilon.unwrap(), 1.25);
-    }
-
-    fn assert_close(actual: f32, expected: f32) {
-        assert!((actual - expected).abs() < f32::EPSILON);
+    fn generated_default_round_trips_without_unknown_keys() {
+        let toml = toml::to_string(&PersistedUnclipConfig::generated_default()).unwrap();
+        let parsed = PersistedUnclipConfig::from_toml(&format!("[unclip]\n{toml}")).unwrap();
+        assert!(parsed.unknown.is_empty());
+        assert_eq!(parsed, PersistedUnclipConfig::generated_default());
     }
 }

@@ -35,6 +35,7 @@ macro_rules! route_text {
             | UiText::TargetPathEntry
             | UiText::StartConversion
             | UiText::WriteChanges
+            | UiText::RewriteInPlace
             | UiText::InspectPlugin
             | UiText::DryRun
             | UiText::DebugDiagnostics
@@ -59,7 +60,8 @@ macro_rules! route_text {
             | UiText::UnclipTargetSkipped
             | UiText::UnclipTargetCancelled => $convert($key),
             UiText::ConfirmUnclipWriteTitle
-            | UiText::ConfirmUnclipWriteMessage
+            | UiText::ConfirmUnclipPatchMessage
+            | UiText::ConfirmUnclipInPlaceMessage
             | UiText::EnabledWriteActions
             | UiText::UnsavedSettingsTitle
             | UiText::UnsavedSettingsMessage
@@ -99,8 +101,12 @@ macro_rules! route_text {
             | UiText::OrientAction
             | UiText::NoWriteActionsWarning
             | UiText::PolicyNumbers
-            | UiText::OriginHeightTolerance
-            | UiText::OriginHeightToleranceTooltip
+            | UiText::FloatTolerance
+            | UiText::FloatToleranceTooltip
+            | UiText::MaxSink
+            | UiText::MaxSinkTooltip
+            | UiText::SinkDepth
+            | UiText::SinkDepthTooltip
             | UiText::OrientationTolerance
             | UiText::OrientationToleranceTooltip
             | UiText::RelocationStepDistance
@@ -192,6 +198,7 @@ pub(super) enum UiText {
     TargetPathEntry,
     StartConversion,
     WriteChanges,
+    RewriteInPlace,
     InspectPlugin,
     DryRun,
     DebugDiagnostics,
@@ -221,7 +228,8 @@ pub(super) enum UiText {
     UnclipTargetSkipped,
     UnclipTargetCancelled,
     ConfirmUnclipWriteTitle,
-    ConfirmUnclipWriteMessage,
+    ConfirmUnclipPatchMessage,
+    ConfirmUnclipInPlaceMessage,
     EnabledWriteActions,
     UnsavedSettingsTitle,
     UnsavedSettingsMessage,
@@ -261,8 +269,12 @@ pub(super) enum UiText {
     OrientAction,
     NoWriteActionsWarning,
     PolicyNumbers,
-    OriginHeightTolerance,
-    OriginHeightToleranceTooltip,
+    FloatTolerance,
+    FloatToleranceTooltip,
+    MaxSink,
+    MaxSinkTooltip,
+    SinkDepth,
+    SinkDepthTooltip,
     OrientationTolerance,
     OrientationToleranceTooltip,
     RelocationStepDistance,
@@ -481,6 +493,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn localizes_unclip_write_labels() {
+        let localizer = Localizer::default();
+
+        assert_eq!(
+            localizer.text(UiText::ConfirmUnclipInPlaceMessage),
+            "Unclip will rewrite the selected source plugin(s) in place and create backup files."
+        );
+        assert!(
+            localizer
+                .text(UiText::ConfirmUnclipPatchMessage)
+                .contains("_unclip.omwaddon")
+        );
+        assert_eq!(
+            localizer.text(UiText::RewriteInPlace),
+            "Rewrite source plugin in place (keeps backups)"
+        );
+        assert_eq!(localizer.text(UiText::FloatTolerance), "Float tolerance");
+        assert_eq!(localizer.text(UiText::MaxSink), "Max sink");
+        assert_eq!(localizer.text(UiText::SinkDepth), "Sink depth");
+    }
+
+    #[test]
     fn localizes_fixed_gui_labels() {
         let localizer = Localizer::default();
 
@@ -490,10 +524,6 @@ mod tests {
         assert_eq!(
             localizer.text(UiText::WaterDeleteAction),
             "Delete refs crossing exterior water (water-delete)"
-        );
-        assert_eq!(
-            localizer.text(UiText::ConfirmUnclipWriteMessage),
-            "Unclip will modify the selected target plugin(s) and create backup files."
         );
         assert_eq!(localizer.showing_items(1, 6, 9), "Showing 1-6 of 9");
         assert_eq!(localizer.unclip_target_count(1), "Target: 1 plugin");
@@ -532,12 +562,12 @@ mod tests {
             "Удалять refs, пересекающие внешний водный уровень (water-delete)"
         );
         assert_eq!(
-            russian.text(UiText::ConfirmUnclipWriteMessage),
-            "Unclip изменит выбранные целевые плагины и создаст резервные копии."
+            russian.text(UiText::ConfirmUnclipInPlaceMessage),
+            "Unclip перезапишет выбранные исходные плагины на месте и создаст резервные копии."
         );
         assert!(
             !russian
-                .text(UiText::ConfirmUnclipWriteMessage)
+                .text(UiText::ConfirmUnclipInPlaceMessage)
                 .contains("plugins")
         );
         assert_eq!(russian.unclip_target_count(1), "Цель: 1 плагин");

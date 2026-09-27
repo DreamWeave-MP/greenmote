@@ -8,68 +8,77 @@ use clap::{Parser, ValueEnum};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
-#[cfg(test)]
-use super::model::ORIGIN_TERRAIN_EPSILON;
-
+/// Largest gap between the highest base vertex and the terrain that still counts as resting on it.
+pub(crate) const DEFAULT_FLOAT_TOLERANCE: f32 = 1.0;
+/// Deepest burial of the highest base vertex that still counts as acceptable.
+pub(crate) const DEFAULT_MAX_SINK: f32 = 24.0;
+/// Target burial depth of the highest base vertex after a terrain fix.
+pub(crate) const DEFAULT_SINK: f32 = 4.0;
 pub(crate) const DEFAULT_RELOCATION_STEP: f32 = 32.0;
 pub(crate) const DEFAULT_RELOCATION_STEPS: u16 = 8;
 pub(crate) const DEFAULT_ORIENTATION_EPSILON_DEGREES: f32 = 1.0;
 
 /// Parsed arguments for the `unclip` subcommand.
-#[derive(Parser, Clone, Debug)]
+#[derive(Parser, Clone, Debug, Default)]
 #[command(
     name = "unclip",
-    about = "Inspect groundcover refs against OpenMW terrain before unclipping."
+    about = "Find groundcover refs that float, sink, stand on roads or water, or clip into statics, and fix them."
 )]
 pub struct UnclipArgs {
     /// Groundcover plugin to inspect. May be a filesystem path or a VFS plugin name.
     #[arg(short = 'p', long = "plugin", value_name = "PLUGIN")]
     pub plugin: Option<PathBuf>,
 
-    /// Plugin path to write. Defaults to replacing the resolved source plugin.
+    /// Write the planned changes. Without this flag unclip only reports what it would do.
+    #[arg(long = "write", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+    pub write: Option<bool>,
+
+    /// Write changes back into the source plugin instead of a patch plugin. Keeps backups.
+    #[arg(long = "in-place", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+    pub in_place: Option<bool>,
+
+    /// Patch plugin path. Defaults to `<data-local>/<source stem>_unclip.omwaddon`.
     #[arg(long = "output-plugin", value_name = "PATH")]
     pub output_plugin: Option<PathBuf>,
 
-    /// Deprecated alias for --verbose.
-    #[arg(long = "instances", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
-    pub instances: Option<bool>,
-
-    /// Write full per-reference diagnostics to greenmote.log.
+    /// Write a per-reference table of every verdict to greenmote-unclip.log.
     #[arg(long = "verbose", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
     pub verbose: Option<bool>,
 
-    /// mw-groundcover-generator INI used as an optional placement inference hint.
-    #[arg(long = "meshgenerator-ini", value_name = "INI")]
-    pub meshgenerator_ini: Option<PathBuf>,
-
-    #[arg(skip)]
-    pub(crate) ignore_meshgenerator_ini: bool,
-
-    /// Emit the compact summary as machine-readable JSON.
+    /// Emit the report as machine-readable JSON.
     #[arg(long = "structured", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
     pub structured: Option<bool>,
 
-    /// Inspect planned unclipping changes without writing them.
-    #[arg(long = "dry-run", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
-    pub dry_run: Option<bool>,
+    /// Comma-separated actions to plan. Defaults to every action.
+    #[arg(
+        long = "actions",
+        visible_alias = "write-actions",
+        value_enum,
+        value_delimiter = ','
+    )]
+    pub actions: Vec<ActionArg>,
 
-    /// Comma-separated write actions to plan when writing.
-    #[arg(long = "write-actions", value_enum, value_delimiter = ',')]
-    pub write_actions: Vec<WriteActionArg>,
+    /// Largest gap (units) between the mesh base and the terrain that still counts as grounded.
+    #[arg(long = "float-tolerance", value_parser = non_negative_f32)]
+    pub float_tolerance: Option<f32>,
 
-    /// Maximum reference origin/terrain Z delta treated as already on terrain.
-    #[arg(long = "origin-epsilon", value_parser = non_negative_f32)]
-    pub origin_epsilon: Option<f32>,
+    /// Deepest burial (units) of the mesh base that still counts as acceptable.
+    #[arg(long = "max-sink", value_parser = non_negative_f32)]
+    pub max_sink: Option<f32>,
 
-    /// Horizontal distance between static-bounds relocation probes.
+    /// Burial depth (units) the mesh base is placed at when terrain-z fixes a ref.
+    #[arg(long = "sink", value_parser = non_negative_f32)]
+    pub sink: Option<f32>,
+
+    /// Horizontal distance between static relocation probes.
     #[arg(long = "relocation-step", value_parser = positive_f32)]
     pub relocation_step: Option<f32>,
 
-    /// Number of relocation probe rings to try for static-bounds moves.
+    /// Number of relocation probe rings to try for static moves.
     #[arg(long = "relocation-steps", value_parser = relocation_steps)]
     pub relocation_steps: Option<u16>,
 
-    /// Maximum tilt angle in degrees treated as already aligned to terrain.
+    /// Maximum tilt difference in degrees treated as already aligned to terrain.
     #[arg(long = "orientation-epsilon", value_parser = non_negative_f32)]
     pub orientation_epsilon: Option<f32>,
 
@@ -85,42 +94,74 @@ pub struct UnclipArgs {
     #[arg(long = "include-occluder-id", value_name = "REGEX")]
     pub include_occluder_ids: Vec<String>,
 
-    /// Exclude static occluders whose full IDs match this case-insensitive regex. May be repeated.
+    /// Exclude static occluders whose full IDs match this case-insensitive regex. Adds to the defaults.
     #[arg(long = "exclude-occluder-id", value_name = "REGEX")]
     pub exclude_occluder_ids: Vec<String>,
 
-    /// Road texture path regexes used by road-delete. May be repeated.
+    /// Drop the built-in tree-like occluder exclusions.
+    #[arg(long = "no-default-occluder-excludes")]
+    pub no_default_occluder_excludes: bool,
+
+    /// Road texture path regex used by road-delete. Adds to the defaults. May be repeated.
     #[arg(long = "road-texture-path", value_name = "REGEX")]
     pub road_texture_paths: Vec<String>,
+
+    /// Drop the built-in road texture patterns.
+    #[arg(long = "no-default-road-textures")]
+    pub no_default_road_textures: bool,
+
+    /// Continue when a static occluder mesh cannot be loaded instead of failing.
+    #[arg(long = "ignore-missing-meshes", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
+    pub ignore_missing_meshes: Option<bool>,
 }
 
-/// Write actions accepted by `unclip --write-actions` and `[unclip].write_actions`.
+/// Actions accepted by `unclip --actions` and `[unclip].actions`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
-#[non_exhaustive]
 #[serde(rename_all = "kebab-case")]
-pub enum WriteActionArg {
-    /// Enable every write action.
-    All,
-    /// Disable every write action.
-    None,
-    /// Move clipped references vertically to terrain height.
+pub enum ActionArg {
+    /// Move floating or buried references vertically so their base rests on the terrain.
     TerrainZ,
-    /// Delete refs that terrain adjustment would move across exterior water.
+    /// Delete references standing on terrain that lies below the exterior water plane.
     WaterDelete,
-    /// Delete refs whose sampled LAND texture path matches road filters.
+    /// Delete references whose LAND texture matches the road filters.
     RoadDelete,
-    /// Delete references that remain inside static occluders.
+    /// Delete references that are inside a static occluder and cannot be moved clear.
     StaticDelete,
-    /// Move references horizontally away from static occluders when a nearby location is found.
+    /// Move references sideways when a nearby clear spot exists.
     StaticMove,
-    /// Orient references toward terrain slope.
+    /// Tilt references to the terrain slope.
     Orient,
 }
 
+impl ActionArg {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::TerrainZ,
+        Self::WaterDelete,
+        Self::RoadDelete,
+        Self::StaticDelete,
+        Self::StaticMove,
+        Self::Orient,
+    ];
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::TerrainZ => "terrain-z",
+            Self::WaterDelete => "water-delete",
+            Self::RoadDelete => "road-delete",
+            Self::StaticDelete => "static-delete",
+            Self::StaticMove => "static-move",
+            Self::Orient => "orient",
+        }
+    }
+}
+
+/// Fully resolved unclip policy used by measurement, decision, and reporting.
 #[derive(Clone, Debug)]
 pub(crate) struct UnclipPolicy {
-    pub(crate) write_actions: WriteActions,
-    pub(crate) origin_epsilon: f32,
+    pub(crate) actions: Actions,
+    pub(crate) float_tolerance: f32,
+    pub(crate) max_sink: f32,
+    pub(crate) sink: f32,
     pub(crate) orientation_epsilon_degrees: f32,
     pub(crate) relocation: RelocationPolicy,
     pub(crate) target_filter: IdFilter,
@@ -128,17 +169,17 @@ pub(crate) struct UnclipPolicy {
     pub(crate) road_texture_filter: RoadTextureFilter,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct WriteActions {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Actions {
     flags: u8,
 }
 
-const WRITE_TERRAIN_Z: u8 = 1 << 0;
-const WRITE_WATER_DELETE: u8 = 1 << 1;
-const WRITE_ROAD_DELETE: u8 = 1 << 2;
-const WRITE_STATIC_DELETE: u8 = 1 << 3;
-const WRITE_STATIC_MOVE: u8 = 1 << 4;
-const WRITE_ORIENT: u8 = 1 << 5;
+const ACTION_TERRAIN_Z: u8 = 1 << 0;
+const ACTION_WATER_DELETE: u8 = 1 << 1;
+const ACTION_ROAD_DELETE: u8 = 1 << 2;
+const ACTION_STATIC_DELETE: u8 = 1 << 3;
+const ACTION_STATIC_MOVE: u8 = 1 << 4;
+const ACTION_ORIENT: u8 = 1 << 5;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RelocationPolicy {
@@ -160,206 +201,89 @@ pub(crate) struct RoadTextureFilter {
     regexes: Vec<Regex>,
 }
 
-impl UnclipArgs {
-    #[cfg(test)]
-    pub(crate) fn policy(&self) -> Result<UnclipPolicy, String> {
-        let plugin = self.plugin.as_ref().ok_or_else(|| {
-            "unclip requires --plugin or [unclip].plugin in greenmote.toml".to_owned()
-        })?;
-        let resolved = crate::unclip::config::UnclipConfig {
-            openmw_cfg: None,
-            plugin: plugin.clone(),
-            output_plugin: self.output_plugin.clone(),
-            meshgenerator_ini: if self.ignore_meshgenerator_ini {
-                None
-            } else {
-                self.meshgenerator_ini.clone()
-            },
-            verbose: self.verbose.or(self.instances).unwrap_or(false),
-            structured: self.structured.unwrap_or(false),
-            dry_run: self.dry_run.unwrap_or(false),
-            write_actions: if self.write_actions.is_empty() {
-                default_write_actions()
-            } else {
-                self.write_actions.clone()
-            },
-            origin_epsilon: self.origin_epsilon.unwrap_or(ORIGIN_TERRAIN_EPSILON),
-            relocation_step: self.relocation_step.unwrap_or(DEFAULT_RELOCATION_STEP),
-            relocation_steps: self.relocation_steps.unwrap_or(DEFAULT_RELOCATION_STEPS),
-            orientation_epsilon: self
-                .orientation_epsilon
-                .unwrap_or(DEFAULT_ORIENTATION_EPSILON_DEGREES),
-            include_grass_ids: self.include_grass_ids.clone(),
-            exclude_grass_ids: self.exclude_grass_ids.clone(),
-            include_occluder_ids: self.include_occluder_ids.clone(),
-            exclude_occluder_ids: self.exclude_occluder_ids.clone(),
-            road_texture_paths: self.road_texture_paths.clone(),
-        };
-        resolved.policy()
-    }
+pub(crate) fn default_actions() -> Vec<ActionArg> {
+    ActionArg::ALL.to_vec()
 }
 
-pub(crate) fn default_write_actions() -> Vec<WriteActionArg> {
-    vec![
-        WriteActionArg::TerrainZ,
-        WriteActionArg::WaterDelete,
-        WriteActionArg::RoadDelete,
-        WriteActionArg::StaticDelete,
-        WriteActionArg::StaticMove,
-        WriteActionArg::Orient,
-    ]
-}
-
-impl crate::unclip::config::UnclipConfig {
-    pub(crate) fn policy(&self) -> Result<UnclipPolicy, String> {
-        let write_actions = WriteActions::from_args(&self.write_actions)?;
-        Ok(UnclipPolicy {
-            write_actions,
-            origin_epsilon: self.origin_epsilon,
-            orientation_epsilon_degrees: self.orientation_epsilon,
-            relocation: RelocationPolicy {
-                step: self.relocation_step,
-                steps: self.relocation_steps,
-            },
-            target_filter: IdFilter::new(&self.include_grass_ids, &self.exclude_grass_ids)
-                .map_err(|error| format!("invalid grass id filter: {error}"))?,
-            occluder_filter: IdFilter::new(&self.include_occluder_ids, &self.exclude_occluder_ids)
-                .map_err(|error| format!("invalid occluder id filter: {error}"))?,
-            road_texture_filter: RoadTextureFilter::new(&self.road_texture_paths)
-                .map_err(|error| format!("invalid road texture path filter: {error}"))?,
-        })
-    }
-}
-
-impl WriteActions {
-    fn from_args(actions: &[WriteActionArg]) -> Result<Self, String> {
-        if actions.len() > 1
-            && actions
-                .iter()
-                .any(|action| matches!(action, WriteActionArg::All | WriteActionArg::None))
-        {
-            return Err(
-                "write action 'all' or 'none' cannot be combined with other actions".to_owned(),
-            );
-        }
-        let mut write_actions = Self::empty();
+impl Actions {
+    pub(crate) fn from_args(actions: &[ActionArg]) -> Self {
+        let mut result = Self::empty();
         for action in actions {
-            match action {
-                WriteActionArg::All => {
-                    write_actions = Self::all();
-                }
-                WriteActionArg::None => {
-                    write_actions = Self::empty();
-                }
-                WriteActionArg::TerrainZ => write_actions.enable(WRITE_TERRAIN_Z),
-                WriteActionArg::WaterDelete => write_actions.enable(WRITE_WATER_DELETE),
-                WriteActionArg::RoadDelete => write_actions.enable(WRITE_ROAD_DELETE),
-                WriteActionArg::StaticDelete => write_actions.enable(WRITE_STATIC_DELETE),
-                WriteActionArg::StaticMove => write_actions.enable(WRITE_STATIC_MOVE),
-                WriteActionArg::Orient => write_actions.enable(WRITE_ORIENT),
-            }
+            result.enable(*action);
         }
-        Ok(write_actions)
+        result
     }
 
     pub(crate) const fn empty() -> Self {
         Self { flags: 0 }
     }
 
+    #[cfg(test)]
     pub(crate) const fn all() -> Self {
         Self {
-            flags: WRITE_TERRAIN_Z
-                | WRITE_WATER_DELETE
-                | WRITE_ROAD_DELETE
-                | WRITE_STATIC_DELETE
-                | WRITE_STATIC_MOVE
-                | WRITE_ORIENT,
+            flags: ACTION_TERRAIN_Z
+                | ACTION_WATER_DELETE
+                | ACTION_ROAD_DELETE
+                | ACTION_STATIC_DELETE
+                | ACTION_STATIC_MOVE
+                | ACTION_ORIENT,
         }
     }
 
-    fn enable(&mut self, flag: u8) {
-        self.flags |= flag;
+    const fn flag(action: ActionArg) -> u8 {
+        match action {
+            ActionArg::TerrainZ => ACTION_TERRAIN_Z,
+            ActionArg::WaterDelete => ACTION_WATER_DELETE,
+            ActionArg::RoadDelete => ACTION_ROAD_DELETE,
+            ActionArg::StaticDelete => ACTION_STATIC_DELETE,
+            ActionArg::StaticMove => ACTION_STATIC_MOVE,
+            ActionArg::Orient => ACTION_ORIENT,
+        }
+    }
+
+    pub(crate) const fn enable(&mut self, action: ActionArg) {
+        self.flags |= Self::flag(action);
     }
 
     #[cfg(test)]
-    pub(crate) fn disable_terrain_z(&mut self) {
-        self.flags &= !WRITE_TERRAIN_Z;
+    pub(crate) const fn disable(&mut self, action: ActionArg) {
+        self.flags &= !Self::flag(action);
     }
 
-    #[cfg(test)]
-    pub(crate) fn disable_water_delete(&mut self) {
-        self.flags &= !WRITE_WATER_DELETE;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn disable_road_delete(&mut self) {
-        self.flags &= !WRITE_ROAD_DELETE;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn disable_static_delete(&mut self) {
-        self.flags &= !WRITE_STATIC_DELETE;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn disable_static_move(&mut self) {
-        self.flags &= !WRITE_STATIC_MOVE;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn disable_orient(&mut self) {
-        self.flags &= !WRITE_ORIENT;
+    pub(crate) const fn contains(self, action: ActionArg) -> bool {
+        self.flags & Self::flag(action) != 0
     }
 
     pub(crate) const fn terrain_z(self) -> bool {
-        self.flags & WRITE_TERRAIN_Z != 0
+        self.contains(ActionArg::TerrainZ)
     }
 
     pub(crate) const fn water_delete(self) -> bool {
-        self.flags & WRITE_WATER_DELETE != 0
+        self.contains(ActionArg::WaterDelete)
     }
 
     pub(crate) const fn road_delete(self) -> bool {
-        self.flags & WRITE_ROAD_DELETE != 0
+        self.contains(ActionArg::RoadDelete)
     }
 
     pub(crate) const fn static_delete(self) -> bool {
-        self.flags & WRITE_STATIC_DELETE != 0
+        self.contains(ActionArg::StaticDelete)
     }
 
     pub(crate) const fn static_move(self) -> bool {
-        self.flags & WRITE_STATIC_MOVE != 0
+        self.contains(ActionArg::StaticMove)
     }
 
     pub(crate) const fn orient(self) -> bool {
-        self.flags & WRITE_ORIENT != 0
-    }
-
-    pub(crate) const fn any_enabled(self) -> bool {
-        self.flags != 0
+        self.contains(ActionArg::Orient)
     }
 
     pub(crate) fn enabled_names(self) -> Vec<&'static str> {
-        let mut names = Vec::new();
-        if self.terrain_z() {
-            names.push("terrain-z");
-        }
-        if self.water_delete() {
-            names.push("water-delete");
-        }
-        if self.road_delete() {
-            names.push("road-delete");
-        }
-        if self.static_delete() {
-            names.push("static-delete");
-        }
-        if self.static_move() {
-            names.push("static-move");
-        }
-        if self.orient() {
-            names.push("orient");
-        }
-        names
+        ActionArg::ALL
+            .into_iter()
+            .filter(|action| self.contains(*action))
+            .map(ActionArg::name)
+            .collect()
     }
 }
 
@@ -392,6 +316,18 @@ pub(crate) fn default_road_texture_path_patterns() -> Vec<String> {
         r".*tx_sky.*road.*".to_owned(),
         r".*tr_alm_street.*".to_owned(),
         r".*nec_whiteroad.*".to_owned(),
+    ]
+}
+
+pub(crate) fn default_tree_occluder_exclude_ids() -> Vec<String> {
+    vec![
+        "flora_(tree|ashtree|treestump|treedead|root)_.*".to_owned(),
+        "flora_(ash_)?log_.*".to_owned(),
+        "flora_bm_(treebranch|treestump|snowbranch|snowstump|(snow_)?log)_.*".to_owned(),
+        "flora_bc_(tree|knee|log)_.*".to_owned(),
+        "ex_t_(bigroot|root).*".to_owned(),
+        "t_.*flora.*(tree|branch|root|stump|log|palm).*".to_owned(),
+        "t_cyr_flora(gc|str)_bush_.*".to_owned(),
     ]
 }
 
@@ -467,12 +403,40 @@ fn relocation_steps(value: &str) -> Result<u16, String> {
 }
 
 #[cfg(test)]
+impl UnclipPolicy {
+    pub(crate) fn for_test() -> Self {
+        Self {
+            actions: Actions::all(),
+            float_tolerance: DEFAULT_FLOAT_TOLERANCE,
+            max_sink: DEFAULT_MAX_SINK,
+            sink: DEFAULT_SINK,
+            orientation_epsilon_degrees: DEFAULT_ORIENTATION_EPSILON_DEGREES,
+            relocation: RelocationPolicy {
+                step: DEFAULT_RELOCATION_STEP,
+                steps: DEFAULT_RELOCATION_STEPS,
+            },
+            target_filter: IdFilter::new(&[], &[]).unwrap(),
+            occluder_filter: IdFilter::new(&[], &[]).unwrap(),
+            road_texture_filter: RoadTextureFilter::new(&default_road_texture_path_patterns())
+                .unwrap(),
+        }
+    }
+
+    pub(crate) fn with_target_filter(mut self, include: &[&str], exclude: &[&str]) -> Self {
+        let include = include.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let exclude = exclude.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        self.target_filter = IdFilter::new(&include, &exclude).unwrap();
+        self
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use clap::Parser;
 
     use crate::{Cli, Command};
 
-    use super::IdFilter;
+    use super::{ActionArg, Actions, IdFilter};
 
     fn parse_unclip_args(args: &[&str]) -> super::UnclipArgs {
         let cli = Cli::parse_from(args);
@@ -483,12 +447,51 @@ mod tests {
     }
 
     #[test]
-    fn verbose_flag_accepts_optional_bool() {
-        let args = parse_unclip_args(&["greenmote", "unclip", "--verbose"]);
-        assert_eq!(args.verbose, Some(true));
+    fn write_flag_accepts_optional_bool() {
+        let args = parse_unclip_args(&["greenmote", "unclip", "--write"]);
+        assert_eq!(args.write, Some(true));
 
-        let args = parse_unclip_args(&["greenmote", "unclip", "--verbose=false"]);
-        assert_eq!(args.verbose, Some(false));
+        let args = parse_unclip_args(&["greenmote", "unclip", "--write=false"]);
+        assert_eq!(args.write, Some(false));
+
+        let args = parse_unclip_args(&["greenmote", "unclip"]);
+        assert_eq!(args.write, None);
+    }
+
+    #[test]
+    fn removed_flags_are_rejected() {
+        for flag in [
+            "--dry-run",
+            "--instances",
+            "--meshgenerator-ini=x.ini",
+            "--origin-epsilon=1",
+        ] {
+            assert!(
+                Cli::try_parse_from(["greenmote", "unclip", flag]).is_err(),
+                "{flag} should be unknown"
+            );
+        }
+    }
+
+    #[test]
+    fn actions_accept_comma_lists_and_legacy_alias() {
+        let args = parse_unclip_args(&["greenmote", "unclip", "--actions", "terrain-z,orient"]);
+        assert_eq!(args.actions, vec![ActionArg::TerrainZ, ActionArg::Orient]);
+
+        let args = parse_unclip_args(&["greenmote", "unclip", "--write-actions", "road-delete"]);
+        assert_eq!(args.actions, vec![ActionArg::RoadDelete]);
+
+        assert!(Cli::try_parse_from(["greenmote", "unclip", "--actions", "all"]).is_err());
+    }
+
+    #[test]
+    fn actions_flags_round_trip() {
+        let actions = Actions::from_args(&[ActionArg::TerrainZ, ActionArg::StaticMove]);
+        assert!(actions.terrain_z());
+        assert!(actions.static_move());
+        assert!(!actions.orient());
+        assert_eq!(actions.enabled_names(), vec!["terrain-z", "static-move"]);
+        assert_eq!(Actions::from_args(&ActionArg::ALL), Actions::all());
     }
 
     #[test]
@@ -509,17 +512,6 @@ mod tests {
     }
 
     #[test]
-    fn instances_flag_remains_deprecated_verbose_alias() {
-        let args = parse_unclip_args(&["greenmote", "unclip", "--instances"]);
-        assert_eq!(args.instances, Some(true));
-        assert_eq!(args.verbose, None);
-
-        let args = parse_unclip_args(&["greenmote", "unclip", "--instances=false"]);
-        assert_eq!(args.instances, Some(false));
-        assert_eq!(args.verbose, None);
-    }
-
-    #[test]
     fn target_filter_includes_all_without_include_patterns() {
         let filter = IdFilter::new(&[], &[]).unwrap();
 
@@ -527,19 +519,16 @@ mod tests {
     }
 
     #[test]
-    fn target_filter_matches_case_insensitive_regexes() {
+    fn target_filter_matches_case_insensitive_full_ids() {
         let filter = IdFilter::new(&["flora_grass_.*".to_owned()], &[]).unwrap();
 
         assert!(filter.includes("Flora_Grass_01"));
         assert!(!filter.includes("flora_bush_01"));
-    }
-
-    #[test]
-    fn target_filter_regexes_match_full_ids() {
-        let filter = IdFilter::new(&["grass".to_owned()], &[]).unwrap();
-
-        assert!(filter.includes("grass"));
-        assert!(!filter.includes("flora_grass_01"));
+        assert!(
+            !IdFilter::new(&["grass".to_owned()], &[])
+                .unwrap()
+                .includes("flora_grass_01")
+        );
     }
 
     #[test]
@@ -552,8 +541,9 @@ mod tests {
     }
 
     #[test]
-    fn target_filter_rejects_invalid_regex() {
+    fn filters_reject_invalid_regex() {
         assert!(IdFilter::new(&["(".to_owned()], &[]).is_err());
+        assert!(super::RoadTextureFilter::new(&["(".to_owned()]).is_err());
     }
 
     #[test]
@@ -567,17 +557,10 @@ mod tests {
         assert!(filter.includes("textures/landscape/tx_bm_dirtroad_01.dds"));
         assert!(filter.includes("textures/custom/custom_path_tile_01.dds"));
         assert!(!filter.includes("textures/landscape/tx_grass_01.dds"));
-    }
-
-    #[test]
-    fn road_texture_filter_does_not_extend_empty_config() {
-        let filter = super::RoadTextureFilter::new(&[]).unwrap();
-
-        assert!(!filter.includes("textures/landscape/tx_bm_dirtroad_01.dds"));
-    }
-
-    #[test]
-    fn road_texture_filter_rejects_invalid_regex() {
-        assert!(super::RoadTextureFilter::new(&["(".to_owned()]).is_err());
+        assert!(
+            !super::RoadTextureFilter::new(&[])
+                .unwrap()
+                .includes("textures/landscape/tx_bm_dirtroad_01.dds")
+        );
     }
 }

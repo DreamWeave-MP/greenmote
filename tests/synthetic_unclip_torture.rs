@@ -101,39 +101,44 @@ fn run_synthetic_unclip_torture(profile: Profile) {
     let elapsed = started.elapsed();
 
     let report: Value = serde_json::from_slice(&stdout).unwrap();
-    let summary = &report["summary"];
+    let counts = &report["counts"];
     let target_refs = profile.target_refs();
-    assert_eq!(summary["target_refs_total"], target_refs);
-    assert_eq!(summary["target_refs_matching_filter"], target_refs);
-    assert_eq!(summary["filtered_refs_with_mesh_contact"], target_refs);
+    assert_eq!(report["cells"]["target_exterior_refs"], target_refs);
+    assert_eq!(counts["total"], target_refs);
+    assert_eq!(counts["skip"], 0);
+    let label =
+        |name: &str| usize::try_from(counts["by_label"][name].as_u64().unwrap_or(0)).unwrap();
+    // Serials 10..=15 float or sink by 64 units and get re-grounded.
     assert_eq!(
-        summary["filtered_refs_mesh_contact_above_terrain"],
-        profile.count_serial_mods(&[10, 11, 12])
+        label("fix_ground"),
+        profile.count_serial_mods(&[10, 11, 12, 13, 14, 15])
     );
+    // Serial 16 sits inside a rock and is deleted; serial 17 overlaps a rock edge and moves.
     assert_eq!(
-        summary["filtered_refs_mesh_contact_below_terrain"],
-        profile.count_serial_mods(&[13, 14, 15])
-    );
-    assert_eq!(
-        summary["filtered_refs_static_bounds_fully_occluded"],
+        label("delete_inside_static"),
         profile.count_serial_mods(&[16])
     );
-    assert!(
-        summary["filtered_refs_static_bounds_relocatable"]
-            .as_u64()
-            .unwrap()
-            >= 3_000
+    assert_eq!(label("fix_move"), profile.count_serial_mods(&[17]));
+    assert_eq!(
+        counts["keep"],
+        target_refs - profile.count_serial_mods(&[10, 11, 12, 13, 14, 15, 16, 17])
     );
-    assert!(config_dir.path().join("greenmote.log").is_file());
+    assert_eq!(report["mode"]["mode"], "dry_run");
+    assert!(report.get("write").is_none());
+    assert!(
+        config_dir
+            .path()
+            .join(greenmote::unclip::UNCLIP_LOG_NAME)
+            .is_file()
+    );
 
     println!(
-        "synthetic unclip {}: cells={}, refs={target_refs}, terrain_above={}, terrain_below={}, static_fully_occluded={}, static_relocatable={}, elapsed={elapsed:.2?}",
+        "synthetic unclip {}: cells={}, refs={target_refs}, fix_ground={}, delete_inside_static={}, fix_move={}, elapsed={elapsed:.2?}",
         profile.name,
         profile.grid_side * profile.grid_side,
-        summary["filtered_refs_mesh_contact_above_terrain"],
-        summary["filtered_refs_mesh_contact_below_terrain"],
-        summary["filtered_refs_static_bounds_fully_occluded"],
-        summary["filtered_refs_static_bounds_relocatable"],
+        label("fix_ground"),
+        label("delete_inside_static"),
+        label("fix_move"),
     );
 }
 
