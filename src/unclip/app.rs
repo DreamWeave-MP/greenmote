@@ -55,8 +55,8 @@ pub fn run(
         .policy()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let openmw_config = openmw::load_config_from_path(config.openmw_cfg.as_deref())?;
-    let plugin_directory = unlisted_plugin_directory(&config.plugin, &openmw_config);
-    let vfs = openmw::build_vfs_with_extra_directories(&openmw_config, plugin_directory.as_slice());
+    let plugin_directories = unlisted_plugin_directories(&config.plugin, &openmw_config);
+    let vfs = openmw::build_vfs_with_extra_directories(&openmw_config, &plugin_directories);
     let source_path = resolve_target_plugin(&config.plugin, &vfs)?;
     let mut source = load_target_plugin(&source_path)?;
     check()?;
@@ -65,7 +65,7 @@ pub fn run(
     let mode = output_mode(config, &openmw_config, &source_path);
     let mut report = Report {
         target: source_path.clone(),
-        added_data_directory: plugin_directory.first().cloned(),
+        added_data_directories: plugin_directories,
         mode: describe_mode(config.write, &mode, &source_path),
         policy: PolicySummary::from_policy(&policy),
         cells: CellSummary {
@@ -255,13 +255,18 @@ fn mesh_errors(verdicts: &[RefVerdict]) -> BTreeMap<String, usize> {
     errors
 }
 
-/// When `--plugin` is a file outside every configured data directory, its mod folder is added to
-/// the VFS so the plugin's own `meshes/` folder resolves, as it would once the mod is enabled.
+/// When `--plugin` is a file outside every configured data directory, the folders that hold its
+/// mod's `meshes/` are added to the VFS so the plugin's grass resolves as it would once the mod is
+/// enabled.
 ///
-/// The mod folder is the nearest ancestor (up to three levels) that contains a `meshes`
-/// directory, falling back to the plugin's own directory. Mods such as Aesthesia keep plugins in
-/// sub-folders below the folder that holds `meshes/`.
-fn unlisted_plugin_directory(
+/// Starting at the plugin's directory and walking up to two levels, the first level that offers
+/// a folder with a `meshes` directory (the level's folder itself or one of its immediate
+/// sub-folders) wins. That covers mods that keep plugins beside `meshes/` (Fantasia), below it
+/// (Aesthesia), or in a sibling option folder (Remiros' `00 Core OpenMW` next to `03 TR Plugins`).
+/// If any of those folders is already a configured data directory the mod counts as enabled and
+/// nothing is added. Folders whose name mentions `OpenMW` are added last so they win over other
+/// engine variants of the same mod.
+fn unlisted_plugin_directories(
     plugin: &Path,
     openmw_config: &openmw_config::OpenMWConfiguration,
 ) -> Vec<PathBuf> {
@@ -274,22 +279,45 @@ fn unlisted_plugin_directory(
     else {
         return Vec::new();
     };
-    let mod_directory = parent
-        .ancestors()
-        .take(4)
-        .find(|directory| has_meshes_directory(directory))
-        .unwrap_or(parent);
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mod_canonical = canonical(mod_directory);
     let listed = openmw_config
         .data_directories_iter()
         .map(|setting| canonical(setting.parsed()))
-        .any(|directory| directory == mod_canonical);
-    if listed {
-        Vec::new()
-    } else {
-        vec![mod_directory.to_path_buf()]
+        .collect::<BTreeSet<_>>();
+
+    for ancestor in parent.ancestors().take(3) {
+        let mut candidates = std::fs::read_dir(ancestor)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                    .map(|entry| entry.path())
+                    .filter(|path| has_meshes_directory(path))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if has_meshes_directory(ancestor) {
+            candidates.push(ancestor.to_path_buf());
+        }
+        if candidates.is_empty() {
+            continue;
+        }
+        if candidates
+            .iter()
+            .any(|candidate| listed.contains(&canonical(candidate)))
+        {
+            return Vec::new();
+        }
+        candidates.sort_by_key(|path| {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            (name.contains("openmw"), name)
+        });
+        return candidates;
     }
+    Vec::new()
 }
 
 fn has_meshes_directory(directory: &Path) -> bool {

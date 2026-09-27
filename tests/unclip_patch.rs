@@ -138,8 +138,8 @@ fn plugin_outside_data_directories_uses_its_own_mod_folder() {
 
     let report = fixture.run(&[]);
     assert_eq!(
-        report["added_data_directory"],
-        mod_dir.display().to_string()
+        report["added_data_directories"],
+        serde_json::json!([mod_dir.display().to_string()])
     );
     assert_eq!(report["counts"]["skip"], 0, "{report}");
     assert_eq!(report["counts"]["total"], 6);

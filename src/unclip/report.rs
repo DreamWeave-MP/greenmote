@@ -17,9 +17,9 @@ use super::{
 #[derive(Serialize)]
 pub(crate) struct Report {
     pub(crate) target: PathBuf,
-    /// Plugin directory added to the VFS because it is not a configured data directory.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) added_data_directory: Option<PathBuf>,
+    /// Mod folders added to the VFS because the plugin is not in a configured data directory.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) added_data_directories: Vec<PathBuf>,
     pub(crate) mode: OutputSummary,
     pub(crate) policy: PolicySummary,
     pub(crate) cells: CellSummary,
@@ -118,10 +118,10 @@ pub(crate) fn write_text(out: &mut dyn Write, report: &Report) -> io::Result<()>
 
 fn write_header(out: &mut dyn Write, report: &Report) -> io::Result<()> {
     writeln!(out, "Unclip report for {}", report.target.display())?;
-    if let Some(directory) = &report.added_data_directory {
+    for directory in &report.added_data_directories {
         writeln!(
             out,
-            "Added {} to the VFS because it is not a configured data directory",
+            "Added {} to the VFS because the plugin is not in a configured data directory",
             directory.display()
         )?;
     }
