@@ -94,7 +94,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         UiText::ConfirmUnclipPatchMessage => {
             "Unclip will write a patch plugin (<source stem>_unclip.omwaddon in data-local) for each target and leave the source plugins untouched."
         }
-
         UiText::ConfirmUnclipInPlaceMessage => {
             "Unclip will rewrite the selected source plugin(s) in place and create backup files."
         }
@@ -158,19 +157,18 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::NoWriteActionsWarning => "Warning: write mode will produce no policy actions.",
         UiText::PolicyNumbers => "Policy numbers",
         UiText::FloatTolerance => "Float tolerance",
-
         UiText::FloatToleranceTooltip => {
             "Largest gap in units between the mesh base and the terrain that still counts as grounded. Config key: float_tolerance."
         }
-
         UiText::MaxSink => "Max sink",
-
         UiText::MaxSinkTooltip => {
             "Deepest burial in units of the mesh base that still counts as acceptable. Config key: max_sink."
         }
-
+        UiText::MaxSinkFraction => "Max sink (fraction of height)",
+        UiText::MaxSinkFractionTooltip => {
+            "Deepest burial as a fraction of the mesh height; the larger of this and Max sink applies. Generators bury tall grass deeply on purpose. Config key: max_sink_fraction."
+        }
         UiText::SinkDepth => "Sink depth",
-
         UiText::SinkDepthTooltip => {
             "Burial depth in units the mesh base is placed at when terrain-z fixes a ref. Config key: sink."
         }

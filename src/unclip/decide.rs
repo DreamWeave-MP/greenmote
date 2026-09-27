@@ -79,6 +79,8 @@ pub(crate) struct RefVerdict {
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct Measured {
     pub(crate) terrain_z: f32,
+    /// Local vertical extent of the mesh, the reference for `max_sink_fraction`.
+    pub(crate) mesh_height: f32,
     pub(crate) contact: GroundContact,
     pub(crate) tilt_delta_degrees: f32,
 }
@@ -283,6 +285,7 @@ fn decide_verdict(input: &RefInput<'_>, surveyor: &Surveyor<'_>) -> (Verdict, Op
     };
     let measured = Some(Measured {
         terrain_z: placement.terrain.height,
+        mesh_height: geometry.contact.height(),
         contact: placement.contact_before,
         tilt_delta_degrees: placement.tilt_delta_degrees,
     });
@@ -411,8 +414,10 @@ fn place(
 
     let contact_before = surveyor.ground_contact(geometry, current)?;
     let contact_here = surveyor.ground_contact(geometry, &transform)?;
-    let wants_ground =
-        contact_here.gap > policy.float_tolerance || contact_here.gap < -policy.max_sink;
+    let max_sink = policy
+        .max_sink
+        .max(policy.max_sink_fraction * geometry.contact.height());
+    let wants_ground = contact_here.gap > policy.float_tolerance || contact_here.gap < -max_sink;
     let grounded = if wants_ground && (policy.actions.terrain_z() || !respect_actions) {
         transform.translation[2] -= contact_here.gap + policy.sink;
         true
@@ -658,15 +663,24 @@ mod tests {
         );
         assert!(matches!(buried.verdict, Verdict::Fix(ref fix) if fix.grounded));
 
+        // The test mesh is 40 units tall, so 75% of its height (30) is the effective limit.
         let slight = decide(
-            &input(
-                &geometry,
-                [1000.0, 1000.0, 100.0 - world.policy.max_sink + 0.5],
-                [0.0; 3],
-            ),
+            &input(&geometry, [1000.0, 1000.0, 100.0 - 29.5], [0.0; 3]),
             &world.surveyor(),
         );
-        assert!(matches!(slight.verdict, Verdict::Keep { .. }));
+        assert!(
+            matches!(slight.verdict, Verdict::Keep { .. }),
+            "{:?}",
+            slight.verdict
+        );
+
+        let mut strict = World::new(flat_terrain(100.0));
+        strict.policy.max_sink_fraction = 0.0;
+        let slight = decide(
+            &input(&geometry, [1000.0, 1000.0, 100.0 - 29.5], [0.0; 3]),
+            &strict.surveyor(),
+        );
+        assert!(matches!(slight.verdict, Verdict::Fix(ref fix) if fix.grounded));
     }
 
     #[test]

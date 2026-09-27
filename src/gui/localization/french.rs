@@ -100,7 +100,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         UiText::ConfirmUnclipPatchMessage => {
             "Unclip écrira un plugin correctif (<nom source>_unclip.omwaddon dans data-local) pour chaque cible et laissera les plugins sources intacts."
         }
-
         UiText::ConfirmUnclipInPlaceMessage => {
             "Unclip réécrira sur place les plugins sources sélectionnés et créera des fichiers de sauvegarde."
         }
@@ -173,19 +172,18 @@ const fn settings_text(key: UiText) -> &'static str {
         }
         UiText::PolicyNumbers => "Valeurs de politique",
         UiText::FloatTolerance => "Tolérance de flottement",
-
         UiText::FloatToleranceTooltip => {
             "Écart maximal (unités) entre la base du mesh et le terrain encore considéré comme posé au sol. Config key: float_tolerance."
         }
-
         UiText::MaxSink => "Enfoncement maximal",
-
         UiText::MaxSinkTooltip => {
             "Enfouissement maximal (unités) de la base du mesh encore considéré comme acceptable. Config key: max_sink."
         }
-
+        UiText::MaxSinkFraction => "Enfoncement maximal (fraction de la hauteur)",
+        UiText::MaxSinkFractionTooltip => {
+            "Enfouissement maximal en fraction de la hauteur du mesh ; la plus grande valeur entre celle-ci et Enfoncement maximal s’applique. Les générateurs enterrent volontairement les hautes herbes profondément. Config key: max_sink_fraction."
+        }
         UiText::SinkDepth => "Profondeur d’enfoncement",
-
         UiText::SinkDepthTooltip => {
             "Profondeur d’enfouissement (unités) de la base du mesh appliquée quand terrain-z corrige une ref. Config key: sink."
         }

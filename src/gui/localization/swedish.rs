@@ -94,7 +94,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         UiText::ConfirmUnclipPatchMessage => {
             "Unclip skriver ett patchplugin (<källnamn>_unclip.omwaddon i data-local) för varje mål och lämnar källpluginen orörda."
         }
-
         UiText::ConfirmUnclipInPlaceMessage => {
             "Unclip skriver över valda källplugin på plats och skapar säkerhetskopior."
         }
@@ -156,19 +155,18 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::NoWriteActionsWarning => "Varning: skrivläge ger inga policyåtgärder.",
         UiText::PolicyNumbers => "Policyvärden",
         UiText::FloatTolerance => "Svävtolerans",
-
         UiText::FloatToleranceTooltip => {
             "Största avstånd (enheter) mellan meshens bas och terrängen som fortfarande räknas som markbundet. Config key: float_tolerance."
         }
-
         UiText::MaxSink => "Största nedsjunkning",
-
         UiText::MaxSinkTooltip => {
             "Djupaste nedgrävning (enheter) av meshens bas som fortfarande är godtagbar. Config key: max_sink."
         }
-
+        UiText::MaxSinkFraction => "Största nedsjunkning (andel av höjden)",
+        UiText::MaxSinkFractionTooltip => {
+            "Djupaste nedgrävning som andel av meshens höjd; det större av detta och Största nedsjunkning gäller. Generatorer gräver avsiktligt ner högt gräs djupt. Config key: max_sink_fraction."
+        }
         UiText::SinkDepth => "Nedsjunkningsdjup",
-
         UiText::SinkDepthTooltip => {
             "Nedgrävningsdjup (enheter) som meshens bas placeras på när terrain-z rättar en ref. Config key: sink."
         }

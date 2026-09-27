@@ -1,18 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::sync::Arc;
+
 use glam::{Quat, Vec3};
 use rapier3d::{
     math::{Pose3, Rot3, Vec3 as RapierVec3},
     parry::{
         query::{PointQuery, details::intersection_test_support_map_support_map},
-        shape::{Ball, Cuboid, SupportMap},
+        shape::{Cuboid, Triangle},
     },
 };
 
-use super::mesh::{MeshAabb, MeshColliderParts, WorldAabb, aabb_corners};
+use super::mesh::{LocalTriangle, MeshAabb, MeshColliderParts, WorldAabb, aabb_corners};
 
-/// A reference's collision volume: one convex part per collision shape, each with its own
-/// world pose, plus the world AABB of all parts for broad-phase pruning.
+/// A reference's collision volume plus the world AABB of all parts for broad-phase pruning.
+///
+/// Grass references are one box (their visible volume). Static occluders are their collision
+/// shapes' exact triangles, shared per mesh and never copied per reference: each part only
+/// records where the reference placed the mesh and how it scaled it.
 #[derive(Clone, Debug)]
 pub(crate) struct RapierCollider {
     bounds: WorldAabb,
@@ -20,37 +25,32 @@ pub(crate) struct RapierCollider {
 }
 
 #[derive(Clone, Debug)]
-struct RapierPart {
-    shape: PartShape,
-    pose: Pose3,
+enum RapierPart {
+    Box {
+        cuboid: Cuboid,
+        pose: Pose3,
+    },
+    Mesh {
+        /// Unscaled mesh-local triangles, shared with every other reference of the mesh.
+        triangles: Arc<[LocalTriangle]>,
+        /// Bounds of each triangle, parallel to `triangles` and shared the same way.
+        triangle_bounds: Arc<[MeshAabb]>,
+        /// Unscaled mesh-local bounds of `triangles`.
+        bounds: MeshAabb,
+        /// Mesh-local (scaled) to world.
+        pose: Pose3,
+        /// The reference's uniform scale, applied before `pose`.
+        scale: f32,
+    },
 }
 
-/// The convex shapes a part can take. `parry`'s `ConvexPolyhedron` and hull builder need its
-/// `alloc` feature, which this crate's `rapier3d` dependency does not enable, so hulls are
-/// represented here by their point set and fed to `parry`'s GJK through [`SupportMap`]: the
-/// support function of a point cloud is exactly that of its convex hull.
-#[derive(Clone, Debug)]
-enum PartShape {
-    Hull(ConvexHull),
-    Box(Cuboid),
-}
+/// Ray hits closer than this along the ray are ignored, so a corner lying exactly on a face
+/// never counts that face.
+const RAY_HIT_MIN_T: f32 = 0.000_01;
 
-/// The convex hull of a point set in the part's local frame, kept implicit: the points span a
-/// volume, and every query goes through the support function.
-#[derive(Clone, Debug)]
-struct ConvexHull {
-    vertices: Vec<RapierVec3>,
-}
-
-/// Smallest half extent of a box that stands in for a degenerate (flat or tiny) part.
-const DEGENERATE_PART_MIN_HALF_EXTENT: f32 = 0.5;
-
-/// A point set whose extent off its best-fitting line or plane is below this fraction of its
-/// largest extent is treated as flat and replaced by a box.
-const HULL_MIN_RELATIVE_THICKNESS: f32 = 0.000_1;
-
-/// Tolerance for point-in-hull tests, relative to the hull's largest extent.
-const HULL_CONTAINS_RELATIVE_TOLERANCE: f32 = 0.000_01;
+/// Barycentric distance to a triangle edge under which a ray hit is ambiguous (the ray may
+/// also hit the neighbouring face) and the cast is retried along a tilted direction.
+const RAY_EDGE_EPSILON: f32 = 0.000_001;
 
 impl RapierCollider {
     /// One axis-aligned box in mesh space, e.g. the visible volume of a grass mesh.
@@ -65,18 +65,17 @@ impl RapierCollider {
         let rotation = openmw_rotation(rotation);
         let min = Vec3::from(bounds.min) * scale;
         let max = Vec3::from(bounds.max) * scale;
-        let part = cuboid_part(
+        let part = box_part(
             min.min(max),
             min.max(max),
-            f32::EPSILON,
             Vec3::from(translation),
             rotation,
         );
         Self::from_parts(vec![part])
     }
 
-    /// One convex hull per collider part, scaled by the reference's uniform scale and placed
-    /// with the reference's rotation and translation.
+    /// The mesh's collision triangles, scaled by the reference's uniform scale and placed with
+    /// its rotation and translation. Triangles are shared, not copied.
     #[must_use]
     pub(crate) fn from_mesh_collider_parts(
         parts: &MeshColliderParts,
@@ -85,11 +84,16 @@ impl RapierCollider {
         scale: Option<f32>,
     ) -> Self {
         let scale = scale.unwrap_or(1.0);
-        let rotation = openmw_rotation(rotation);
-        let translation = Vec3::from(translation);
+        let pose = isometry(Vec3::from(translation), openmw_rotation(rotation));
         let parts = parts
             .iter()
-            .filter_map(|part| convex_part(&part.points, scale, translation, rotation))
+            .map(|part| RapierPart::Mesh {
+                triangles: Arc::clone(&part.triangles),
+                triangle_bounds: Arc::clone(&part.triangle_bounds),
+                bounds: part.bounds,
+                pose,
+                scale,
+            })
             .collect();
         Self::from_parts(parts)
     }
@@ -97,10 +101,9 @@ impl RapierCollider {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn from_world_aabb(bounds: WorldAabb) -> Self {
-        let part = cuboid_part(
+        let part = box_part(
             Vec3::from(bounds.min),
             Vec3::from(bounds.max),
-            f32::EPSILON,
             Vec3::ZERO,
             Quat::IDENTITY,
         );
@@ -115,39 +118,37 @@ impl RapierCollider {
         self.bounds
     }
 
-    /// True when any part of `self` overlaps any part of `other`.
+    /// True when any part of `self` overlaps any part of `other`. Symmetric: a box against
+    /// triangles is tested the same way whichever side holds the triangles.
     #[must_use]
     pub(crate) fn intersects(&self, other: &Self) -> bool {
         self.bounds.intersection(other.bounds).is_some()
-            && self.parts.iter().any(|left| {
-                other.parts.iter().any(|right| {
-                    let pose12 = left.pose.inv_mul(&right.pose);
-                    intersection_test_support_map_support_map(
-                        &pose12,
-                        left.shape.support_map(),
-                        right.shape.support_map(),
-                    )
-                })
-            })
+            && self
+                .parts
+                .iter()
+                .any(|left| other.parts.iter().any(|right| left.intersects(right)))
     }
 
-    /// True when every vertex of every part of `other` lies inside at least one part of `self`.
-    /// For convex `other` parts this means `other` is entirely inside a convex part of `self`
-    /// (or the union of several, whenever the vertices happen to fall that way).
+    /// True when every corner of every box part of `other` lies inside at least one part of
+    /// `self`. Triangle parts count a corner as inside by ray parity, so hollow or open meshes
+    /// (an arch, a mushroom cap above the ground) do not swallow what stands under them.
     #[must_use]
     pub(crate) fn contains(&self, other: &Self) -> bool {
         if self.parts.is_empty() || other.parts.is_empty() {
             return false;
         }
-        other
-            .parts
-            .iter()
-            .flat_map(RapierPart::world_vertices)
-            .all(|vertex| {
-                self.parts
-                    .iter()
-                    .any(|part| part.contains_world_point(vertex))
-            })
+        let mut corners = Vec::new();
+        for part in &other.parts {
+            let RapierPart::Box { cuboid, pose } = part else {
+                return false;
+            };
+            corners.extend(cuboid_world_corners(cuboid, pose));
+        }
+        corners.into_iter().all(|corner| {
+            self.parts
+                .iter()
+                .any(|part| part.contains_world_point(corner))
+        })
     }
 
     fn from_parts(parts: Vec<RapierPart>) -> Self {
@@ -157,187 +158,257 @@ impl RapierCollider {
 }
 
 impl RapierPart {
-    /// The part's defining vertices (hull vertices or box corners) in world space.
-    fn world_vertices(&self) -> Vec<RapierVec3> {
-        self.shape
-            .local_vertices()
-            .into_iter()
-            .map(|point| self.pose.transform_point(point))
-            .collect()
-    }
-
-    fn contains_world_point(&self, point: RapierVec3) -> bool {
-        self.shape
-            .contains_local_point(self.pose.inverse_transform_point(point))
-    }
-}
-
-impl PartShape {
-    fn support_map(&self) -> &dyn SupportMap {
-        match self {
-            Self::Hull(hull) => hull,
-            Self::Box(cuboid) => cuboid,
+    fn intersects(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Box { cuboid, pose },
+                Self::Box {
+                    cuboid: other_cuboid,
+                    pose: other_pose,
+                },
+            ) => intersection_test_support_map_support_map(
+                &pose.inv_mul(other_pose),
+                cuboid,
+                other_cuboid,
+            ),
+            (Self::Mesh { .. }, Self::Box { cuboid, pose })
+            | (Self::Box { cuboid, pose }, Self::Mesh { .. }) => {
+                let mesh = if matches!(self, Self::Mesh { .. }) {
+                    self
+                } else {
+                    other
+                };
+                mesh.mesh_intersects_cuboid(cuboid, pose)
+            }
+            // Occluders are never tested against each other; keep the broad-phase answer.
+            (Self::Mesh { .. }, Self::Mesh { .. }) => self
+                .world_bounds()
+                .intersection(other.world_bounds())
+                .is_some(),
         }
     }
 
-    fn local_vertices(&self) -> Vec<RapierVec3> {
+    /// Exact test of a box against this part's triangles: the box is taken into the unscaled
+    /// mesh frame (a uniform scale keeps it a box) and run through GJK against every triangle
+    /// whose bounds overlap it. A box that touches no triangle still intersects when it lies
+    /// entirely inside a closed mesh.
+    fn mesh_intersects_cuboid(&self, cuboid: &Cuboid, cuboid_pose: &Pose3) -> bool {
+        let Self::Mesh {
+            triangles,
+            triangle_bounds,
+            bounds,
+            pose,
+            scale,
+        } = self
+        else {
+            return false;
+        };
+        let scaled_local = pose.inv_mul(cuboid_pose);
+        let local_pose =
+            Pose3::from_parts(scaled_local.translation / *scale, scaled_local.rotation);
+        let local_cuboid = Cuboid::new(cuboid.half_extents / *scale);
+        let (local_min, local_max) =
+            points_bounds(cuboid_world_corners(&local_cuboid, &local_pose));
+        if !aabbs_overlap(local_min, local_max, bounds.min.into(), bounds.max.into()) {
+            return false;
+        }
+
+        let touches_surface =
+            triangles
+                .iter()
+                .zip(triangle_bounds.iter())
+                .any(|(triangle, bounds)| {
+                    aabbs_overlap(local_min, local_max, bounds.min.into(), bounds.max.into())
+                        && intersection_test_support_map_support_map(
+                            &local_pose,
+                            &local_triangle(triangle),
+                            &local_cuboid,
+                        )
+                });
+        touches_surface
+            || point_inside_triangles(triangles, triangle_bounds, local_pose.translation)
+    }
+
+    fn contains_world_point(&self, point: RapierVec3) -> bool {
         match self {
-            Self::Hull(hull) => hull.vertices.clone(),
-            Self::Box(cuboid) => {
-                let half = cuboid.half_extents;
-                aabb_corners((-half).into(), half.into())
-                    .into_iter()
-                    .map(RapierVec3::from)
-                    .collect()
+            Self::Box { cuboid, pose } => {
+                cuboid.contains_local_point(pose.inverse_transform_point(point))
+            }
+            Self::Mesh {
+                triangles,
+                triangle_bounds,
+                bounds,
+                pose,
+                scale,
+            } => {
+                let local = pose.inverse_transform_point(point) / *scale;
+                let min = RapierVec3::from(bounds.min);
+                let max = RapierVec3::from(bounds.max);
+                // The +Z ray can only cross faces when the point is inside the footprint and
+                // below the top of the mesh.
+                local.x >= min.x
+                    && local.x <= max.x
+                    && local.y >= min.y
+                    && local.y <= max.y
+                    && local.z >= min.z
+                    && local.z <= max.z
+                    && point_inside_triangles(triangles, triangle_bounds, local)
             }
         }
     }
 
-    fn contains_local_point(&self, point: RapierVec3) -> bool {
+    fn world_vertices(&self) -> Vec<RapierVec3> {
         match self {
-            Self::Hull(hull) => hull.contains_local_point(point),
-            Self::Box(cuboid) => cuboid.contains_local_point(point),
+            Self::Box { cuboid, pose } => cuboid_world_corners(cuboid, pose).to_vec(),
+            Self::Mesh {
+                bounds,
+                pose,
+                scale,
+                ..
+            } => aabb_corners(bounds.min, bounds.max)
+                .into_iter()
+                .map(|corner| pose.transform_point(RapierVec3::from(corner) * *scale))
+                .collect(),
+        }
+    }
+
+    fn world_bounds(&self) -> WorldAabb {
+        let (min, max) = points_bounds(self.world_vertices());
+        WorldAabb {
+            min: min.to_array(),
+            max: max.to_array(),
         }
     }
 }
 
-impl ConvexHull {
-    /// Wraps `points` when they span a volume; `None` for fewer than four points or a point set
-    /// that is (numerically) a point, a line, or a plane.
-    fn new(points: &[RapierVec3]) -> Option<Self> {
-        if points.len() < 4 || !spans_volume(points) {
-            return None;
+/// Ray-parity point-in-mesh test: a point is inside when a ray from it crosses the surface an
+/// odd number of times. A hit that grazes a triangle edge could be counted twice through the
+/// neighbouring face, so such casts are retried along a slightly tilted ray.
+fn point_inside_triangles(
+    triangles: &[LocalTriangle],
+    triangle_bounds: &[MeshAabb],
+    point: RapierVec3,
+) -> bool {
+    const DIRECTIONS: [RapierVec3; 2] = [
+        RapierVec3::new(0.0, 0.0, 1.0),
+        RapierVec3::new(0.017_3, 0.031_1, 1.0),
+    ];
+    let mut parity = false;
+    for (pass, direction) in DIRECTIONS.into_iter().enumerate() {
+        let straight_up = pass == 0;
+        let mut hits = 0_u32;
+        let mut ambiguous = false;
+        for (triangle, bounds) in triangles.iter().zip(triangle_bounds) {
+            // Cheap rejection: the ray only rises, and a vertical ray also stays at its x/y.
+            if bounds.max[2] < point.z
+                || (straight_up
+                    && (point.x < bounds.min[0]
+                        || point.x > bounds.max[0]
+                        || point.y < bounds.min[1]
+                        || point.y > bounds.max[1]))
+            {
+                continue;
+            }
+            if let Some(hit) = ray_hits_triangle(point, direction, triangle) {
+                hits += 1;
+                ambiguous |= hit.on_edge;
+            }
         }
-        Some(Self {
-            vertices: points.to_vec(),
-        })
+        parity = hits % 2 == 1;
+        if !ambiguous {
+            break;
+        }
     }
-
-    /// GJK between the hull and a tiny ball at `point`; points on the surface count as inside.
-    fn contains_local_point(&self, point: RapierVec3) -> bool {
-        let tolerance = HULL_CONTAINS_RELATIVE_TOLERANCE * largest_extent(&self.vertices);
-        let pose = Pose3::from_parts(point, Rot3::IDENTITY);
-        intersection_test_support_map_support_map(&pose, self, &Ball::new(tolerance))
-    }
+    parity
 }
 
-/// Quickhull's initial-simplex test: the point farthest from a line through two extreme points
-/// and then the point farthest from that plane must both be clearly off it.
-fn spans_volume(points: &[RapierVec3]) -> bool {
-    let threshold = HULL_MIN_RELATIVE_THICKNESS * largest_extent(points);
-    let Some(&a) = points.first() else {
-        return false;
-    };
-    let Some(&b) = farthest_by(points, |point| (point - a).length_squared()) else {
-        return false;
-    };
-    let axis = b - a;
-    if axis.length() <= threshold {
-        return false;
+struct RayHit {
+    on_edge: bool,
+}
+
+/// Möller–Trumbore ray/triangle intersection, ignoring hits at or behind the ray origin.
+fn ray_hits_triangle(
+    origin: RapierVec3,
+    direction: RapierVec3,
+    triangle: &LocalTriangle,
+) -> Option<RayHit> {
+    let [first, second, third] = triangle.map(RapierVec3::from);
+    let edge_to_second = second - first;
+    let edge_to_third = third - first;
+    let normal_part = direction.cross(edge_to_third);
+    let det = edge_to_second.dot(normal_part);
+    if det.abs() <= f32::EPSILON * edge_to_second.length() * edge_to_third.length() {
+        return None;
     }
-    let Some(&c) = farthest_by(points, |point| (point - a).cross(axis).length_squared()) else {
-        return false;
-    };
-    let Some(normal) = (b - a).cross(c - a).try_normalize() else {
-        return false;
-    };
-    if (c - a).cross(axis).length() / axis.length() <= threshold {
-        return false;
+    let inv_det = 1.0 / det;
+    let from_first = origin - first;
+    let bary_second = from_first.dot(normal_part) * inv_det;
+    if !(0.0..=1.0).contains(&bary_second) {
+        return None;
     }
-    farthest_by(points, |point| (point - a).dot(normal).abs())
-        .is_some_and(|d| (*d - a).dot(normal).abs() > threshold)
-}
-
-fn farthest_by(points: &[RapierVec3], metric: impl Fn(RapierVec3) -> f32) -> Option<&RapierVec3> {
-    points
-        .iter()
-        .max_by(|left, right| metric(**left).total_cmp(&metric(**right)))
-}
-
-impl SupportMap for ConvexHull {
-    fn local_support_point(&self, dir: RapierVec3) -> RapierVec3 {
-        self.vertices
-            .iter()
-            .copied()
-            .max_by(|left, right| left.dot(dir).total_cmp(&right.dot(dir)))
-            .unwrap_or(RapierVec3::ZERO)
+    let cross_part = from_first.cross(edge_to_second);
+    let bary_third = direction.dot(cross_part) * inv_det;
+    if bary_third < 0.0 || bary_second + bary_third > 1.0 {
+        return None;
     }
+    let distance = edge_to_third.dot(cross_part) * inv_det;
+    if distance <= RAY_HIT_MIN_T {
+        return None;
+    }
+    Some(RayHit {
+        on_edge: bary_second < RAY_EDGE_EPSILON
+            || bary_third < RAY_EDGE_EPSILON
+            || bary_second + bary_third > 1.0 - RAY_EDGE_EPSILON,
+    })
 }
 
-fn largest_extent(points: &[RapierVec3]) -> f32 {
-    let (min, max) = points_bounds(points);
-    (max - min).max_element().max(1.0)
+fn local_triangle(triangle: &LocalTriangle) -> Triangle {
+    let [first, second, third] = triangle.map(RapierVec3::from);
+    Triangle::new(first, second, third)
 }
 
-fn points_bounds(points: &[RapierVec3]) -> (RapierVec3, RapierVec3) {
-    points.iter().fold(
+fn cuboid_world_corners(cuboid: &Cuboid, pose: &Pose3) -> [RapierVec3; 8] {
+    let half = cuboid.half_extents;
+    aabb_corners((-half).into(), half.into()).map(|corner| pose.transform_point(corner.into()))
+}
+
+fn aabbs_overlap(
+    left_min: RapierVec3,
+    left_max: RapierVec3,
+    right_min: RapierVec3,
+    right_max: RapierVec3,
+) -> bool {
+    left_min.x <= right_max.x
+        && left_max.x >= right_min.x
+        && left_min.y <= right_max.y
+        && left_max.y >= right_min.y
+        && left_min.z <= right_max.z
+        && left_max.z >= right_min.z
+}
+
+fn points_bounds(points: impl IntoIterator<Item = RapierVec3>) -> (RapierVec3, RapierVec3) {
+    points.into_iter().fold(
         (
             RapierVec3::splat(f32::INFINITY),
             RapierVec3::splat(f32::NEG_INFINITY),
         ),
-        |(min, max), point| (min.min(*point), max.max(*point)),
+        |(min, max), point| (min.min(point), max.max(point)),
     )
 }
 
-/// Wraps one part's mesh-local points, scaled by the reference scale, as a convex hull. Falls
-/// back to a box around the points when the hull is degenerate (fewer than four points,
-/// collinear, or coplanar), so thin collision planes still block.
-fn convex_part(
-    points: &[[f32; 3]],
-    scale: f32,
-    translation: Vec3,
-    rotation: Quat,
-) -> Option<RapierPart> {
-    if points.is_empty() {
-        return None;
-    }
-    let scaled: Vec<RapierVec3> = points
-        .iter()
-        .map(|point| RapierVec3::from(*point) * scale)
-        .collect();
-
-    if let Some(hull) = ConvexHull::new(&scaled) {
-        return Some(RapierPart {
-            shape: PartShape::Hull(hull),
-            pose: isometry(translation, rotation),
-        });
-    }
-
-    let (min, max) = points_bounds(&scaled);
-    Some(cuboid_part(
-        Vec3::from(min.to_array()),
-        Vec3::from(max.to_array()),
-        DEGENERATE_PART_MIN_HALF_EXTENT,
-        translation,
-        rotation,
-    ))
-}
-
 /// A box spanning `min..max` in the reference's local frame, placed by `rotation` and
-/// `translation`. Half extents are floored at `min_half_extent`.
-fn cuboid_part(
-    min: Vec3,
-    max: Vec3,
-    min_half_extent: f32,
-    translation: Vec3,
-    rotation: Quat,
-) -> RapierPart {
+/// `translation`. Half extents are floored at `f32::EPSILON` so flat grass still has a volume.
+fn box_part(min: Vec3, max: Vec3, translation: Vec3, rotation: Quat) -> RapierPart {
     let center = (min + max) * 0.5;
-    let half = ((max - min).abs() * 0.5).max(Vec3::splat(min_half_extent));
-    RapierPart {
-        shape: PartShape::Box(Cuboid::new(RapierVec3::new(half.x, half.y, half.z))),
+    let half = ((max - min).abs() * 0.5).max(Vec3::splat(f32::EPSILON));
+    RapierPart::Box {
+        cuboid: Cuboid::new(RapierVec3::new(half.x, half.y, half.z)),
         pose: isometry(rotation * center + translation, rotation),
     }
 }
 
 fn world_bounds_for_parts(parts: &[RapierPart]) -> WorldAabb {
-    let mut min = Vec3::splat(f32::INFINITY);
-    let mut max = Vec3::splat(f32::NEG_INFINITY);
-    for vertex in parts.iter().flat_map(RapierPart::world_vertices) {
-        let vertex = Vec3::from(vertex.to_array());
-        min = min.min(vertex);
-        max = max.max(vertex);
-    }
+    let (min, max) = points_bounds(parts.iter().flat_map(RapierPart::world_vertices));
     WorldAabb {
         min: min.to_array(),
         max: max.to_array(),
@@ -358,7 +429,7 @@ fn isometry(translation: Vec3, rotation: Quat) -> Pose3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::unclip::mesh::LocalObb;
+    use crate::unclip::mesh::{LocalObb, box_triangles};
 
     #[test]
     fn broad_aabb_overlap_without_obb_collision_is_clear() {
@@ -401,14 +472,9 @@ mod tests {
         let gap_probe = RapierCollider::from_world_aabb(world_bounds([-1.0; 3], [1.0; 3]));
 
         assert_eq!(compound.parts.len(), 2);
-        assert!(
-            compound
-                .parts
-                .iter()
-                .all(|part| matches!(part.shape, PartShape::Hull(_)))
-        );
         assert!(compound.bounds().intersection(gap_probe.bounds()).is_some());
         assert!(!compound.intersects(&gap_probe));
+        assert!(!gap_probe.intersects(&compound));
     }
 
     #[test]
@@ -444,14 +510,16 @@ mod tests {
             rotation,
             scale,
         );
-        let probe =
+        let inside =
             RapierCollider::from_world_aabb(world_bounds([12.0, -8.0, 3.0], [13.0, -7.0, 4.0]));
+        let outside =
+            RapierCollider::from_world_aabb(world_bounds([40.0, -8.0, 3.0], [41.0, -7.0, 4.0]));
 
         assert_bounds_close(from_bounds.bounds(), from_parts.bounds(), 0.01);
-        assert_eq!(
-            from_bounds.intersects(&probe),
-            from_parts.intersects(&probe)
-        );
+        assert!(from_bounds.intersects(&inside));
+        assert!(from_parts.intersects(&inside));
+        assert!(!from_bounds.intersects(&outside));
+        assert!(!from_parts.intersects(&outside));
     }
 
     #[test]
@@ -467,123 +535,149 @@ mod tests {
         );
 
         assert!(from_bounds.contains(&inner));
-        assert_eq!(from_bounds.contains(&inner), from_parts.contains(&inner));
+        assert!(from_parts.contains(&inner));
     }
 
     #[test]
-    fn rounded_rock_hull_leaves_its_box_corner_region_clear() {
-        let rock = RapierCollider::from_mesh_collider_parts(
-            &MeshColliderParts::from_points([octahedron(100.0)]),
-            [0.0; 3],
-            [0.0; 3],
-            None,
-        );
-        // Well inside the old 200-unit box but outside the octahedron (|x|+|y|+|z| > 100).
-        let corner_grass =
-            RapierCollider::from_world_aabb(world_bounds([60.0, 60.0, 60.0], [70.0, 70.0, 70.0]));
-        let axis_grass =
-            RapierCollider::from_world_aabb(world_bounds([80.0, -5.0, -5.0], [90.0, 5.0, 5.0]));
+    fn mushroom_cap_does_not_block_ground_grass_but_trunk_does() {
+        let tree =
+            RapierCollider::from_mesh_collider_parts(&mushroom_parts(), [0.0; 3], [0.0; 3], None);
+        let under_cap =
+            RapierCollider::from_world_aabb(world_bounds([195.0, -5.0, 0.0], [205.0, 5.0, 40.0]));
+        let at_trunk =
+            RapierCollider::from_world_aabb(world_bounds([15.0, -5.0, 0.0], [25.0, 5.0, 40.0]));
+        let inside_trunk =
+            RapierCollider::from_world_aabb(world_bounds([-5.0, -5.0, 10.0], [5.0, 5.0, 30.0]));
 
-        assert!(rock.bounds().intersection(corner_grass.bounds()).is_some());
-        assert!(!rock.intersects(&corner_grass));
-        assert!(rock.intersects(&axis_grass));
+        assert!(tree.bounds().intersection(under_cap.bounds()).is_some());
+        assert!(!tree.intersects(&under_cap));
+        assert!(!tree.contains(&under_cap));
+        assert!(tree.intersects(&at_trunk));
+        assert!(at_trunk.intersects(&tree));
+        assert!(!tree.contains(&at_trunk));
+        assert!(tree.contains(&inside_trunk));
+        assert!(tree.intersects(&inside_trunk));
     }
 
     #[test]
-    fn grass_entirely_inside_convex_rock_is_contained() {
+    fn closed_rock_contains_inner_grass_and_intersects_straddling_grass() {
         let rock = RapierCollider::from_mesh_collider_parts(
-            &MeshColliderParts::from_points([octahedron(100.0)]),
+            &MeshColliderParts::from_triangles([box_triangles(aabb_corners(
+                [-100.0, -100.0, -20.0],
+                [100.0, 100.0, 150.0],
+            ))]),
             [0.0; 3],
             [0.0; 3],
             None,
         );
         let inside = RapierCollider::from_world_aabb(world_bounds([-5.0; 3], [5.0; 3]));
         let straddling =
-            RapierCollider::from_world_aabb(world_bounds([50.0, -5.0, -5.0], [110.0, 5.0, 5.0]));
+            RapierCollider::from_world_aabb(world_bounds([90.0, -5.0, 0.0], [110.0, 5.0, 40.0]));
+        let clear =
+            RapierCollider::from_world_aabb(world_bounds([110.0, -5.0, 0.0], [120.0, 5.0, 40.0]));
 
         assert!(rock.contains(&inside));
+        assert!(rock.intersects(&inside));
         assert!(rock.intersects(&straddling));
         assert!(!rock.contains(&straddling));
+        assert!(!rock.intersects(&clear));
     }
 
     #[test]
-    fn tree_canopy_footprint_does_not_block_ground_grass_but_trunk_does() {
-        let trunk = aabb_corners([-20.0, -20.0, 0.0], [20.0, 20.0, 400.0]).to_vec();
-        let canopy = aabb_corners([-300.0, -300.0, 400.0], [300.0, 300.0, 600.0]).to_vec();
-        let tree = RapierCollider::from_mesh_collider_parts(
-            &MeshColliderParts::from_points([trunk, canopy]),
+    fn open_arch_does_not_contain_grass_under_its_lintel() {
+        let arch = RapierCollider::from_mesh_collider_parts(
+            &MeshColliderParts::from_triangles([[
+                box_triangles(aabb_corners([-100.0, -20.0, 0.0], [-80.0, 20.0, 200.0])),
+                box_triangles(aabb_corners([80.0, -20.0, 0.0], [100.0, 20.0, 200.0])),
+                box_triangles(aabb_corners([-100.0, -20.0, 200.0], [100.0, 20.0, 220.0])),
+            ]
+            .concat()]),
             [0.0; 3],
             [0.0; 3],
             None,
         );
-        let under_canopy =
-            RapierCollider::from_world_aabb(world_bounds([195.0, -5.0, 0.0], [205.0, 5.0, 20.0]));
-        let at_trunk =
-            RapierCollider::from_world_aabb(world_bounds([15.0, -5.0, 0.0], [25.0, 5.0, 20.0]));
-        let inside_trunk =
-            RapierCollider::from_world_aabb(world_bounds([-5.0, -5.0, 10.0], [5.0, 5.0, 30.0]));
+        let under_lintel =
+            RapierCollider::from_world_aabb(world_bounds([-5.0, -5.0, 0.0], [5.0, 5.0, 40.0]));
+        let in_pillar =
+            RapierCollider::from_world_aabb(world_bounds([85.0, -5.0, 10.0], [95.0, 5.0, 40.0]));
 
-        assert_eq!(tree.parts.len(), 2);
-        assert!(tree.bounds().intersection(under_canopy.bounds()).is_some());
-        assert!(!tree.intersects(&under_canopy));
-        assert!(tree.intersects(&at_trunk));
-        assert!(!tree.contains(&at_trunk));
-        assert!(tree.contains(&inside_trunk));
+        assert!(arch.bounds().intersection(under_lintel.bounds()).is_some());
+        assert!(!arch.contains(&under_lintel));
+        assert!(!arch.intersects(&under_lintel));
+        assert!(arch.contains(&in_pillar));
     }
 
     #[test]
-    fn reference_scale_grows_hull_before_placement() {
-        let rock = RapierCollider::from_mesh_collider_parts(
-            &MeshColliderParts::from_points([octahedron(100.0)]),
+    fn reference_scale_doubles_the_effective_size() {
+        let probe =
+            RapierCollider::from_world_aabb(world_bounds([1030.0, -5.0, 0.0], [1035.0, 5.0, 40.0]));
+        let unscaled = RapierCollider::from_mesh_collider_parts(
+            &mushroom_parts(),
+            [1000.0, 0.0, 0.0],
+            [0.0; 3],
+            None,
+        );
+        let doubled = RapierCollider::from_mesh_collider_parts(
+            &mushroom_parts(),
             [1000.0, 0.0, 0.0],
             [0.0; 3],
             Some(2.0),
         );
-        let probe =
-            RapierCollider::from_world_aabb(world_bounds([1150.0, -5.0, -5.0], [1160.0, 5.0, 5.0]));
 
+        assert!(!unscaled.intersects(&probe));
+        assert!(doubled.intersects(&probe));
         assert_bounds_close(
-            rock.bounds(),
-            world_bounds([800.0, -200.0, -200.0], [1200.0, 200.0, 200.0]),
+            doubled.bounds(),
+            world_bounds([400.0, -600.0, 0.0], [1600.0, 600.0, 900.0]),
             0.01,
         );
-        assert!(rock.intersects(&probe));
+        let inside_doubled_trunk = RapierCollider::from_world_aabb(world_bounds(
+            [1030.0, -5.0, 10.0],
+            [1035.0, 5.0, 40.0],
+        ));
+        assert!(doubled.contains(&inside_doubled_trunk));
+        assert!(!unscaled.contains(&inside_doubled_trunk));
     }
 
     #[test]
-    fn coplanar_part_falls_back_to_thin_box() {
-        let plane = vec![
-            [-10.0, -10.0, 0.0],
-            [10.0, -10.0, 0.0],
-            [10.0, 10.0, 0.0],
-            [-10.0, 10.0, 0.0],
-        ];
-        let collider = RapierCollider::from_mesh_collider_parts(
-            &MeshColliderParts::from_points([plane]),
+    fn rotated_reference_moves_the_trunk() {
+        let tree = RapierCollider::from_mesh_collider_parts(
+            &mushroom_parts(),
             [0.0; 3],
-            [0.0; 3],
+            [0.0, 0.0, std::f32::consts::FRAC_PI_2],
             None,
         );
-        let above =
-            RapierCollider::from_world_aabb(world_bounds([-1.0, -1.0, 0.2], [1.0, 1.0, 2.0]));
-        let clear =
-            RapierCollider::from_world_aabb(world_bounds([-1.0, -1.0, 1.0], [1.0, 1.0, 2.0]));
+        // Lying on its side after a quarter turn about x would change z; a turn about z keeps
+        // the trunk at the origin, so grass at the trunk still collides and grass under the
+        // cap still does not.
+        let at_trunk =
+            RapierCollider::from_world_aabb(world_bounds([15.0, -5.0, 0.0], [25.0, 5.0, 40.0]));
+        let under_cap =
+            RapierCollider::from_world_aabb(world_bounds([-5.0, 195.0, 0.0], [5.0, 205.0, 40.0]));
 
-        assert_eq!(collider.parts.len(), 1);
-        assert!(matches!(collider.parts[0].shape, PartShape::Box(_)));
-        assert_bounds_close(
-            collider.bounds(),
-            world_bounds([-10.0, -10.0, -0.5], [10.0, 10.0, 0.5]),
-            0.001,
-        );
-        assert!(collider.intersects(&above));
-        assert!(!collider.intersects(&clear));
+        assert!(tree.intersects(&at_trunk));
+        assert!(!tree.intersects(&under_cap));
+    }
+
+    #[test]
+    fn triangles_are_shared_between_references() {
+        let parts = mushroom_parts();
+        let first = RapierCollider::from_mesh_collider_parts(&parts, [0.0; 3], [0.0; 3], None);
+        let second =
+            RapierCollider::from_mesh_collider_parts(&parts, [500.0, 0.0, 0.0], [0.0; 3], None);
+
+        let (RapierPart::Mesh { triangles: a, .. }, RapierPart::Mesh { triangles: b, .. }) =
+            (&first.parts[0], &second.parts[0])
+        else {
+            panic!("expected mesh parts");
+        };
+        assert!(Arc::ptr_eq(a, b));
     }
 
     #[test]
     fn empty_collider_parts_never_intersect_or_contain() {
         let empty = RapierCollider::from_mesh_collider_parts(
-            &MeshColliderParts::from_points(Vec::<Vec<[f32; 3]>>::new()),
+            &MeshColliderParts::from_triangles(Vec::<Vec<LocalTriangle>>::new()),
             [0.0; 3],
             [0.0; 3],
             None,
@@ -596,15 +690,44 @@ mod tests {
         assert!(!probe.contains(&empty));
     }
 
-    fn octahedron(radius: f32) -> Vec<[f32; 3]> {
-        vec![
-            [radius, 0.0, 0.0],
-            [-radius, 0.0, 0.0],
-            [0.0, radius, 0.0],
-            [0.0, -radius, 0.0],
-            [0.0, 0.0, radius],
-            [0.0, 0.0, -radius],
-        ]
+    #[test]
+    fn ray_parity_ignores_hits_at_the_origin_and_edges_consistently() {
+        let cube = box_triangles(aabb_corners([-10.0; 3], [10.0; 3]));
+
+        assert!(inside(&cube, RapierVec3::ZERO));
+        // On the diagonal edge of the top face's triangles, straight below it.
+        assert!(inside(&cube, RapierVec3::new(5.0, 5.0, 0.0)));
+        // On the top face itself: the face is not counted, nothing lies above.
+        assert!(!inside(&cube, RapierVec3::new(0.0, 0.0, 10.0)));
+        // On the bottom face: the bottom is not counted but the top is.
+        assert!(inside(&cube, RapierVec3::new(0.0, 0.0, -10.0)));
+        assert!(!inside(&cube, RapierVec3::new(11.0, 0.0, 0.0)));
+        assert!(!inside(&cube, RapierVec3::new(0.0, 0.0, 11.0)));
+    }
+
+    fn inside(triangles: &[LocalTriangle], point: RapierVec3) -> bool {
+        let bounds: Vec<MeshAabb> = triangles
+            .iter()
+            .map(|[a, b, c]| MeshAabb {
+                min: Vec3::from(*a)
+                    .min(Vec3::from(*b))
+                    .min(Vec3::from(*c))
+                    .to_array(),
+                max: Vec3::from(*a)
+                    .max(Vec3::from(*b))
+                    .max(Vec3::from(*c))
+                    .to_array(),
+            })
+            .collect();
+        point_inside_triangles(triangles, &bounds, point)
+    }
+
+    /// Thin trunk from z 0..400 under a wide flat cap z 400..450 spanning +-300 in x and y.
+    fn mushroom_parts() -> MeshColliderParts {
+        MeshColliderParts::from_triangles([
+            box_triangles(aabb_corners([-20.0, -20.0, 0.0], [20.0, 20.0, 400.0])),
+            box_triangles(aabb_corners([-300.0, -300.0, 400.0], [300.0, 300.0, 450.0])),
+        ])
     }
 
     fn mesh_bounds(min: [f32; 3], max: [f32; 3]) -> MeshAabb {

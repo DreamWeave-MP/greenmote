@@ -10,8 +10,10 @@ use serde::{Deserialize, Serialize};
 
 /// Largest gap between the highest base vertex and the terrain that still counts as resting on it.
 pub(crate) const DEFAULT_FLOAT_TOLERANCE: f32 = 1.0;
-/// Deepest burial of the highest base vertex that still counts as acceptable.
+/// Deepest burial of the highest base vertex that still counts as acceptable, in units.
 pub(crate) const DEFAULT_MAX_SINK: f32 = 24.0;
+/// Deepest burial as a fraction of the mesh height. The larger of the two limits applies.
+pub(crate) const DEFAULT_MAX_SINK_FRACTION: f32 = 0.75;
 /// Target burial depth of the highest base vertex after a terrain fix.
 pub(crate) const DEFAULT_SINK: f32 = 4.0;
 pub(crate) const DEFAULT_RELOCATION_STEP: f32 = 32.0;
@@ -65,6 +67,11 @@ pub struct UnclipArgs {
     /// Deepest burial (units) of the mesh base that still counts as acceptable.
     #[arg(long = "max-sink", value_parser = non_negative_f32)]
     pub max_sink: Option<f32>,
+
+    /// Deepest burial as a fraction of the mesh height (0 to 1). The larger of --max-sink and
+    /// this fraction of the mesh height is the limit; generators bury tall plants deeper.
+    #[arg(long = "max-sink-fraction", value_parser = unit_fraction)]
+    pub max_sink_fraction: Option<f32>,
 
     /// Burial depth (units) the mesh base is placed at when terrain-z fixes a ref.
     #[arg(long = "sink", value_parser = non_negative_f32)]
@@ -161,6 +168,7 @@ pub(crate) struct UnclipPolicy {
     pub(crate) actions: Actions,
     pub(crate) float_tolerance: f32,
     pub(crate) max_sink: f32,
+    pub(crate) max_sink_fraction: f32,
     pub(crate) sink: f32,
     pub(crate) orientation_epsilon_degrees: f32,
     pub(crate) relocation: RelocationPolicy,
@@ -380,6 +388,15 @@ fn non_negative_f32(value: &str) -> Result<f32, String> {
     }
 }
 
+fn unit_fraction(value: &str) -> Result<f32, String> {
+    let value = non_negative_f32(value)?;
+    if value <= 1.0 {
+        Ok(value)
+    } else {
+        Err("expected a number from 0 to 1".to_owned())
+    }
+}
+
 fn positive_f32(value: &str) -> Result<f32, String> {
     let value = value
         .parse::<f32>()
@@ -409,6 +426,7 @@ impl UnclipPolicy {
             actions: Actions::all(),
             float_tolerance: DEFAULT_FLOAT_TOLERANCE,
             max_sink: DEFAULT_MAX_SINK,
+            max_sink_fraction: DEFAULT_MAX_SINK_FRACTION,
             sink: DEFAULT_SINK,
             orientation_epsilon_degrees: DEFAULT_ORIENTATION_EPSILON_DEGREES,
             relocation: RelocationPolicy {

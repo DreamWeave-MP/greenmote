@@ -4,7 +4,7 @@
 
 use std::{
     borrow::Cow,
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::File,
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
@@ -55,7 +55,8 @@ pub fn run(
         .policy()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let openmw_config = openmw::load_config_from_path(config.openmw_cfg.as_deref())?;
-    let vfs = openmw::build_vfs(&openmw_config);
+    let plugin_directory = unlisted_plugin_directory(&config.plugin, &openmw_config);
+    let vfs = openmw::build_vfs_with_extra_directories(&openmw_config, plugin_directory.as_slice());
     let source_path = resolve_target_plugin(&config.plugin, &vfs)?;
     let mut source = load_target_plugin(&source_path)?;
     check()?;
@@ -64,6 +65,7 @@ pub fn run(
     let mode = output_mode(config, &openmw_config, &source_path);
     let mut report = Report {
         target: source_path.clone(),
+        added_data_directory: plugin_directory.first().cloned(),
         mode: describe_mode(config.write, &mode, &source_path),
         policy: PolicySummary::from_policy(&policy),
         cells: CellSummary {
@@ -73,6 +75,7 @@ pub fn run(
         },
         occluders: StaticOccluderBuildReport::default(),
         counts: VerdictCounts::default(),
+        mesh_errors: BTreeMap::new(),
         write: None,
         refs: None,
     };
@@ -132,6 +135,7 @@ pub fn run(
         verdicts
     };
     report.counts = VerdictCounts::from_verdicts(&verdicts);
+    report.mesh_errors = mesh_errors(&verdicts);
 
     if config.write && report.counts.fix + report.counts.delete > 0 {
         report.write = Some(write_changes(&mut source, &source_path, &mode, &verdicts)?);
@@ -235,6 +239,65 @@ fn load_world(
         occluders,
         occluder_report,
         geometry,
+    })
+}
+
+fn mesh_errors(verdicts: &[RefVerdict]) -> BTreeMap<String, usize> {
+    let mut errors = BTreeMap::new();
+    for entry in verdicts {
+        if let super::decide::Verdict::Skip {
+            reason: super::decide::SkipReason::MeshError { error },
+        } = &entry.verdict
+        {
+            *errors.entry(error.clone()).or_default() += 1;
+        }
+    }
+    errors
+}
+
+/// When `--plugin` is a file outside every configured data directory, its mod folder is added to
+/// the VFS so the plugin's own `meshes/` folder resolves, as it would once the mod is enabled.
+///
+/// The mod folder is the nearest ancestor (up to three levels) that contains a `meshes`
+/// directory, falling back to the plugin's own directory. Mods such as Aesthesia keep plugins in
+/// sub-folders below the folder that holds `meshes/`.
+fn unlisted_plugin_directory(
+    plugin: &Path,
+    openmw_config: &openmw_config::OpenMWConfiguration,
+) -> Vec<PathBuf> {
+    if !plugin.is_file() {
+        return Vec::new();
+    }
+    let Some(parent) = plugin
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Vec::new();
+    };
+    let mod_directory = parent
+        .ancestors()
+        .take(4)
+        .find(|directory| has_meshes_directory(directory))
+        .unwrap_or(parent);
+    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mod_canonical = canonical(mod_directory);
+    let listed = openmw_config
+        .data_directories_iter()
+        .map(|setting| canonical(setting.parsed()))
+        .any(|directory| directory == mod_canonical);
+    if listed {
+        Vec::new()
+    } else {
+        vec![mod_directory.to_path_buf()]
+    }
+}
+
+fn has_meshes_directory(directory: &Path) -> bool {
+    std::fs::read_dir(directory).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.file_name().eq_ignore_ascii_case("meshes")
+                && entry.file_type().is_ok_and(|kind| kind.is_dir())
+        })
     })
 }
 

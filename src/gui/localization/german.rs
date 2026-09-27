@@ -100,7 +100,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         UiText::ConfirmUnclipPatchMessage => {
             "Unclip schreibt für jedes Ziel ein Patch-Plugin (<Quellname>_unclip.omwaddon in data-local) und lässt die Quell-Plugins unverändert."
         }
-
         UiText::ConfirmUnclipInPlaceMessage => {
             "Unclip überschreibt die ausgewählten Quell-Plugins direkt und erstellt Sicherungsdateien."
         }
@@ -166,19 +165,18 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::NoWriteActionsWarning => "Warnung: Schreibmodus erzeugt keine Policy-Aktionen.",
         UiText::PolicyNumbers => "Richtlinienwerte",
         UiText::FloatTolerance => "Schwebetoleranz",
-
         UiText::FloatToleranceTooltip => {
             "Größter Abstand (Einheiten) zwischen Mesh-Basis und Terrain, der noch als geerdet gilt. Config key: float_tolerance."
         }
-
         UiText::MaxSink => "Maximale Einsinktiefe",
-
         UiText::MaxSinkTooltip => {
             "Tiefste Vergrabung (Einheiten) der Mesh-Basis, die noch akzeptabel ist. Config key: max_sink."
         }
-
+        UiText::MaxSinkFraction => "Maximale Einsinktiefe (Anteil der Höhe)",
+        UiText::MaxSinkFractionTooltip => {
+            "Tiefste Vergrabung als Anteil der Mesh-Höhe; der größere Wert aus diesem und Maximale Einsinktiefe gilt. Generatoren vergraben hohes Gras absichtlich tief. Config key: max_sink_fraction."
+        }
         UiText::SinkDepth => "Einsinktiefe",
-
         UiText::SinkDepthTooltip => {
             "Vergrabungstiefe (Einheiten), auf die die Mesh-Basis gesetzt wird, wenn terrain-z eine Ref korrigiert. Config key: sink."
         }

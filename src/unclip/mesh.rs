@@ -127,12 +127,19 @@ pub(crate) struct MeshColliderParts {
     source: MeshColliderSource,
 }
 
-/// One collision shape's triangle vertices in mesh-local space, with the accumulated node
-/// transform (including any non-uniform scale) already applied. Exact duplicates are removed.
-/// The occluder collider builds one convex hull per part.
+/// One mesh-local triangle: three vertices in `OpenMW` mesh space.
+pub(crate) type LocalTriangle = [[f32; 3]; 3];
+
+/// One collision shape's triangles in mesh-local space, with the accumulated node transform
+/// (including any non-uniform scale) already applied per vertex. Degenerate triangles and exact
+/// duplicates are dropped. The triangles are shared between every reference of the mesh.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MeshColliderPart {
-    pub(crate) points: Vec<[f32; 3]>,
+    pub(crate) triangles: Arc<[LocalTriangle]>,
+    /// Axis-aligned bounds of each triangle, parallel to `triangles`, for cheap rejection.
+    pub(crate) triangle_bounds: Arc<[MeshAabb]>,
+    /// Axis-aligned bounds of all triangles in mesh-local space.
+    pub(crate) bounds: MeshAabb,
 }
 
 /// Test-only oriented box description, expanded to its eight corners when it becomes a part.
@@ -205,7 +212,6 @@ impl MeshContact {
         self.contact_transform(rotation, scale).base
     }
 
-    #[cfg(test)]
     /// Unrotated local z extent of the contact vertices, for reporting.
     #[must_use]
     pub(crate) fn height(&self) -> f32 {
@@ -346,9 +352,9 @@ impl MeshColliderParts {
     #[must_use]
     pub(crate) fn from_mesh_aabb(bounds: MeshAabb) -> Self {
         Self {
-            parts: vec![MeshColliderPart {
-                points: aabb_corners(bounds.min, bounds.max).to_vec(),
-            }],
+            parts: MeshColliderPart::new(box_triangles(aabb_corners(bounds.min, bounds.max)))
+                .into_iter()
+                .collect(),
             fallback: None,
             source: MeshColliderSource::VisibleFallback,
         }
@@ -381,9 +387,7 @@ impl MeshColliderParts {
         Self {
             parts: local_obbs
                 .into_iter()
-                .map(|obb| MeshColliderPart {
-                    points: obb.corners().to_vec(),
-                })
+                .filter_map(|obb| MeshColliderPart::new(box_triangles(obb.corners())))
                 .collect(),
             fallback: None,
             source: MeshColliderSource::VisibleFallback,
@@ -391,11 +395,11 @@ impl MeshColliderParts {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_points(parts: impl IntoIterator<Item = Vec<[f32; 3]>>) -> Self {
+    pub(crate) fn from_triangles(parts: impl IntoIterator<Item = Vec<LocalTriangle>>) -> Self {
         Self {
             parts: parts
                 .into_iter()
-                .map(|points| MeshColliderPart { points })
+                .filter_map(MeshColliderPart::new)
                 .collect(),
             fallback: None,
             source: MeshColliderSource::VisibleFallback,
@@ -424,22 +428,81 @@ impl MeshColliderParts {
     }
 }
 
-#[cfg(test)]
 impl MeshColliderPart {
-    /// Axis-aligned bounds of the part's points in mesh-local space.
+    /// Wraps `triangles`, dropping degenerate ones and exact duplicates (a duplicated face would
+    /// flip ray-parity containment twice). `None` when nothing usable is left.
     #[must_use]
-    pub(crate) fn local_bounds(&self) -> Option<MeshAabb> {
+    pub(crate) fn new(triangles: Vec<LocalTriangle>) -> Option<Self> {
+        let mut seen = HashSet::new();
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);
-        for point in &self.points {
-            min = min.min(Vec3::from(*point));
-            max = max.max(Vec3::from(*point));
-        }
-        (!self.points.is_empty()).then(|| MeshAabb {
-            min: min.to_array(),
-            max: max.to_array(),
+        let mut triangle_bounds = Vec::new();
+        let triangles: Vec<LocalTriangle> = triangles
+            .into_iter()
+            .filter(|triangle| {
+                is_triangle_solid(*triangle) && seen.insert(triangle.map(|v| v.map(f32::to_bits)))
+            })
+            .inspect(|triangle| {
+                let bounds = triangle_aabb(*triangle);
+                min = min.min(Vec3::from(bounds.min));
+                max = max.max(Vec3::from(bounds.max));
+                triangle_bounds.push(bounds);
+            })
+            .collect();
+        (!triangles.is_empty()).then(|| Self {
+            triangles: Arc::from(triangles),
+            triangle_bounds: Arc::from(triangle_bounds),
+            bounds: MeshAabb {
+                min: min.to_array(),
+                max: max.to_array(),
+            },
         })
     }
+}
+
+fn triangle_aabb([a, b, c]: LocalTriangle) -> MeshAabb {
+    let (a, b, c) = (Vec3::from(a), Vec3::from(b), Vec3::from(c));
+    MeshAabb {
+        min: a.min(b).min(c).to_array(),
+        max: a.max(b).max(c).to_array(),
+    }
+}
+
+/// True when the triangle has a non-negligible area relative to its edge lengths.
+fn is_triangle_solid([a, b, c]: LocalTriangle) -> bool {
+    const RELATIVE_AREA_EPSILON: f32 = 0.000_001;
+    let (a, b, c) = (Vec3::from(a), Vec3::from(b), Vec3::from(c));
+    let ab = b - a;
+    let ac = c - a;
+    let twice_area = ab.cross(ac).length();
+    let scale = ab
+        .length_squared()
+        .max(ac.length_squared())
+        .max((c - b).length_squared());
+    twice_area.is_finite() && scale.is_finite() && twice_area > RELATIVE_AREA_EPSILON * scale
+}
+
+/// The twelve triangles of a box given its corners in [`aabb_corners`] order (bit 4 = max x,
+/// bit 2 = max y, bit 1 = max z). Faces wind outward.
+#[must_use]
+pub(crate) fn box_triangles(corners: [[f32; 3]; 8]) -> Vec<LocalTriangle> {
+    const FACES: [[usize; 4]; 6] = [
+        [0, 1, 3, 2], // -x
+        [4, 6, 7, 5], // +x
+        [0, 4, 5, 1], // -y
+        [2, 3, 7, 6], // +y
+        [0, 2, 6, 4], // -z
+        [1, 5, 7, 3], // +z
+    ];
+    FACES
+        .iter()
+        .flat_map(|[a, b, c, d]| {
+            [
+                [corners[*a], corners[*b], corners[*c]],
+                [corners[*a], corners[*c], corners[*d]],
+            ]
+        })
+        .collect()
 }
 
 /// The eight corners of an axis-aligned box.
@@ -917,6 +980,32 @@ impl ShapeVertices<'_> {
         };
         indices.filter_map(|index| self.data.vertices.get(usize::from(index)).copied())
     }
+
+    /// The shape's triangles; a strip yields one triangle per window of three indices, with
+    /// every other one flipped so all wind the same way. Triangles referencing missing
+    /// vertices are skipped.
+    fn triangles(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
+        let indices: Box<dyn Iterator<Item = [u16; 3]> + '_> = match self.indices {
+            ShapeIndices::Triangles(triangles) => Box::new(triangles.iter().copied()),
+            ShapeIndices::Strips(strips) => {
+                Box::new(strips.windows(3).enumerate().map(|(index, window)| {
+                    if index % 2 == 0 {
+                        [window[0], window[1], window[2]]
+                    } else {
+                        [window[1], window[0], window[2]]
+                    }
+                }))
+            }
+        };
+        indices.filter_map(|triangle| {
+            let vertex = |index: u16| self.data.vertices.get(usize::from(index)).copied();
+            Some([
+                vertex(triangle[0])?,
+                vertex(triangle[1])?,
+                vertex(triangle[2])?,
+            ])
+        })
+    }
 }
 
 fn shape_vertices(stream: &NiStream, link: NiLink<NiAVObject>) -> Option<ShapeVertices<'_>> {
@@ -1273,20 +1362,14 @@ fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
-/// Collects one collision shape's vertices in mesh-local space. Non-uniform node scales and
+/// Collects one collision shape's triangles in mesh-local space. Non-uniform node scales and
 /// skews are fine: every vertex is transformed individually, so no decomposition is needed.
 fn include_part(shape: &ShapeVertices<'_>, transform: Affine3A, parts: &mut Vec<MeshColliderPart>) {
-    let mut points: Vec<Vec3> = shape
-        .iter()
-        .map(|vertex| transform.transform_point3(vertex))
+    let triangles: Vec<LocalTriangle> = shape
+        .triangles()
+        .map(|triangle| triangle.map(|vertex| transform.transform_point3(vertex).to_array()))
         .collect();
-    if points.is_empty() {
-        return;
-    }
-    dedup_vertices_preserving_order(&mut points);
-    parts.push(MeshColliderPart {
-        points: points.iter().map(Vec3::to_array).collect(),
-    });
+    parts.extend(MeshColliderPart::new(triangles));
 }
 
 #[cfg(test)]
@@ -1613,7 +1696,7 @@ mod tests {
                 max: [14.0, 22.0, 36.0],
             },
         );
-        assert_eq!(parts.parts[0].points.len(), box_vertices().len());
+        assert_eq!(parts.parts[0].triangles.len(), 1);
     }
 
     #[test]
@@ -1634,7 +1717,6 @@ mod tests {
 
         assert_eq!(parts.fallback(), None);
         assert_eq!(parts.parts.len(), 1);
-        assert_eq!(parts.parts[0].points.len(), 8);
         assert_part_bounds_close(
             &parts.parts[0],
             MeshAabb {
@@ -1645,15 +1727,53 @@ mod tests {
     }
 
     #[test]
-    fn collider_parts_dedup_exact_duplicate_vertices() {
+    fn collider_parts_dedup_exact_duplicate_triangles() {
         let mut stream = NiStream::new();
         let shape = insert_shape(&mut stream, "cube", &unit_cube_vertices(), 0);
         push_root(&mut stream, shape);
 
         let parts = mesh_collider_parts(&stream, mesh_bounds(&stream).unwrap());
 
-        // Every triangle corner references one of only eight distinct positions.
-        assert_eq!(parts.parts[0].points.len(), 8);
+        // `insert_shape` writes `[0, 1, 2]` twice plus a five-triangle fan over the remaining
+        // corners; the duplicate is dropped.
+        assert_eq!(parts.parts[0].triangles.len(), 6);
+    }
+
+    #[test]
+    fn collider_parts_drop_degenerate_triangles() {
+        let mut stream = NiStream::new();
+        let shape = insert_shape(
+            &mut stream,
+            "sliver",
+            &[
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [20.0, 0.0, 0.0],
+                [0.0, 5.0, 0.0],
+            ],
+            0,
+        );
+        push_root(&mut stream, shape);
+
+        let parts = mesh_collider_parts(&stream, mesh_bounds(&stream).unwrap());
+
+        // `[0, 1, 2]` is collinear; only the fan triangle `[0, 2, 3]` survives.
+        assert_eq!(parts.fallback(), None);
+        assert_eq!(parts.parts.len(), 1);
+        assert_eq!(parts.parts[0].triangles.len(), 1);
+    }
+
+    #[test]
+    fn box_triangles_form_a_closed_outward_surface() {
+        let triangles = box_triangles(aabb_corners([-1.0; 3], [2.0; 3]));
+        let centre = Vec3::splat(0.5);
+
+        assert_eq!(triangles.len(), 12);
+        for [a, b, c] in triangles {
+            let (a, b, c) = (Vec3::from(a), Vec3::from(b), Vec3::from(c));
+            let normal = (b - a).cross(c - a);
+            assert!(normal.dot(a - centre) > 0.0, "face winds inward");
+        }
     }
 
     #[test]
@@ -2691,8 +2811,7 @@ mod tests {
     }
 
     fn assert_part_bounds_close(actual: &MeshColliderPart, expected: MeshAabb) {
-        let bounds = actual.local_bounds().expect("part has points");
-        assert_position_close(bounds.min, expected.min);
-        assert_position_close(bounds.max, expected.max);
+        assert_position_close(actual.bounds.min, expected.min);
+        assert_position_close(actual.bounds.max, expected.max);
     }
 }

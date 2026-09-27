@@ -293,9 +293,20 @@ pub(crate) fn resolve_convert_output_directory(
 
 #[must_use]
 pub fn build_vfs(config: &OpenMWConfiguration) -> VFS {
+    build_vfs_with_extra_directories(config, &[])
+}
+
+/// Builds the VFS from the configured data directories plus extra directories appended after
+/// them, so files in the extras win over the configured load order.
+#[must_use]
+pub fn build_vfs_with_extra_directories(
+    config: &OpenMWConfiguration,
+    extra_directories: &[std::path::PathBuf],
+) -> VFS {
     let directories = config
         .data_directories_iter()
         .map(openmw_config::DirectorySetting::parsed)
+        .chain(extra_directories.iter().map(std::path::PathBuf::as_path))
         .collect::<Vec<_>>();
     let fallback_archives = config
         .fallback_archives_iter()

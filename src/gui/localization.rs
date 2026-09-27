@@ -105,6 +105,8 @@ macro_rules! route_text {
             | UiText::FloatToleranceTooltip
             | UiText::MaxSink
             | UiText::MaxSinkTooltip
+            | UiText::MaxSinkFraction
+            | UiText::MaxSinkFractionTooltip
             | UiText::SinkDepth
             | UiText::SinkDepthTooltip
             | UiText::OrientationTolerance
@@ -273,6 +275,8 @@ pub(super) enum UiText {
     FloatToleranceTooltip,
     MaxSink,
     MaxSinkTooltip,
+    MaxSinkFraction,
+    MaxSinkFractionTooltip,
     SinkDepth,
     SinkDepthTooltip,
     OrientationTolerance,
@@ -511,6 +515,10 @@ mod tests {
         );
         assert_eq!(localizer.text(UiText::FloatTolerance), "Float tolerance");
         assert_eq!(localizer.text(UiText::MaxSink), "Max sink");
+        assert_eq!(
+            localizer.text(UiText::MaxSinkFraction),
+            "Max sink (fraction of height)"
+        );
         assert_eq!(localizer.text(UiText::SinkDepth), "Sink depth");
     }
 

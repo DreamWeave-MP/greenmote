@@ -122,6 +122,41 @@ impl Fixture {
     }
 }
 
+#[test]
+fn plugin_outside_data_directories_uses_its_own_mod_folder() {
+    let fixture = Fixture::new("outside");
+    let mod_dir = fixture.data_dir.path().join("unlisted-mod");
+    std::fs::create_dir_all(mod_dir.join("Meshes/patchtest")).unwrap();
+    std::fs::rename(
+        fixture.data_dir.path().join("Meshes/patchtest/grass.nif"),
+        mod_dir.join("Meshes/patchtest/grass.nif"),
+    )
+    .unwrap();
+    let target = mod_dir.join("Grass.esp");
+    std::fs::rename(&fixture.target, &target).unwrap();
+    let fixture = Fixture { target, ..fixture };
+
+    let report = fixture.run(&[]);
+    assert_eq!(
+        report["added_data_directory"],
+        mod_dir.display().to_string()
+    );
+    assert_eq!(report["counts"]["skip"], 0, "{report}");
+    assert_eq!(report["counts"]["total"], 6);
+}
+
+#[test]
+fn missing_grass_meshes_are_reported_loudly() {
+    let fixture = Fixture::new("missing-mesh");
+    std::fs::remove_file(fixture.data_dir.path().join("Meshes/patchtest/grass.nif")).unwrap();
+
+    let report = fixture.run(&[]);
+    assert_eq!(report["counts"]["skip"], 6);
+    let errors = report["mesh_errors"].as_object().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors.values().next().unwrap(), 6);
+}
+
 fn verdict_of(report: &Value, key: (u32, u32)) -> &Value {
     report["refs"]
         .as_array()
@@ -279,7 +314,7 @@ fn write_meshes(data_dir: &Path) {
             }
         }
     }
-    write_nif_points(&mesh_dir.join("rock.nif"), &corners);
+    write_nif_box(&mesh_dir.join("rock.nif"), &corners);
 }
 
 fn write_nif(path: &Path, vertices: &[[f32; 3]; 4]) {
@@ -296,6 +331,27 @@ fn write_nif_points(path: &Path, vertices: &[[f32; 3]]) {
             ]
         })
         .collect::<Vec<_>>();
+    write_nif_triangles(path, vertices, triangles);
+}
+
+/// Corners ordered (x, y, z) with z fastest, as produced by `write_meshes`; twelve closed faces.
+fn write_nif_box(path: &Path, corners: &[[f32; 3]]) {
+    let quads = [
+        [0, 1, 3, 2],
+        [4, 6, 7, 5],
+        [0, 4, 5, 1],
+        [2, 3, 7, 6],
+        [0, 2, 6, 4],
+        [1, 5, 7, 3],
+    ];
+    let triangles = quads
+        .iter()
+        .flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]])
+        .collect::<Vec<_>>();
+    write_nif_triangles(path, corners, triangles);
+}
+
+fn write_nif_triangles(path: &Path, vertices: &[[f32; 3]], triangles: Vec<[u16; 3]>) {
     let geometry_data = NiTriShapeData {
         base: NiTriBasedGeomData {
             base: NiGeometryData {

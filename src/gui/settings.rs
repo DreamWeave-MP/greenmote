@@ -70,6 +70,7 @@ struct UnclipPolicyDraft {
     actions: [bool; UNCLIP_ACTION_COUNT],
     float_tolerance: String,
     max_sink: String,
+    max_sink_fraction: String,
     sink: String,
     orientation_epsilon: String,
     relocation_step: String,
@@ -535,6 +536,13 @@ impl GreenmoteApp {
         );
         setting_text_field(
             ui,
+            self.localizer.text(UiText::MaxSinkFraction),
+            self.localizer.text(UiText::MaxSinkFractionTooltip),
+            &mut policy.max_sink_fraction,
+            &mut self.settings.dirty,
+        );
+        setting_text_field(
+            ui,
             self.localizer.text(UiText::SinkDepth),
             self.localizer.text(UiText::SinkDepthTooltip),
             &mut policy.sink,
@@ -935,6 +943,11 @@ impl UnclipPolicyDraft {
                 .or(defaults.max_sink)
                 .unwrap_or_default()
                 .to_string(),
+            max_sink_fraction: config
+                .max_sink_fraction
+                .or(defaults.max_sink_fraction)
+                .unwrap_or_default()
+                .to_string(),
             sink: config
                 .sink
                 .or(defaults.sink)
@@ -984,6 +997,11 @@ impl UnclipPolicyDraft {
         config.actions = Some(self.actions());
         let float_tolerance = parse_non_negative_f32("float_tolerance", &self.float_tolerance)?;
         let max_sink = parse_non_negative_f32("max_sink", &self.max_sink)?;
+        let max_sink_fraction =
+            parse_non_negative_f32("max_sink_fraction", &self.max_sink_fraction)?;
+        if max_sink_fraction > 1.0 {
+            return Err("max_sink_fraction must be between 0 and 1".to_owned());
+        }
         let sink = parse_non_negative_f32("sink", &self.sink)?;
         if sink > max_sink {
             return Err(format!(
@@ -992,6 +1010,7 @@ impl UnclipPolicyDraft {
         }
         config.float_tolerance = Some(float_tolerance);
         config.max_sink = Some(max_sink);
+        config.max_sink_fraction = Some(max_sink_fraction);
         config.sink = Some(sink);
         config.orientation_epsilon = Some(parse_non_negative_f32(
             "orientation_epsilon",
@@ -1678,6 +1697,20 @@ mod tests {
         let error = draft.validate_and_to_config().unwrap_err();
 
         assert!(error.contains("relocation_step"));
+    }
+
+    #[test]
+    fn unclip_policy_save_rejects_max_sink_fraction_above_one() {
+        let mut draft = SettingsDraft::default();
+        draft.unclip_policy.max_sink_fraction = "1.5".to_owned();
+
+        let error = draft.validate_and_to_config().unwrap_err();
+
+        assert!(error.contains("max_sink_fraction"));
+
+        draft.unclip_policy.max_sink_fraction = "0.5".to_owned();
+        let config = draft.validate_and_to_config().unwrap();
+        assert_eq!(config.unclip.max_sink_fraction, Some(0.5));
     }
 
     #[test]

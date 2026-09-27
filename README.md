@@ -147,7 +147,7 @@ How a reference is judged, in order:
 2. `road-delete` deletes references whose `LAND` texture matches a road pattern. The texture is sampled where `OpenMW` renders it, including the engine's blendmap offset.
 3. `water-delete` deletes references standing on ground below the exterior water plane.
 4. `orient` tilts the reference to the terrain slope using the same formula groundcover generators use, so a generator's own output measures as already aligned.
-5. `terrain-z` looks at the mesh's base vertices under the final tilt. If the highest base vertex floats more than `--float-tolerance` above the terrain, or is buried deeper than `--max-sink`, the reference is lowered or raised so that vertex sits `--sink` units below the surface.
+5. `terrain-z` looks at the mesh's base vertices under the final tilt. If the highest base vertex floats more than `--float-tolerance` above the terrain, or is buried deeper than the larger of `--max-sink` units and `--max-sink-fraction` of the mesh height, the reference is lowered or raised so that vertex sits `--sink` units below the surface. Floating is the visible defect; burial only counts when most of the plant is underground, because generators bury tall grass deliberately (Remiros by 4 to 16 units, Fantasia by up to 48).
 6. `static-move` moves references whose visible volume overlaps a static's collision shape to the nearest clear spot in the same cell, re-grounding them there. `static-delete` removes references that are entirely inside a static, or that overlap one and cannot be moved.
 
 A disabled action never changes a verdict silently: the report says why a reference was left alone, for example `keep_terrain_z_disabled`.
@@ -156,7 +156,7 @@ Geometry facts the measurements rely on:
 
 - Reference rotations are composed the way `OpenMW` composes them (`Misc::Convert::makeOsgQuat`): about Z, then Y, then X, in the world frame.
 - Terrain heights use `OpenMW`'s alternating triangle split of each 128-unit quad, not bilinear interpolation.
-- Static collision follows `OpenMW`'s Bullet loader: `RootCollisionNode` shapes when present, otherwise the visible geometry, with `NCO`/`NCC`/`MRK` extra data honoured. Each collision shape becomes a convex hull.
+- Static collision follows `OpenMW`'s Bullet loader: `RootCollisionNode` shapes when present, otherwise the visible geometry, with `NCO`/`NCC`/`MRK` extra data honoured. Overlap is tested against the actual collision triangles, and "inside" means every corner of the grass volume is enclosed by the mesh (ray parity), so a mushroom tree's cap does not block the ground under it and grass inside a closed rock is recognised.
 - Static references are resolved by their load-order identity, so a plugin that moves or deletes a master's rock is honoured and no stale copy remains at the old position.
 
 Output:
@@ -170,7 +170,7 @@ Output:
 Flags and `[unclip]` keys:
 
 - `--actions ACTION[,ACTION...]` limits the actions to plan. Default: all six.
-- `--float-tolerance` (1), `--max-sink` (24), `--sink` (4), `--orientation-epsilon` degrees (1), `--relocation-step` (32), `--relocation-steps` (8).
+- `--float-tolerance` (1), `--max-sink` (24), `--max-sink-fraction` (0.75), `--sink` (4), `--orientation-epsilon` degrees (1), `--relocation-step` (32), `--relocation-steps` (8).
 - `--include-grass-id` / `--exclude-grass-id` select target references by full ID regex.
 - `--include-occluder-id` / `--exclude-occluder-id` select statics that count as solid. Built-in exclusions cover tree-like statics; `--no-default-occluder-excludes` drops them.
 - `--road-texture-path` adds road texture regexes to the built-in list; `--no-default-road-textures` drops the built-ins.

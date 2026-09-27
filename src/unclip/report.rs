@@ -2,7 +2,7 @@
 
 //! Human-readable and JSON reports for an unclip run.
 
-use std::{io, io::Write, path::PathBuf};
+use std::{collections::BTreeMap, io, io::Write, path::PathBuf};
 
 use serde::Serialize;
 
@@ -17,11 +17,16 @@ use super::{
 #[derive(Serialize)]
 pub(crate) struct Report {
     pub(crate) target: PathBuf,
+    /// Plugin directory added to the VFS because it is not a configured data directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) added_data_directory: Option<PathBuf>,
     pub(crate) mode: OutputSummary,
     pub(crate) policy: PolicySummary,
     pub(crate) cells: CellSummary,
     pub(crate) occluders: StaticOccluderBuildReport,
     pub(crate) counts: VerdictCounts,
+    /// Distinct mesh load errors among skipped refs, with how many refs each affected.
+    pub(crate) mesh_errors: BTreeMap<String, usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) write: Option<WriteOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,6 +53,7 @@ pub(crate) struct PolicySummary {
     pub(crate) actions: Vec<&'static str>,
     pub(crate) float_tolerance: f32,
     pub(crate) max_sink: f32,
+    pub(crate) max_sink_fraction: f32,
     pub(crate) sink: f32,
     pub(crate) orientation_epsilon_degrees: f32,
     pub(crate) relocation_step: f32,
@@ -65,6 +71,7 @@ impl PolicySummary {
             actions: policy.actions.enabled_names(),
             float_tolerance: policy.float_tolerance,
             max_sink: policy.max_sink,
+            max_sink_fraction: policy.max_sink_fraction,
             sink: policy.sink,
             orientation_epsilon_degrees: policy.orientation_epsilon_degrees,
             relocation_step: policy.relocation.step,
@@ -111,6 +118,13 @@ pub(crate) fn write_text(out: &mut dyn Write, report: &Report) -> io::Result<()>
 
 fn write_header(out: &mut dyn Write, report: &Report) -> io::Result<()> {
     writeln!(out, "Unclip report for {}", report.target.display())?;
+    if let Some(directory) = &report.added_data_directory {
+        writeln!(
+            out,
+            "Added {} to the VFS because it is not a configured data directory",
+            directory.display()
+        )?;
+    }
     match &report.mode {
         OutputSummary::DryRun {
             would_write,
@@ -127,9 +141,10 @@ fn write_header(out: &mut dyn Write, report: &Report) -> io::Result<()> {
     writeln!(out, "Actions: {}", join(&report.policy.actions))?;
     writeln!(
         out,
-        "Tolerances: float {} / max sink {} / sink to {} / tilt {} deg",
+        "Tolerances: float {} / max sink {} units or {}% of height / sink to {} / tilt {} deg",
         report.policy.float_tolerance,
         report.policy.max_sink,
+        report.policy.max_sink_fraction * 100.0,
         report.policy.sink,
         report.policy.orientation_epsilon_degrees
     )?;
@@ -198,6 +213,23 @@ fn write_counts(out: &mut dyn Write, report: &Report) -> io::Result<()> {
             writeln!(out, "  {label:<32} {count}")?;
         }
     }
+    if !report.mesh_errors.is_empty() {
+        writeln!(
+            out,
+            "WARNING: {} refs were skipped because their mesh could not be loaded. Check that the plugin's mod folder is a data directory.",
+            report.mesh_errors.values().sum::<usize>()
+        )?;
+        for (error, count) in report.mesh_errors.iter().take(10) {
+            writeln!(out, "  {count} refs: {error}")?;
+        }
+        if report.mesh_errors.len() > 10 {
+            writeln!(
+                out,
+                "  ... {} more distinct errors",
+                report.mesh_errors.len() - 10
+            )?;
+        }
+    }
     writeln!(out)
 }
 
@@ -255,8 +287,9 @@ pub(crate) fn write_ref_lines(out: &mut dyn Write, refs: &[RefVerdict]) -> io::R
 fn detail(entry: &RefVerdict) -> String {
     let measured = entry.measured.map(|measured| {
         format!(
-            "terrain_z={:.1} gap={:.2} min_gap={:.2} tilt_delta={:.1}deg",
+            "terrain_z={:.1} height={:.0} gap={:.2} min_gap={:.2} tilt_delta={:.1}deg",
             measured.terrain_z,
+            measured.mesh_height,
             measured.contact.gap,
             measured.contact.min_gap,
             measured.tilt_delta_degrees

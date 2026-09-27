@@ -16,7 +16,7 @@ use crate::groundcover::openmw;
 use super::{
     UnclipArgs,
     args::{
-        ActionArg, Actions, DEFAULT_FLOAT_TOLERANCE, DEFAULT_MAX_SINK,
+        ActionArg, Actions, DEFAULT_FLOAT_TOLERANCE, DEFAULT_MAX_SINK, DEFAULT_MAX_SINK_FRACTION,
         DEFAULT_ORIENTATION_EPSILON_DEGREES, DEFAULT_RELOCATION_STEP, DEFAULT_RELOCATION_STEPS,
         DEFAULT_SINK, IdFilter, RelocationPolicy, RoadTextureFilter, UnclipPolicy, default_actions,
         default_road_texture_path_patterns, default_tree_occluder_exclude_ids,
@@ -38,6 +38,7 @@ pub(crate) struct UnclipConfig {
     pub(crate) actions: Vec<ActionArg>,
     pub(crate) float_tolerance: f32,
     pub(crate) max_sink: f32,
+    pub(crate) max_sink_fraction: f32,
     pub(crate) sink: f32,
     pub(crate) relocation_step: f32,
     pub(crate) relocation_steps: u16,
@@ -70,6 +71,9 @@ pub(crate) struct PersistedUnclipConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) max_sink: Option<f32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_sink_fraction: Option<f32>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) sink: Option<f32>,
@@ -182,6 +186,10 @@ impl UnclipConfig {
                 .max_sink
                 .or(persisted.max_sink)
                 .unwrap_or(DEFAULT_MAX_SINK),
+            max_sink_fraction: args
+                .max_sink_fraction
+                .or(persisted.max_sink_fraction)
+                .unwrap_or(DEFAULT_MAX_SINK_FRACTION),
             sink: args.sink.or(persisted.sink).unwrap_or(DEFAULT_SINK),
             relocation_step: args
                 .relocation_step
@@ -221,6 +229,7 @@ impl UnclipConfig {
             actions: Actions::from_args(&self.actions),
             float_tolerance: self.float_tolerance,
             max_sink: self.max_sink,
+            max_sink_fraction: self.max_sink_fraction,
             sink: self.sink,
             orientation_epsilon_degrees: self.orientation_epsilon,
             relocation: RelocationPolicy {
@@ -239,6 +248,10 @@ impl UnclipConfig {
     fn validate(&self) -> io::Result<()> {
         validate_non_negative_f32("float_tolerance", self.float_tolerance)?;
         validate_non_negative_f32("max_sink", self.max_sink)?;
+        validate_non_negative_f32("max_sink_fraction", self.max_sink_fraction)?;
+        if self.max_sink_fraction > 1.0 {
+            return Err(invalid_config("max_sink_fraction must be between 0 and 1"));
+        }
         validate_non_negative_f32("sink", self.sink)?;
         validate_non_negative_f32("orientation_epsilon", self.orientation_epsilon)?;
         validate_positive_f32("relocation_step", self.relocation_step)?;
@@ -271,6 +284,7 @@ impl PersistedUnclipConfig {
             actions: Some(default_actions()),
             float_tolerance: Some(DEFAULT_FLOAT_TOLERANCE),
             max_sink: Some(DEFAULT_MAX_SINK),
+            max_sink_fraction: Some(DEFAULT_MAX_SINK_FRACTION),
             sink: Some(DEFAULT_SINK),
             relocation_step: Some(DEFAULT_RELOCATION_STEP),
             relocation_steps: Some(DEFAULT_RELOCATION_STEPS),

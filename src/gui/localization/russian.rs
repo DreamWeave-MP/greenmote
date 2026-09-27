@@ -112,7 +112,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         UiText::ConfirmUnclipPatchMessage => {
             "Unclip запишет плагин-патч (<имя источника>_unclip.omwaddon в data-local) для каждой цели и не тронет исходные плагины."
         }
-
         UiText::ConfirmUnclipInPlaceMessage => {
             "Unclip перезапишет выбранные исходные плагины на месте и создаст резервные копии."
         }
@@ -176,19 +175,18 @@ const fn settings_text(key: UiText) -> &'static str {
         }
         UiText::PolicyNumbers => "Значения политики",
         UiText::FloatTolerance => "Допуск зависания",
-
         UiText::FloatToleranceTooltip => {
             "Наибольший зазор (единиц) между основанием меша и terrain, при котором ref считается стоящим на земле. Config key: float_tolerance."
         }
-
         UiText::MaxSink => "Максимальное погружение",
-
         UiText::MaxSinkTooltip => {
             "Наибольшая глубина погружения (единиц) основания меша, которая ещё считается приемлемой. Config key: max_sink."
         }
-
+        UiText::MaxSinkFraction => "Максимальное погружение (доля высоты)",
+        UiText::MaxSinkFractionTooltip => {
+            "Наибольшая глубина погружения как доля высоты меша; применяется большее из этого значения и Максимального погружения. Генераторы намеренно глубоко закапывают высокую траву. Config key: max_sink_fraction."
+        }
         UiText::SinkDepth => "Глубина погружения",
-
         UiText::SinkDepthTooltip => {
             "Глубина (единиц), на которую terrain-z погружает основание меша при исправлении ref. Config key: sink."
         }
