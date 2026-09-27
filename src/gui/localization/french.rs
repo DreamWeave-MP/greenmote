@@ -54,10 +54,6 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Options d’exécution",
-        UiText::AddFiles => "Ajouter des plugins...",
-        UiText::RemoveSelectedTarget => "Retirer la sélection",
-        UiText::ClearTargets => "Vider",
-        UiText::EmptyTargetList => "Aucun plugin cible ajouté.",
         UiText::StartConversion => "Démarrer la conversion",
         UiText::WriteChanges => "Écrire les changements",
         UiText::FixPlugins => "Corriger les plugins",
@@ -65,7 +61,9 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::UnclipIntro => {
             "Corrige l’herbe flottante, enterrée ou en collision dans les plugins ci-dessous. Les plugins sont réécrits sur place ; l’original intact est conservé sous <nom>.greenmote-original."
         }
-        UiText::DropPluginFilesHint => "Déposez des fichiers plugin ici",
+        UiText::ReloadList => "Recharger la liste",
+        UiText::NoGroundcoverPlugins => "Aucun plugin groundcover= dans openmw.cfg.",
+        UiText::PluginNotFound => "introuvable",
         UiText::DryRun => "Simulation",
         UiText::DebugDiagnostics => "Diagnostics de débogage",
         UiText::AutoEnableGeneratedPlugins => "Activer automatiquement les plugins générés",
@@ -119,7 +117,6 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Choisissez un chemin de configuration OpenMW valide avant de continuer."
         }
         UiText::SelectOpenMwConfig => "Sélectionner la configuration OpenMW",
-        UiText::SelectUnclipTargetPlugins => "Sélectionner les plugins cibles Unclip",
         _ => unreachable!(),
     }
 }
@@ -128,7 +125,6 @@ const fn dialog_text(key: UiText) -> &'static str {
 const fn settings_text(key: UiText) -> &'static str {
     match key {
         UiText::OpenMwConfig => "Configuration OpenMW",
-        UiText::OpenMwPlugins => "Plugins OpenMW",
         UiText::UsingOpenMwAutodetection => "Utilisation de la détection automatique d’OpenMW.",
         UiText::OpenMwConfigCannotChangeWhileRunning => {
             "La configuration OpenMW ne peut pas être modifiée pendant une exécution."

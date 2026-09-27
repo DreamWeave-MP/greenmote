@@ -8,9 +8,7 @@ use regex::RegexBuilder;
 use crate::groundcover::{self, GroundcoverConfig, openmw::ConvertOutputDirectorySource};
 use crate::unclip::ActionArg;
 
-use super::{
-    ConvertRunOptions, GreenmoteApp, UiLanguage, UiText, UnclipRunOptions, language_label,
-};
+use super::{ConvertRunOptions, GreenmoteApp, UiLanguage, UiText, language_label};
 
 const SETTINGS_LIST_VISIBLE_ROWS: usize = 6;
 const SETTINGS_LIST_FALLBACK_WIDTH: f32 = 560.0;
@@ -763,9 +761,8 @@ impl GreenmoteApp {
                 self.convert
                     .sync_run_options(ConvertRunOptions::from_config(&config));
                 self.convert
-                    .sync_unclip_run_options(UnclipRunOptions::from_config(&config));
-                self.convert
                     .sync_loaded_openmw_config_status(config.openmw_cfg.as_deref());
+                self.reload_unclip_plugins_from(Some(openmw_cfg));
                 true
             }
             Err(error) => {
@@ -788,9 +785,8 @@ impl GreenmoteApp {
                 self.convert
                     .sync_run_options(ConvertRunOptions::from_config(&config));
                 self.convert
-                    .sync_unclip_run_options(UnclipRunOptions::from_config(&config));
-                self.convert
                     .sync_loaded_openmw_config_status(config.openmw_cfg.as_deref());
+                self.reload_unclip_plugins();
                 true
             }
             Err(error) => {
@@ -817,9 +813,8 @@ impl GreenmoteApp {
                 self.convert
                     .sync_run_options(ConvertRunOptions::from_config(&config));
                 self.convert
-                    .sync_unclip_run_options(UnclipRunOptions::from_config(&config));
-                self.convert
                     .sync_loaded_openmw_config_status(config.openmw_cfg.as_deref());
+                self.reload_unclip_plugins();
                 true
             }
             Err(error) => {
@@ -857,6 +852,7 @@ impl GreenmoteApp {
                 self.convert
                     .sync_saved_run_options_from_settings(ConvertRunOptions::from_config(&config));
                 self.convert.cancel_pending_unclip_write_confirmation();
+                self.reload_unclip_plugins();
                 true
             }
             Err(error) => {
@@ -1728,7 +1724,11 @@ mod tests {
         let directory = unique_temp_directory("greenmote-gui-settings-save");
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("greenmote.toml");
-        let mut app = GreenmoteApp::default();
+        fs::write(directory.join("openmw.cfg"), "").unwrap();
+        let mut app = GreenmoteApp {
+            session_openmw_cfg: Some(directory.join("openmw.cfg")),
+            ..GreenmoteApp::default()
+        };
         app.settings.config_path = Some(path);
         app.convert.set_unclip_write_for_test(true);
         app.convert
@@ -1747,7 +1747,11 @@ mod tests {
         let directory = unique_temp_directory("greenmote-gui-settings-convert-dry-run-save");
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("greenmote.toml");
-        let mut app = GreenmoteApp::default();
+        fs::write(directory.join("openmw.cfg"), "").unwrap();
+        let mut app = GreenmoteApp {
+            session_openmw_cfg: Some(directory.join("openmw.cfg")),
+            ..GreenmoteApp::default()
+        };
         app.settings.config_path = Some(path.clone());
         app.convert.set_convert_dry_run_for_test(true);
         app.settings.draft.dry_run = true;

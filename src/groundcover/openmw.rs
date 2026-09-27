@@ -275,6 +275,37 @@ pub(crate) struct ConvertOutputDirectory {
     pub(crate) source: ConvertOutputDirectorySource,
 }
 
+/// One `groundcover=` line of `openmw.cfg`, resolved through the VFS.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GroundcoverEntry {
+    /// The file name exactly as written in `openmw.cfg`.
+    pub(crate) name: String,
+    /// The resolved on-disk path, or `None` when no data directory provides the file.
+    pub(crate) path: Option<PathBuf>,
+}
+
+/// Lists the `groundcover=` plugins in config order, each resolved through the VFS.
+pub(crate) fn groundcover_plugins(config: &OpenMWConfiguration) -> Vec<GroundcoverEntry> {
+    let names = config
+        .groundcover_iter()
+        .map(|plugin| plugin.value_str().to_owned())
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        return Vec::new();
+    }
+
+    let vfs = build_vfs(config);
+    names
+        .into_iter()
+        .map(|name| {
+            let path = vfs
+                .get_file(name.as_str())
+                .map(|file| file.path().to_path_buf());
+            GroundcoverEntry { name, path }
+        })
+        .collect()
+}
+
 pub(crate) fn resolve_convert_output_directory(
     config: &OpenMWConfiguration,
 ) -> io::Result<ConvertOutputDirectory> {
@@ -547,5 +578,50 @@ mod tests {
         let message = String::from_utf8(stderr).unwrap();
         assert!(message.contains("requested OpenMW configuration"));
         assert!(message.contains(&bad_config.display().to_string()));
+    }
+
+    #[test]
+    fn groundcover_plugins_resolve_present_names_and_flag_missing_ones() {
+        let dir = TempDir::new();
+        let data = dir.path.join("data");
+        create_dir(&data).unwrap();
+        write(data.join("present.omwaddon"), "").unwrap();
+        write(
+            dir.path.join("openmw.cfg"),
+            format!(
+                "data=\"{}\"\ngroundcover=present.omwaddon\ngroundcover=missing.omwaddon\n",
+                data.display()
+            ),
+        )
+        .unwrap();
+
+        let config = load_config_from_path(Some(&dir.path)).unwrap();
+        let entries = groundcover_plugins(&config);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "present.omwaddon");
+        assert!(
+            entries[0]
+                .path
+                .as_ref()
+                .is_some_and(|path| path.ends_with("present.omwaddon") && path.is_file())
+        );
+        assert_eq!(
+            entries[1],
+            GroundcoverEntry {
+                name: "missing.omwaddon".to_owned(),
+                path: None,
+            }
+        );
+    }
+
+    #[test]
+    fn groundcover_plugins_is_empty_without_groundcover_lines() {
+        let dir = TempDir::new();
+        write(dir.path.join("openmw.cfg"), "").unwrap();
+
+        let config = load_config_from_path(Some(&dir.path)).unwrap();
+
+        assert!(groundcover_plugins(&config).is_empty());
     }
 }

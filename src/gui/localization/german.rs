@@ -54,10 +54,6 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Ausführungsoptionen",
-        UiText::AddFiles => "Plugins hinzufügen...",
-        UiText::RemoveSelectedTarget => "Auswahl entfernen",
-        UiText::ClearTargets => "Leeren",
-        UiText::EmptyTargetList => "Keine Ziel-Plugins hinzugefügt.",
         UiText::StartConversion => "Konvertierung starten",
         UiText::WriteChanges => "Änderungen schreiben",
         UiText::FixPlugins => "Plugins korrigieren",
@@ -65,7 +61,9 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::UnclipIntro => {
             "Behebt schwebendes, vergrabenes und clippendes Gras in den Plugins unten. Plugins werden direkt überschrieben; das unveränderte Original bleibt als <Name>.greenmote-original erhalten."
         }
-        UiText::DropPluginFilesHint => "Plugin-Dateien hier ablegen",
+        UiText::ReloadList => "Liste neu laden",
+        UiText::NoGroundcoverPlugins => "Keine groundcover=-Plugins in openmw.cfg.",
+        UiText::PluginNotFound => "nicht gefunden",
         UiText::DryRun => "Probelauf",
         UiText::DebugDiagnostics => "Debug-Diagnose",
         UiText::AutoEnableGeneratedPlugins => "Generierte Plugins automatisch aktivieren",
@@ -117,7 +115,6 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Wähle einen gültigen OpenMW-Konfigurationspfad, bevor du fortfährst."
         }
         UiText::SelectOpenMwConfig => "OpenMW-Konfiguration auswählen",
-        UiText::SelectUnclipTargetPlugins => "Unclip-Ziel-Plugins auswählen",
         _ => unreachable!(),
     }
 }
@@ -125,7 +122,6 @@ const fn dialog_text(key: UiText) -> &'static str {
 const fn settings_text(key: UiText) -> &'static str {
     match key {
         UiText::OpenMwConfig => "OpenMW-Konfiguration",
-        UiText::OpenMwPlugins => "OpenMW-Plugins",
         UiText::UsingOpenMwAutodetection => "OpenMW-Autodetektion wird verwendet.",
         UiText::OpenMwConfigCannotChangeWhileRunning => {
             "Die OpenMW-Konfiguration kann während eines laufenden Vorgangs nicht geändert werden."

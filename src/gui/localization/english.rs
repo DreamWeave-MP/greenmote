@@ -47,10 +47,6 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Run options",
-        UiText::AddFiles => "Add plugins...",
-        UiText::RemoveSelectedTarget => "Remove selected",
-        UiText::ClearTargets => "Clear",
-        UiText::EmptyTargetList => "No target plugins added.",
         UiText::StartConversion => "Start conversion",
         UiText::WriteChanges => "Write changes",
         UiText::FixPlugins => "Fix plugins",
@@ -58,7 +54,9 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::UnclipIntro => {
             "Fixes floating, buried, and clipping grass in the plugins below. Plugins are rewritten in place; the untouched original is kept as <name>.greenmote-original."
         }
-        UiText::DropPluginFilesHint => "Drop plugin files here",
+        UiText::ReloadList => "Reload list",
+        UiText::NoGroundcoverPlugins => "No groundcover= plugins in openmw.cfg.",
+        UiText::PluginNotFound => "not found",
         UiText::DryRun => "Dry run",
         UiText::DebugDiagnostics => "Debug diagnostics",
         UiText::AutoEnableGeneratedPlugins => "Auto-enable generated plugins",
@@ -108,7 +106,6 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Choose a valid OpenMW config path before continuing."
         }
         UiText::SelectOpenMwConfig => "Select OpenMW Config",
-        UiText::SelectUnclipTargetPlugins => "Select Unclip Target Plugins",
         _ => unreachable!(),
     }
 }
@@ -116,7 +113,6 @@ const fn dialog_text(key: UiText) -> &'static str {
 const fn settings_text(key: UiText) -> &'static str {
     match key {
         UiText::OpenMwConfig => "OpenMW config",
-        UiText::OpenMwPlugins => "OpenMW plugins",
         UiText::UsingOpenMwAutodetection => "Using OpenMW autodetection.",
         UiText::OpenMwConfigCannotChangeWhileRunning => {
             "OpenMW config cannot be changed while a run is active."

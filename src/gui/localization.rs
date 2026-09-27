@@ -24,16 +24,14 @@ macro_rules! route_text {
             | UiText::ShowPreviousItems
             | UiText::ShowNextItems => $language($key),
             UiText::RunOptions
-            | UiText::AddFiles
-            | UiText::RemoveSelectedTarget
-            | UiText::ClearTargets
-            | UiText::EmptyTargetList
             | UiText::StartConversion
             | UiText::WriteChanges
             | UiText::FixPlugins
             | UiText::InspectOnly
             | UiText::UnclipIntro
-            | UiText::DropPluginFilesHint
+            | UiText::ReloadList
+            | UiText::NoGroundcoverPlugins
+            | UiText::PluginNotFound
             | UiText::DryRun
             | UiText::DebugDiagnostics
             | UiText::AutoEnableGeneratedPlugins
@@ -68,10 +66,8 @@ macro_rules! route_text {
             | UiText::OpenMwConfigNotFoundTitle
             | UiText::OpenMwConfigNotFoundMessage
             | UiText::ChooseOpenMwConfigBeforeContinuing
-            | UiText::SelectOpenMwConfig
-            | UiText::SelectUnclipTargetPlugins => $dialogs($key),
+            | UiText::SelectOpenMwConfig => $dialogs($key),
             UiText::OpenMwConfig
-            | UiText::OpenMwPlugins
             | UiText::UsingOpenMwAutodetection
             | UiText::OpenMwConfigCannotChangeWhileRunning
             | UiText::ConvertOutputDirectory
@@ -182,16 +178,14 @@ pub(super) enum UiText {
     Settings,
     General,
     RunOptions,
-    AddFiles,
-    RemoveSelectedTarget,
-    ClearTargets,
-    EmptyTargetList,
     StartConversion,
     WriteChanges,
     FixPlugins,
     InspectOnly,
     UnclipIntro,
-    DropPluginFilesHint,
+    ReloadList,
+    NoGroundcoverPlugins,
+    PluginNotFound,
     DryRun,
     DebugDiagnostics,
     AutoEnableGeneratedPlugins,
@@ -232,9 +226,7 @@ pub(super) enum UiText {
     OpenMwConfigNotFoundMessage,
     ChooseOpenMwConfigBeforeContinuing,
     SelectOpenMwConfig,
-    SelectUnclipTargetPlugins,
     OpenMwConfig,
-    OpenMwPlugins,
     UsingOpenMwAutodetection,
     OpenMwConfigCannotChangeWhileRunning,
     ConvertOutputDirectory,
@@ -496,6 +488,12 @@ mod tests {
         );
         assert_eq!(localizer.text(UiText::FixPlugins), "Fix plugins");
         assert_eq!(localizer.text(UiText::InspectOnly), "Inspect only");
+        assert_eq!(localizer.text(UiText::ReloadList), "Reload list");
+        assert_eq!(
+            localizer.text(UiText::NoGroundcoverPlugins),
+            "No groundcover= plugins in openmw.cfg."
+        );
+        assert_eq!(localizer.text(UiText::PluginNotFound), "not found");
         assert!(
             localizer
                 .text(UiText::UnclipIntro)

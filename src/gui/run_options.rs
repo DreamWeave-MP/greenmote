@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::{
-    groundcover::{self, GroundcoverConfig},
+    groundcover::{self, GroundcoverConfig, openmw::GroundcoverEntry},
     unclip::UnclipArgs,
 };
 
@@ -18,30 +18,41 @@ pub(super) struct ConvertRunOptions {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct UnclipRunOptions {
-    pub(super) targets: Vec<UnclipTargetRunOption>,
-    /// Rewrite the target plugins. Off means inspect only.
+    /// The `groundcover=` plugins of the effective `openmw.cfg`, in config order.
+    pub(super) entries: Vec<GroundcoverTarget>,
+    /// Rewrite the checked plugins. Off means inspect only.
     pub(super) write: bool,
 }
 
 impl Default for UnclipRunOptions {
     fn default() -> Self {
         Self {
-            targets: Vec::new(),
+            entries: Vec::new(),
             write: true,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct UnclipTargetRunOption {
-    pub(super) plugin: String,
+pub(super) struct GroundcoverTarget {
+    pub(super) name: String,
+    /// Resolved path, or `None` when no data directory provides the plugin.
+    pub(super) path: Option<PathBuf>,
+    pub(super) checked: bool,
 }
 
-impl UnclipTargetRunOption {
-    pub(super) fn new(plugin: impl Into<String>) -> Self {
+impl GroundcoverTarget {
+    /// Found plugins start checked; missing ones can never be checked.
+    pub(super) fn from_entry(entry: GroundcoverEntry) -> Self {
         Self {
-            plugin: plugin.into(),
+            checked: entry.path.is_some(),
+            name: entry.name,
+            path: entry.path,
         }
+    }
+
+    pub(super) fn is_runnable(&self) -> bool {
+        self.checked && self.path.is_some()
     }
 }
 
@@ -93,58 +104,42 @@ impl ConvertRunOptions {
 }
 
 impl UnclipRunOptions {
-    #[must_use]
-    pub(super) fn from_config(config: &GroundcoverConfig) -> Self {
-        let targets = config
-            .unclip
-            .plugin
-            .as_ref()
-            .map(|path| vec![UnclipTargetRunOption::new(path.display().to_string())])
-            .unwrap_or_default();
-
+    pub(super) fn from_entries(entries: Vec<GroundcoverEntry>, write: bool) -> Self {
         Self {
-            targets,
-            ..Self::default()
+            entries: entries
+                .into_iter()
+                .map(GroundcoverTarget::from_entry)
+                .collect(),
+            write,
         }
     }
 
-    pub(super) fn add_target(&mut self, target: impl Into<String>) -> bool {
-        let target = target.into();
-        let target = target.trim();
-        if target.is_empty()
-            || self
-                .targets
-                .iter()
-                .any(|existing| existing.plugin == target)
-        {
-            return false;
-        }
-
-        self.targets.push(UnclipTargetRunOption::new(target));
-        true
+    /// Indices of the entries a run will process, in list order.
+    pub(super) fn runnable_indices(&self) -> Vec<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_index, entry)| entry.is_runnable())
+            .map(|(index, _entry)| index)
+            .collect()
     }
 
-    pub(super) fn remove_target(&mut self, index: usize) -> bool {
-        if index >= self.targets.len() {
-            return false;
-        }
-
-        self.targets.remove(index);
-        true
-    }
-
-    pub(super) fn clear_targets(&mut self) {
-        self.targets.clear();
+    pub(super) fn runnable_names(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.is_runnable())
+            .map(|entry| entry.name.clone())
+            .collect()
     }
 
     pub(super) fn to_args_list(&self) -> Result<Vec<UnclipArgs>, String> {
         let args = self
-            .targets
+            .entries
             .iter()
-            .map(|target| target.plugin.trim())
-            .filter(|plugin| !plugin.is_empty())
-            .map(|plugin| UnclipArgs {
-                plugin: Some(PathBuf::from(plugin)),
+            .filter(|entry| entry.checked)
+            .filter_map(|entry| entry.path.clone())
+            .map(|path| UnclipArgs {
+                plugin: Some(path),
                 write: Some(self.write),
                 verbose: Some(true),
                 structured: Some(false),
@@ -153,7 +148,7 @@ impl UnclipRunOptions {
             .collect::<Vec<_>>();
 
         if args.is_empty() {
-            return Err("Choose a target plugin before running Unclip.".to_owned());
+            return Err("Check at least one groundcover plugin before running Unclip.".to_owned());
         }
 
         Ok(args)
@@ -207,8 +202,10 @@ impl GreenmoteApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConvertRunOptions, UnclipRunOptions, UnclipTargetRunOption};
-    use crate::groundcover::GroundcoverConfig;
+    use std::path::PathBuf;
+
+    use super::{ConvertRunOptions, GroundcoverTarget, UnclipRunOptions};
+    use crate::groundcover::{GroundcoverConfig, openmw::GroundcoverEntry};
 
     #[test]
     fn run_options_can_disable_saved_boolean_defaults() {
@@ -288,145 +285,94 @@ mod tests {
         );
     }
 
-    #[test]
-    fn unclip_run_options_prefill_visible_plugin_only() {
-        let mut config = GroundcoverConfig::default();
-        config.unclip.plugin = Some("groundcover.omwaddon".into());
-
-        let options = UnclipRunOptions::from_config(&config);
-
-        assert_eq!(options.targets, [target("groundcover.omwaddon")]);
-        assert!(options.write);
+    fn entry(name: &str, found: bool) -> GroundcoverEntry {
+        GroundcoverEntry {
+            name: name.to_owned(),
+            path: found.then(|| PathBuf::from("/data").join(name)),
+        }
     }
 
     #[test]
     fn unclip_run_options_default_write_enabled() {
         assert!(UnclipRunOptions::default().write);
-        assert!(UnclipRunOptions::from_config(&GroundcoverConfig::default()).write);
+        assert!(UnclipRunOptions::from_entries(Vec::new(), true).write);
+        assert!(!UnclipRunOptions::from_entries(Vec::new(), false).write);
     }
 
     #[test]
-    fn unclip_run_options_generated_config_keeps_write_enabled() {
-        let mut config = GroundcoverConfig::default();
-        config.unclip = crate::unclip::config::PersistedUnclipConfig::generated_default();
-
-        let options = UnclipRunOptions::from_config(&config);
-
-        assert!(options.write);
-    }
-
-    #[test]
-    fn unclip_run_options_config_prefill_creates_one_target() {
-        let mut config = GroundcoverConfig::default();
-        config.unclip.plugin = Some("groundcover.omwaddon".into());
-
-        let options = UnclipRunOptions::from_config(&config);
-
-        assert_eq!(options.targets, vec![target("groundcover.omwaddon")]);
-    }
-
-    #[test]
-    fn unclip_run_options_build_explicit_safe_args() {
-        let options = UnclipRunOptions {
-            targets: vec![UnclipTargetRunOption::new(" groundcover.omwaddon ")],
-            write: false,
-        };
-
-        let args = options.to_args_list().unwrap();
-        let args = args.first().unwrap();
-
-        assert_eq!(args.plugin, Some("groundcover.omwaddon".into()));
-        assert_eq!(args.verbose, Some(true));
-        assert_eq!(args.structured, Some(false));
-        assert_eq!(args.write, Some(false));
-        assert_eq!(args.output_plugin, None);
-        assert!(args.actions.is_empty());
-        assert_eq!(args.float_tolerance, None);
-        assert_eq!(args.max_sink, None);
-        assert_eq!(args.sink, None);
-        assert!(!args.no_default_occluder_excludes);
-        assert!(!args.no_default_road_textures);
-    }
-
-    #[test]
-    fn unclip_run_options_pass_write_flags_through() {
-        let options = UnclipRunOptions {
-            targets: vec![target("groundcover.omwaddon")],
-            write: true,
-        };
-
-        let args = options.to_args_list().unwrap();
-        let args = args.first().unwrap();
-
-        assert_eq!(args.write, Some(true));
-    }
-
-    #[test]
-    fn unclip_run_options_reject_empty_plugin() {
-        assert!(UnclipRunOptions::default().to_args_list().is_err());
-    }
-
-    #[test]
-    fn unclip_run_options_add_target_preserves_order_and_dedupes_exact_names() {
-        let mut options = UnclipRunOptions::default();
-
-        assert!(options.add_target(" first.omwaddon "));
-        assert!(options.add_target("second.omwaddon"));
-        assert!(!options.add_target("first.omwaddon"));
-        assert!(!options.add_target(" "));
+    fn unclip_run_options_check_found_entries_by_default() {
+        let options = UnclipRunOptions::from_entries(
+            vec![
+                entry("present.omwaddon", true),
+                entry("missing.omwaddon", false),
+            ],
+            true,
+        );
 
         assert_eq!(
-            options.targets,
-            [target("first.omwaddon"), target("second.omwaddon")]
+            options.entries,
+            [
+                GroundcoverTarget {
+                    name: "present.omwaddon".to_owned(),
+                    path: Some(PathBuf::from("/data/present.omwaddon")),
+                    checked: true,
+                },
+                GroundcoverTarget {
+                    name: "missing.omwaddon".to_owned(),
+                    path: None,
+                    checked: false,
+                },
+            ]
         );
+        assert_eq!(options.runnable_indices(), [0]);
+        assert_eq!(options.runnable_names(), ["present.omwaddon"]);
     }
 
     #[test]
-    fn unclip_run_options_remove_and_clear_targets() {
-        let mut options = UnclipRunOptions {
-            targets: vec![target("first.omwaddon"), target("second.omwaddon")],
-            write: true,
-        };
-
-        assert!(options.remove_target(0));
-        assert!(!options.remove_target(3));
-        assert_eq!(options.targets, [target("second.omwaddon")]);
-
-        options.clear_targets();
-        assert!(options.targets.is_empty());
-    }
-
-    #[test]
-    fn unclip_run_options_builds_multiple_args() {
-        let options = UnclipRunOptions {
-            targets: vec![
-                UnclipTargetRunOption::new(" first.omwaddon "),
-                target("second.omwaddon"),
+    fn unclip_run_options_build_args_for_checked_entries_only() {
+        let mut options = UnclipRunOptions::from_entries(
+            vec![
+                entry("first.omwaddon", true),
+                entry("second.omwaddon", true),
+                entry("third.omwaddon", true),
+                entry("missing.omwaddon", false),
             ],
-            write: false,
-        };
+            false,
+        );
+        options.entries[1].checked = false;
 
         let args = options.to_args_list().unwrap();
 
         assert_eq!(args.len(), 2);
-        assert_eq!(args[0].plugin, Some("first.omwaddon".into()));
-        assert_eq!(args[1].plugin, Some("second.omwaddon".into()));
+        assert_eq!(args[0].plugin, Some("/data/first.omwaddon".into()));
+        assert_eq!(args[1].plugin, Some("/data/third.omwaddon".into()));
+        assert!(args.iter().all(|args| args.write == Some(false)));
+        assert!(args.iter().all(|args| args.verbose == Some(true)));
+        assert!(args.iter().all(|args| args.structured == Some(false)));
+        assert!(args.iter().all(|args| args.output_plugin.is_none()));
+        assert!(args.iter().all(|args| args.actions.is_empty()));
+        assert_eq!(options.runnable_indices(), [0, 2]);
     }
 
     #[test]
-    fn unclip_run_options_all_args_share_write_flags() {
-        let options = UnclipRunOptions {
-            targets: vec![target("first.omwaddon"), target("second.omwaddon")],
-            write: true,
-        };
+    fn unclip_run_options_missing_entries_are_never_runnable_even_if_checked() {
+        let mut options =
+            UnclipRunOptions::from_entries(vec![entry("missing.omwaddon", false)], true);
+        options.entries[0].checked = true;
 
-        let args = options.to_args_list().unwrap();
-
-        assert!(args.iter().all(|args| args.write == Some(true)));
-        assert!(args.iter().all(|args| args.verbose == Some(true)));
+        assert!(options.to_args_list().is_err());
+        assert!(options.runnable_indices().is_empty());
     }
 
-    fn target(plugin: &str) -> UnclipTargetRunOption {
-        UnclipTargetRunOption::new(plugin)
+    #[test]
+    fn unclip_run_options_reject_empty_selection() {
+        assert!(UnclipRunOptions::default().to_args_list().is_err());
+
+        let mut options = UnclipRunOptions::from_entries(vec![entry("first.omwaddon", true)], true);
+        options.entries[0].checked = false;
+        assert_eq!(
+            options.to_args_list().unwrap_err(),
+            "Check at least one groundcover plugin before running Unclip."
+        );
     }
 }

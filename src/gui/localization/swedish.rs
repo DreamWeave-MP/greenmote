@@ -47,10 +47,6 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Köralternativ",
-        UiText::AddFiles => "Lägg till plugin...",
-        UiText::RemoveSelectedTarget => "Ta bort vald",
-        UiText::ClearTargets => "Rensa",
-        UiText::EmptyTargetList => "Inga målplugin tillagda.",
         UiText::StartConversion => "Starta konvertering",
         UiText::WriteChanges => "Skriv ändringar",
         UiText::FixPlugins => "Rätta plugin",
@@ -58,7 +54,9 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::UnclipIntro => {
             "Rättar svävande, nedgrävt och genomskärande gräs i pluginen nedan. Plugin skrivs över på plats; det orörda originalet behålls som <namn>.greenmote-original."
         }
-        UiText::DropPluginFilesHint => "Släpp pluginfiler här",
+        UiText::ReloadList => "Läs in listan igen",
+        UiText::NoGroundcoverPlugins => "Inga groundcover=-plugin i openmw.cfg.",
+        UiText::PluginNotFound => "hittades inte",
         UiText::DryRun => "Torrkörning",
         UiText::DebugDiagnostics => "Felsökningsdiagnostik",
         UiText::AutoEnableGeneratedPlugins => "Aktivera genererade plugin automatiskt",
@@ -106,7 +104,6 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Välj en giltig OpenMW-configsökväg innan du fortsätter."
         }
         UiText::SelectOpenMwConfig => "Välj OpenMW-config",
-        UiText::SelectUnclipTargetPlugins => "Välj Unclip-målplugin",
         _ => unreachable!(),
     }
 }
@@ -114,7 +111,6 @@ const fn dialog_text(key: UiText) -> &'static str {
 const fn settings_text(key: UiText) -> &'static str {
     match key {
         UiText::OpenMwConfig => "OpenMW-config",
-        UiText::OpenMwPlugins => "OpenMW-plugin",
         UiText::UsingOpenMwAutodetection => "Använder automatisk OpenMW-detektering.",
         UiText::OpenMwConfigCannotChangeWhileRunning => {
             "OpenMW-config kan inte ändras medan en körning pågår."

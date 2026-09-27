@@ -64,10 +64,6 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Параметры запуска",
-        UiText::AddFiles => "Добавить плагины...",
-        UiText::RemoveSelectedTarget => "Удалить выбранное",
-        UiText::ClearTargets => "Очистить",
-        UiText::EmptyTargetList => "Целевые плагины не добавлены.",
         UiText::StartConversion => "Начать конвертацию",
         UiText::WriteChanges => "Записать изменения",
         UiText::FixPlugins => "Исправить плагины",
@@ -75,7 +71,9 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::UnclipIntro => {
             "Исправляет зависшую, закопанную и пересекающуюся траву в плагинах ниже. Плагины перезаписываются на месте; нетронутый оригинал сохраняется как <имя>.greenmote-original."
         }
-        UiText::DropPluginFilesHint => "Перетащите файлы плагинов сюда",
+        UiText::ReloadList => "Обновить список",
+        UiText::NoGroundcoverPlugins => "В openmw.cfg нет плагинов groundcover=.",
+        UiText::PluginNotFound => "не найден",
         UiText::DryRun => "Пробный запуск",
         UiText::DebugDiagnostics => "Отладочная диагностика",
         UiText::AutoEnableGeneratedPlugins => "Автоматически включать созданные плагины",
@@ -127,7 +125,6 @@ const fn dialog_text(key: UiText) -> &'static str {
             "Выберите допустимый путь к конфигурации OpenMW перед продолжением."
         }
         UiText::SelectOpenMwConfig => "Выбрать конфигурацию OpenMW",
-        UiText::SelectUnclipTargetPlugins => "Выбрать целевые плагины Unclip",
         _ => unreachable!(),
     }
 }
@@ -135,7 +132,6 @@ const fn dialog_text(key: UiText) -> &'static str {
 const fn settings_text(key: UiText) -> &'static str {
     match key {
         UiText::OpenMwConfig => "Конфигурация OpenMW",
-        UiText::OpenMwPlugins => "Плагины OpenMW",
         UiText::UsingOpenMwAutodetection => "Используется автообнаружение OpenMW.",
         UiText::OpenMwConfigCannotChangeWhileRunning => {
             "Конфигурацию OpenMW нельзя менять во время выполнения."

@@ -1,18 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::{
-    ffi::{OsStr, OsString},
-    io,
-    path::{Path, PathBuf},
-    process::Command,
-    sync::mpsc,
-    thread,
-};
+use std::{ffi::OsString, io, path::Path, process::Command, sync::mpsc, thread};
 
 use eframe::egui;
 
 use crate::{
-    groundcover::{self, CancellationToken, ConversionEvent, ConversionPhase},
+    groundcover::{
+        self, CancellationToken, ConversionEvent, ConversionPhase,
+        openmw::{self, GroundcoverEntry},
+    },
     unclip::{self, UnclipArgs},
 };
 
@@ -60,9 +56,11 @@ enum WorkerKind {
 #[derive(Default)]
 struct UnclipUiState {
     run_options: UnclipRunOptions,
-    selected_target: Option<usize>,
     pending_write_confirmation: bool,
+    /// One status per entry in `run_options.entries`.
     target_statuses: Vec<UnclipTargetStatus>,
+    /// Entry index of each target in the running batch, in batch order.
+    run_indices: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -150,10 +148,12 @@ impl ConvertUiState {
         self.saved_run_options = options;
     }
 
-    pub(super) fn sync_unclip_run_options(&mut self, options: UnclipRunOptions) {
-        self.unclip.run_options = options;
-        self.unclip.selected_target = None;
+    /// Replaces the groundcover plugin list, keeping the write choice.
+    pub(super) fn sync_unclip_entries(&mut self, entries: Vec<GroundcoverEntry>) {
+        self.unclip.run_options =
+            UnclipRunOptions::from_entries(entries, self.unclip.run_options.write);
         self.unclip.pending_write_confirmation = false;
+        self.unclip.run_indices.clear();
         self.reset_unclip_target_statuses();
     }
 
@@ -233,65 +233,9 @@ impl ConvertUiState {
         self.unclip.pending_write_confirmation
     }
 
-    fn selected_unclip_target(&self) -> Option<usize> {
-        let selected = self.unclip.selected_target?;
-        (selected < self.unclip.run_options.targets.len()).then_some(selected)
-    }
-
-    fn set_selected_unclip_target(&mut self, selected: Option<usize>) {
-        self.unclip.selected_target =
-            selected.filter(|index| *index < self.unclip.run_options.targets.len());
-    }
-
-    fn add_unclip_target(&mut self, target: impl Into<String>) -> bool {
-        let added = self.unclip.run_options.add_target(target);
-        if added {
-            self.unclip.selected_target = self.unclip.run_options.targets.len().checked_sub(1);
-            self.unclip
-                .target_statuses
-                .push(UnclipTargetStatus::Pending);
-        }
-
-        added
-    }
-
-    /// Adds every dropped path that looks like a plugin file. Returns how many were added.
-    fn add_dropped_unclip_targets(&mut self, paths: impl IntoIterator<Item = PathBuf>) -> usize {
-        paths
-            .into_iter()
-            .filter(|path| is_plugin_path(path))
-            .filter(|path| self.add_unclip_target(path.display().to_string()))
-            .count()
-    }
-
-    fn remove_selected_unclip_target(&mut self) -> bool {
-        let Some(selected) = self.selected_unclip_target() else {
-            return false;
-        };
-
-        let removed = self.unclip.run_options.remove_target(selected);
-        if removed {
-            self.unclip.target_statuses.remove(selected);
-            let len = self.unclip.run_options.targets.len();
-            self.unclip.selected_target = if len == 0 {
-                None
-            } else {
-                Some(selected.min(len - 1))
-            };
-        }
-
-        removed
-    }
-
-    fn clear_unclip_targets(&mut self) {
-        self.unclip.run_options.clear_targets();
-        self.unclip.selected_target = None;
-        self.unclip.target_statuses.clear();
-    }
-
     fn reset_unclip_target_statuses(&mut self) {
         self.unclip.target_statuses =
-            vec![UnclipTargetStatus::Pending; self.unclip.run_options.targets.len()];
+            vec![UnclipTargetStatus::Pending; self.unclip.run_options.entries.len()];
     }
 
     fn run_options_differ_from_saved(&self) -> bool {
@@ -315,8 +259,26 @@ impl GreenmoteApp {
         self.show_run_output(ui, ctx);
     }
 
+    /// Re-reads the `groundcover=` list from the session's `openmw.cfg`.
+    pub(super) fn reload_unclip_plugins(&mut self) {
+        let openmw_cfg = self.session_openmw_cfg.clone();
+        self.reload_unclip_plugins_from(openmw_cfg.as_deref());
+    }
+
+    pub(super) fn reload_unclip_plugins_from(&mut self, openmw_cfg: Option<&Path>) {
+        match openmw::load_config_from_path(openmw_cfg) {
+            Ok(config) => {
+                let entries = openmw::groundcover_plugins(&config);
+                self.convert.sync_unclip_entries(entries);
+            }
+            Err(error) => {
+                self.convert.sync_unclip_entries(Vec::new());
+                self.set_status(format!("Failed to read groundcover plugins: {error}"));
+            }
+        }
+    }
+
     pub(super) fn show_unclip_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        self.collect_dropped_unclip_targets(ctx);
         self.show_unclip_heading(ui);
         self.show_unclip_panel(ui);
         self.show_unclip_action_row(ui, ctx);
@@ -355,42 +317,31 @@ impl GreenmoteApp {
         ui.heading(self.localizer.text(UiText::Convert));
     }
 
-    fn show_unclip_heading(&self, ui: &mut egui::Ui) {
-        ui.heading(self.localizer.text(UiText::Unclip));
+    fn show_unclip_heading(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading(self.localizer.text(UiText::Unclip));
+            if ui
+                .add_enabled(
+                    !self.convert.running,
+                    egui::Button::new(self.localizer.text(UiText::ReloadList)).small(),
+                )
+                .clicked()
+            {
+                self.reload_unclip_plugins();
+            }
+        });
         ui.add(
             egui::Label::new(self.localizer.text(UiText::UnclipIntro))
                 .wrap_mode(egui::TextWrapMode::Wrap),
         );
     }
 
-    fn collect_dropped_unclip_targets(&mut self, ctx: &egui::Context) {
-        if self.convert.running {
-            return;
-        }
-
-        let dropped = ctx.input(|input| input.raw.dropped_files.clone());
-        if dropped.is_empty() {
-            return;
-        }
-
-        self.convert
-            .add_dropped_unclip_targets(dropped.iter().map(|file| file.path().to_path_buf()));
-    }
-
     fn show_unclip_panel(&mut self, ui: &mut egui::Ui) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_width(finite_widget_extent(ui.available_width()));
             ui.add_enabled_ui(!self.convert.running, |ui| {
-                self.show_selected_unclip_target_list(ui);
-                if self.convert.unclip.run_options.targets.is_empty() {
-                    ui.label(
-                        egui::RichText::new(self.localizer.text(UiText::DropPluginFilesHint))
-                            .weak()
-                            .italics(),
-                    );
-                }
-                self.show_unclip_target_actions(ui);
-
+                self.show_unclip_plugin_list(ui);
+                ui.add_space(4.0);
                 ui.checkbox(
                     &mut self.convert.unclip.run_options.write,
                     self.localizer.text(UiText::WriteChanges),
@@ -399,80 +350,39 @@ impl GreenmoteApp {
         });
     }
 
-    fn show_selected_unclip_target_list(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(finite_widget_extent(ui.available_width()));
-            if self.convert.unclip.run_options.targets.is_empty() {
-                ui.label(egui::RichText::new(self.localizer.text(UiText::EmptyTargetList)).weak());
-            } else {
-                egui::ScrollArea::vertical()
-                    .max_height(120.0)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        let selected_target = self.convert.selected_unclip_target();
-                        let mut next_selected = selected_target;
-                        for (index, target) in
-                            self.convert.unclip.run_options.targets.iter().enumerate()
-                        {
-                            let status = self
-                                .convert
-                                .unclip
-                                .target_statuses
-                                .get(index)
-                                .copied()
-                                .unwrap_or(UnclipTargetStatus::Pending);
-                            if ui
-                                .selectable_label(
-                                    selected_target == Some(index),
-                                    format!(
-                                        "[{}] {}",
-                                        self.localizer.text(status.text_key()),
-                                        target.plugin
-                                    ),
-                                )
-                                .clicked()
-                            {
-                                next_selected = Some(index);
-                            }
-                        }
-                        self.convert.set_selected_unclip_target(next_selected);
-                    });
-            }
-        });
-    }
+    fn show_unclip_plugin_list(&mut self, ui: &mut egui::Ui) {
+        if self.convert.unclip.run_options.entries.is_empty() {
+            ui.label(egui::RichText::new(self.localizer.text(UiText::NoGroundcoverPlugins)).weak());
+            return;
+        }
 
-    fn show_unclip_target_actions(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(self.localizer.text(UiText::AddFiles)).clicked()
-                && let Some(paths) = select_plugin_files(self.localizer)
-            {
-                for path in paths {
-                    self.convert.add_unclip_target(path.display().to_string());
+        let localizer = self.localizer;
+        let statuses = self.convert.unclip.target_statuses.clone();
+        let entries = &mut self.convert.unclip.run_options.entries;
+        egui::ScrollArea::vertical()
+            .max_height(160.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for (index, entry) in entries.iter_mut().enumerate() {
+                    let status = statuses.get(index).copied().unwrap_or_default();
+                    let mut label = entry.name.clone();
+                    if status != UnclipTargetStatus::Pending {
+                        label = format!("{label} [{}]", localizer.text(status.text_key()));
+                    }
+                    if entry.path.is_some() {
+                        ui.checkbox(&mut entry.checked, label);
+                    } else {
+                        let mut never_checked = false;
+                        ui.add_enabled(
+                            false,
+                            egui::Checkbox::new(
+                                &mut never_checked,
+                                format!("{label} ({})", localizer.text(UiText::PluginNotFound)),
+                            ),
+                        );
+                    }
                 }
-            }
-
-            let can_remove = self.convert.selected_unclip_target().is_some();
-            if ui
-                .add_enabled(
-                    can_remove,
-                    egui::Button::new(self.localizer.text(UiText::RemoveSelectedTarget)),
-                )
-                .clicked()
-            {
-                self.convert.remove_selected_unclip_target();
-            }
-
-            let can_clear = !self.convert.unclip.run_options.targets.is_empty();
-            if ui
-                .add_enabled(
-                    can_clear,
-                    egui::Button::new(self.localizer.text(UiText::ClearTargets)),
-                )
-                .clicked()
-            {
-                self.convert.clear_unclip_targets();
-            }
-        });
+            });
     }
 
     fn show_convert_action_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -691,15 +601,7 @@ impl GreenmoteApp {
             return;
         }
 
-        let targets = self
-            .convert
-            .unclip
-            .run_options
-            .targets
-            .iter()
-            .filter(|target| !target.plugin.trim().is_empty())
-            .map(|target| target.plugin.clone())
-            .collect::<Vec<_>>();
+        let targets = self.convert.unclip.run_options.runnable_names();
         let mut confirm = false;
         let mut cancel = false;
 
@@ -895,6 +797,7 @@ impl GreenmoteApp {
         self.convert.cancellation = Some(cancellation);
         self.convert.output.clear();
         self.convert.reset_unclip_target_statuses();
+        self.convert.unclip.run_indices = self.convert.unclip.run_options.runnable_indices();
         if self.convert.unclip.run_options.write {
             self.set_status(self.localizer.text(UiText::WritingUnclipBatch));
         } else {
@@ -1008,7 +911,16 @@ impl GreenmoteApp {
             GuiEvent::Output(output) => self.convert.output.push_str(&output),
             GuiEvent::Progress(event) => self.handle_progress_event(event),
             GuiEvent::UnclipTargetStatus { index, status } => {
-                if let Some(target_status) = self.convert.unclip.target_statuses.get_mut(index) {
+                let entry_index = self
+                    .convert
+                    .unclip
+                    .run_indices
+                    .get(index)
+                    .copied()
+                    .unwrap_or(index);
+                if let Some(target_status) =
+                    self.convert.unclip.target_statuses.get_mut(entry_index)
+                {
                     *target_status = status;
                 }
             }
@@ -1462,17 +1374,6 @@ fn unclip_target_label(args: &UnclipArgs) -> String {
     )
 }
 
-/// True when the path has a Morrowind/OpenMW plugin extension (case-insensitive).
-fn is_plugin_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| {
-            ["esp", "esm", "omwaddon"]
-                .iter()
-                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-        })
-}
-
 fn summarize_unclip_statuses(statuses: &[UnclipTargetStatus]) -> UnclipBatchSummary {
     statuses
         .iter()
@@ -1574,16 +1475,6 @@ fn open_path_native(path: &Path) -> io::Result<()> {
         .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no path opener available")))
 }
 
-fn select_plugin_files(localizer: super::Localizer) -> Option<Vec<std::path::PathBuf>> {
-    rfd::FileDialog::new()
-        .set_title(localizer.text(UiText::SelectUnclipTargetPlugins))
-        .add_filter(
-            localizer.text(UiText::OpenMwPlugins),
-            &["omwaddon", "esp", "esm"],
-        )
-        .pick_files()
-}
-
 #[cfg(target_os = "windows")]
 fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
     vec![OpenCommand {
@@ -1625,17 +1516,14 @@ fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        ffi::OsString,
-        io,
-        path::{Path, PathBuf},
-    };
+    use std::{ffi::OsString, io, path::Path};
 
     use super::{
-        ConvertRunOptions, ConvertUiState, UnclipRunOptions, UnclipTargetStatus, egui,
+        ConvertRunOptions, ConvertUiState, GuiEvent, UnclipRunOptions, UnclipTargetStatus, egui,
         loaded_openmw_config_status, run_unclip_batch, unclip_target_label,
     };
-    use crate::gui::run_options::UnclipTargetRunOption;
+    use crate::groundcover::openmw::GroundcoverEntry;
+    use crate::gui::run_options::GroundcoverTarget;
     use crate::{
         groundcover::CancellationToken,
         gui::{AppTab, GreenmoteApp, UiLanguage},
@@ -1719,23 +1607,6 @@ mod tests {
     }
 
     #[test]
-    fn unclip_target_state_add_remove_and_clear_updates_selection() {
-        let mut state = ConvertUiState::ready();
-
-        assert!(state.add_unclip_target("first.omwaddon"));
-        assert!(state.add_unclip_target("second.omwaddon"));
-        assert_eq!(state.selected_unclip_target(), Some(1));
-
-        assert!(state.remove_selected_unclip_target());
-        assert_eq!(state.unclip.run_options.targets, [target("first.omwaddon")]);
-        assert_eq!(state.selected_unclip_target(), Some(0));
-
-        state.clear_unclip_targets();
-        assert!(state.unclip.run_options.targets.is_empty());
-        assert_eq!(state.selected_unclip_target(), None);
-    }
-
-    #[test]
     fn loaded_openmw_config_status_includes_path() {
         let path = Path::new("/tmp/openmw.cfg");
 
@@ -1749,7 +1620,7 @@ mod tests {
     fn pending_unclip_write_confirmation_cannot_start_after_worker_becomes_active() {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
-            targets: vec![target("target.omwaddon")],
+            entries: vec![target("target.omwaddon")],
             write: true,
         };
         app.convert.unclip.pending_write_confirmation = true;
@@ -1772,7 +1643,7 @@ mod tests {
         let mut app = GreenmoteApp::default();
         app.settings.clear_unclip_write_actions_for_test();
         app.convert.unclip.run_options = UnclipRunOptions {
-            targets: vec![target("target.omwaddon")],
+            entries: vec![target("target.omwaddon")],
             write: true,
         };
 
@@ -1788,7 +1659,7 @@ mod tests {
     fn settings_sync_updates_unclip_write_without_forcing_true() {
         let mut state = ConvertUiState::ready();
         state.unclip.run_options = UnclipRunOptions {
-            targets: vec![target("target.omwaddon")],
+            entries: vec![target("target.omwaddon")],
             write: true,
         };
         state.unclip.pending_write_confirmation = true;
@@ -1797,7 +1668,7 @@ mod tests {
 
         assert!(!state.unclip.run_options.write);
         assert_eq!(
-            state.unclip.run_options.targets,
+            state.unclip.run_options.entries,
             [target("target.omwaddon")]
         );
         assert!(!state.unclip.pending_write_confirmation);
@@ -1824,7 +1695,7 @@ mod tests {
     fn unclip_validation_accepts_multiple_usable_targets_for_batch_runs() {
         let mut app = GreenmoteApp::default();
         app.convert.unclip.run_options = UnclipRunOptions {
-            targets: vec![target("first.omwaddon"), target("second.omwaddon")],
+            entries: vec![target("first.omwaddon"), target("second.omwaddon")],
             write: false,
         };
 
@@ -1877,32 +1748,6 @@ mod tests {
             unclip_target_label(&UnclipArgs::default()),
             "(no target plugin)"
         );
-    }
-
-    #[test]
-    fn dropped_files_add_only_plugin_paths() {
-        let mut state = ConvertUiState::ready();
-
-        let added = state.add_dropped_unclip_targets([
-            PathBuf::from("/mods/Grass.ESP"),
-            PathBuf::from("/mods/grass.omwaddon"),
-            PathBuf::from("/mods/readme.txt"),
-            PathBuf::from("/mods/Grass.ESP"),
-            PathBuf::from("/mods/base.esm"),
-            PathBuf::from("/mods/no_extension"),
-        ]);
-
-        assert_eq!(added, 3);
-        assert_eq!(
-            state.unclip.run_options.targets,
-            [
-                target("/mods/Grass.ESP"),
-                target("/mods/grass.omwaddon"),
-                target("/mods/base.esm"),
-            ]
-        );
-        assert_eq!(state.unclip.target_statuses.len(), 3);
-        assert_eq!(state.selected_unclip_target(), Some(2));
     }
 
     #[test]
@@ -2107,21 +1952,91 @@ mod tests {
             .collect()
     }
 
-    fn target(plugin: &str) -> UnclipTargetRunOption {
-        UnclipTargetRunOption::new(plugin)
+    fn target(name: &str) -> GroundcoverTarget {
+        GroundcoverTarget {
+            name: name.to_owned(),
+            path: Some(std::path::PathBuf::from("/data").join(name)),
+            checked: true,
+        }
+    }
+
+    fn missing(name: &str) -> GroundcoverTarget {
+        GroundcoverTarget {
+            name: name.to_owned(),
+            path: None,
+            checked: false,
+        }
     }
 
     #[test]
-    fn unclip_validation_rejects_blank_target_list() {
+    fn unclip_validation_rejects_when_no_entry_is_checked() {
         let mut app = GreenmoteApp::default();
+        let mut unchecked = target("groundcover.omwaddon");
+        unchecked.checked = false;
         app.convert.unclip.run_options = UnclipRunOptions {
-            targets: vec![target(" ")],
+            entries: vec![unchecked, missing("gone.omwaddon")],
             write: false,
         };
 
         let error = app.validate_unclip_run().unwrap_err();
 
-        assert_eq!(error, "Choose a target plugin before running Unclip.");
+        assert_eq!(
+            error,
+            "Check at least one groundcover plugin before running Unclip."
+        );
+    }
+
+    #[test]
+    fn sync_unclip_entries_checks_found_plugins_and_resets_statuses() {
+        let mut state = ConvertUiState::ready();
+        state.unclip.run_options.write = false;
+        state.unclip.pending_write_confirmation = true;
+        state.unclip.target_statuses = vec![UnclipTargetStatus::Failed];
+
+        state.sync_unclip_entries(vec![
+            GroundcoverEntry {
+                name: "present.omwaddon".to_owned(),
+                path: Some("/data/present.omwaddon".into()),
+            },
+            GroundcoverEntry {
+                name: "missing.omwaddon".to_owned(),
+                path: None,
+            },
+        ]);
+
+        assert_eq!(
+            state.unclip.run_options.entries,
+            [target("present.omwaddon"), missing("missing.omwaddon")]
+        );
+        assert!(!state.unclip.run_options.write);
+        assert!(!state.unclip.pending_write_confirmation);
+        assert_eq!(
+            state.unclip.target_statuses,
+            [UnclipTargetStatus::Pending, UnclipTargetStatus::Pending]
+        );
+    }
+
+    #[test]
+    fn unclip_status_events_map_batch_indices_to_entries() {
+        let mut app = GreenmoteApp::default();
+        let mut skipped = target("first.omwaddon");
+        skipped.checked = false;
+        app.convert.unclip.run_options = UnclipRunOptions {
+            entries: vec![skipped, target("second.omwaddon")],
+            write: false,
+        };
+        app.convert.reset_unclip_target_statuses();
+        app.convert.unclip.run_indices = app.convert.unclip.run_options.runnable_indices();
+
+        app.handle_gui_event(GuiEvent::UnclipTargetStatus {
+            index: 0,
+            status: UnclipTargetStatus::Succeeded,
+        });
+
+        assert_eq!(
+            app.convert.unclip.target_statuses,
+            [UnclipTargetStatus::Pending, UnclipTargetStatus::Succeeded]
+        );
     }
 
     #[test]
