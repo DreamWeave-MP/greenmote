@@ -40,17 +40,19 @@ pub(crate) struct TerrainAngle {
 pub(crate) struct TerrainTextureIndex {
     lands: TerrainTextureLandMap,
     ltex_paths: LtexPathMap,
+    /// Texture keys that match the road filter, computed once so hot loops never run regexes.
+    roads: Option<RoadMask>,
+}
+
+struct RoadMask {
+    keys: rustc_hash::FxHashSet<(usize, u32)>,
+    default_texture: bool,
 }
 
 #[derive(Clone, Copy)]
 struct TerrainTextureLand {
     plugin_index: usize,
     indices: [[u16; LAND_TEXTURE_GRID]; LAND_TEXTURE_GRID],
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TerrainTextureSample {
-    pub(crate) path: String,
 }
 
 impl TerrainIndex {
@@ -210,7 +212,51 @@ impl TerrainTextureIndex {
             }
         }
 
-        Self { lands, ltex_paths }
+        Self {
+            lands,
+            ltex_paths,
+            roads: None,
+        }
+    }
+
+    /// Evaluates the road filter once for every known texture so [`Self::is_road_at`] is a
+    /// table lookup.
+    pub(crate) fn precompute_roads(&mut self, filter: &RoadTextureFilter) {
+        self.roads = Some(RoadMask {
+            keys: self
+                .ltex_paths
+                .iter()
+                .filter(|(_, path)| filter.includes(path))
+                .map(|(key, _)| *key)
+                .collect(),
+            default_texture: filter.includes(DEFAULT_LAND_TEXTURE),
+        });
+    }
+
+    /// Whether the texture rendered under a world XY position is a road.
+    #[must_use]
+    pub(crate) fn is_road_at(
+        &self,
+        world_x: f32,
+        world_y: f32,
+        filter: &RoadTextureFilter,
+    ) -> bool {
+        let Some(mask) = &self.roads else {
+            return self.matches_road_at(world_x, world_y, filter).is_some();
+        };
+        let (sample_x, sample_y) = corrected_texture_sample_position(world_x, world_y);
+        let cell = world_cell(sample_x, sample_y);
+        let Some(land) = self.lands.get(&cell) else {
+            return false;
+        };
+        let (grid_x, grid_y) = texture_grid_coord(sample_x, sample_y, cell);
+        let vtex = land.indices[grid_y][grid_x];
+        if vtex == 0 {
+            mask.default_texture
+        } else {
+            mask.keys
+                .contains(&(land.plugin_index, u32::from(vtex - 1)))
+        }
     }
 
     #[cfg(test)]
@@ -235,35 +281,37 @@ impl TerrainTextureIndex {
                 .into_iter()
                 .map(|(key, path)| (key, normalize_texture_path(&path)))
                 .collect(),
+            roads: None,
         }
     }
 
+    /// Texture path rendered under a world XY position, borrowed from the index.
     #[must_use]
-    pub(crate) fn sample_at(&self, world_x: f32, world_y: f32) -> Option<TerrainTextureSample> {
+    pub(crate) fn path_at(&self, world_x: f32, world_y: f32) -> Option<&str> {
         let (sample_x, sample_y) = corrected_texture_sample_position(world_x, world_y);
         let cell = world_cell(sample_x, sample_y);
         let land = self.lands.get(&cell)?;
         let (grid_x, grid_y) = texture_grid_coord(sample_x, sample_y, cell);
         let vtex = land.indices[grid_y][grid_x];
-        let path = if vtex == 0 {
-            DEFAULT_LAND_TEXTURE.to_owned()
+        if vtex == 0 {
+            Some(DEFAULT_LAND_TEXTURE)
         } else {
             self.ltex_paths
-                .get(&(land.plugin_index, u32::from(vtex - 1)))?
-                .clone()
-        };
-        Some(TerrainTextureSample { path })
+                .get(&(land.plugin_index, u32::from(vtex - 1)))
+                .map(String::as_str)
+        }
     }
 
+    /// The road texture path under a world XY position, when the filter matches it.
     #[must_use]
     pub(crate) fn matches_road_at(
         &self,
         world_x: f32,
         world_y: f32,
         filter: &RoadTextureFilter,
-    ) -> Option<TerrainTextureSample> {
-        let sample = self.sample_at(world_x, world_y)?;
-        filter.includes(&sample.path).then_some(sample)
+    ) -> Option<&str> {
+        let path = self.path_at(world_x, world_y)?;
+        filter.includes(path).then_some(path)
     }
 }
 
@@ -576,9 +624,9 @@ mod tests {
             ],
         );
 
-        let sample = textures.sample_at(512.0, -128.0).unwrap();
+        let sample = textures.path_at(512.0, -128.0).unwrap();
 
-        assert_eq!(sample.path, "textures/landscape/tx_road_01.dds");
+        assert_eq!(sample, "textures/landscape/tx_road_01.dds");
     }
 
     #[test]
@@ -596,11 +644,11 @@ mod tests {
         );
 
         assert_eq!(
-            textures.sample_at(0.0, -129.0).unwrap().path,
+            textures.path_at(0.0, -129.0).unwrap(),
             "textures/landscape/neg_road.dds"
         );
         assert_eq!(
-            textures.sample_at(8_320.0, -128.0).unwrap().path,
+            textures.path_at(8_320.0, -128.0).unwrap(),
             "textures/landscape/border_road.dds"
         );
     }
@@ -615,11 +663,11 @@ mod tests {
         );
 
         assert_eq!(
-            textures.sample_at(128.0, -128.0).unwrap().path,
+            textures.path_at(128.0, -128.0).unwrap(),
             DEFAULT_LAND_TEXTURE
         );
         assert_eq!(
-            textures.sample_at(128.0, 512.0).unwrap().path,
+            textures.path_at(128.0, 512.0).unwrap(),
             "textures/landscape/tx_dirtroad_01.dds"
         );
     }
@@ -630,8 +678,8 @@ mod tests {
         indices[0][0] = 2;
         let textures = TerrainTextureIndex::from_parts([((0, 0), 0, indices)], []);
 
-        assert!(textures.sample_at(128.0, -128.0).is_none());
-        assert!(textures.sample_at(8_320.0, -128.0).is_none());
+        assert!(textures.path_at(128.0, -128.0).is_none());
+        assert!(textures.path_at(8_320.0, -128.0).is_none());
     }
 
     #[test]
@@ -682,10 +730,10 @@ mod tests {
         );
 
         assert_eq!(
-            textures.sample_at(128.0, -128.0).unwrap().path,
+            textures.path_at(128.0, -128.0).unwrap(),
             "textures/landscape/tx_road_new.dds"
         );
-        assert!(deleted.sample_at(128.0, -128.0).is_none());
+        assert!(deleted.path_at(128.0, -128.0).is_none());
     }
 
     #[test]

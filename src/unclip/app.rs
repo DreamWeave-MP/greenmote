@@ -249,10 +249,11 @@ fn load_world(profiler: &mut Profiler, input: &WorldInput<'_>) -> io::Result<Wor
             .flat_map(Plugin::objects_of_type::<Landscape>),
         &active_cells,
     );
-    let textures = TerrainTextureIndex::from_plugins_in_cells(
+    let mut textures = TerrainTextureIndex::from_plugins_in_cells(
         context_plugins.iter().map(ContextPlugin::as_plugin),
         &active_cells,
     );
+    textures.precompute_roads(&policy.road_texture_filter);
     profiler.phase("statics, terrain, textures");
     super::check_cancellation(cancellation)?;
 

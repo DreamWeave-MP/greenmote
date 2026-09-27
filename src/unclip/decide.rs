@@ -281,7 +281,12 @@ fn decide_verdict(input: &RefInput<'_>, surveyor: &Surveyor<'_>) -> (Verdict, Op
     }
     let mut notes = Vec::new();
 
-    if let Some(texture) = surveyor.road_at(x, y) {
+    let road = if surveyor.is_road_at(x, y) {
+        surveyor.road_at(x, y)
+    } else {
+        None
+    };
+    if let Some(texture) = road {
         if policy.actions.road_delete() {
             return (
                 Verdict::Delete {
@@ -402,7 +407,7 @@ fn resolve_statics(
         notes.push(KeepReason::StaticActionsDisabled { occluder });
         return StaticOutcome::Stay;
     }
-    match relocate(
+    let relocated = relocate(
         geometry,
         &input.transform,
         placement.contact_before,
@@ -410,7 +415,8 @@ fn resolve_statics(
         input.cell,
         away,
         surveyor,
-    ) {
+    );
+    match relocated {
         Some(relocated) => StaticOutcome::Moved(relocated, occluder),
         None if actions.static_delete() => {
             StaticOutcome::Delete(DeleteReason::NoRelocation { occluder })
@@ -542,29 +548,26 @@ fn relocate(
             let Some(height) = surveyor.height_at(candidate[0], candidate[1]) else {
                 continue;
             };
-            if height < EXTERIOR_WATER_LEVEL
-                || surveyor.road_at(candidate[0], candidate[1]).is_some()
-            {
+            if height < EXTERIOR_WATER_LEVEL || surveyor.is_road_at(candidate[0], candidate[1]) {
                 continue;
             }
-            let Some(placement) = place(
+            let placed = place(
                 geometry,
                 current,
                 contact_before,
                 candidate,
                 surveyor,
                 false,
-            ) else {
+            );
+            let Some(placement) = placed else {
                 continue;
             };
             if Surveyor::submerged_ground(&placement.terrain) {
                 continue;
             }
             let collider = Surveyor::collider(geometry, &placement.transform);
-            if matches!(
-                Surveyor::occlusion_among(&nearby, &collider),
-                Occlusion::Clear
-            ) {
+            let clear = !Surveyor::blocked_by_any(&nearby, &collider);
+            if clear {
                 return Some(placement);
             }
         }

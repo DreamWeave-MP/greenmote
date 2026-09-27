@@ -107,7 +107,14 @@ impl Surveyor<'_> {
     pub(crate) fn road_at(&self, x: f32, y: f32) -> Option<String> {
         self.textures
             .matches_road_at(x, y, &self.policy.road_texture_filter)
-            .map(|sample| sample.path)
+            .map(str::to_owned)
+    }
+
+    /// Whether the texture under a world XY position is a road, without building a path.
+    #[must_use]
+    pub(crate) fn is_road_at(&self, x: f32, y: f32) -> bool {
+        self.textures
+            .is_road_at(x, y, &self.policy.road_texture_filter)
     }
 
     /// Whether the terrain under a world XY position lies below the exterior water plane.
@@ -146,16 +153,31 @@ impl Surveyor<'_> {
         candidates: &[&'o StaticOccluder],
         collider: &RapierCollider,
     ) -> Occlusion<'o> {
+        // A volume inside a closed mesh also counts as intersecting it (its centre is inside),
+        // so the cheap overlap test gates the eight-ray containment test.
         let mut intersecting = None;
         for &occluder in candidates {
+            if !occluder.collider.intersects(collider) {
+                continue;
+            }
             if occluder.collider.contains(collider) {
                 return Occlusion::Inside(occluder);
             }
-            if intersecting.is_none() && occluder.collider.intersects(collider) {
-                intersecting = Some(occluder);
-            }
+            intersecting.get_or_insert(occluder);
         }
         intersecting.map_or(Occlusion::Clear, Occlusion::Intersects)
+    }
+
+    /// Whether any of the occluders overlaps the collider at all. Relocation probes only need
+    /// this, never the containment distinction.
+    #[must_use]
+    pub(crate) fn blocked_by_any(
+        candidates: &[&StaticOccluder],
+        collider: &RapierCollider,
+    ) -> bool {
+        candidates
+            .iter()
+            .any(|occluder| occluder.collider.intersects(collider))
     }
 }
 

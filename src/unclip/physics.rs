@@ -7,7 +7,7 @@ use rapier3d::{
     math::{Pose3, Rot3, Vec3 as RapierVec3},
     parry::{
         query::{PointQuery, details::intersection_test_support_map_support_map},
-        shape::{Cuboid, Triangle},
+        shape::Cuboid,
     },
 };
 
@@ -219,6 +219,9 @@ impl RapierPart {
             return false;
         }
 
+        // Triangles go into the cuboid's own frame, where the cuboid is axis-aligned and the
+        // classic 13-axis separating-axis test applies.
+        let to_cuboid = local_pose.inverse();
         let touches_surface = triangles
             .chunks(TRIANGLE_BLOCK)
             .zip(triangle_bounds.chunks(TRIANGLE_BLOCK))
@@ -232,11 +235,11 @@ impl RapierPart {
                     .zip(triangle_bounds)
                     .any(|(triangle, bounds)| {
                         aabbs_overlap(local_min, local_max, bounds.min.into(), bounds.max.into())
-                            && intersection_test_support_map_support_map(
-                                &local_pose,
-                                &local_triangle(triangle),
-                                &local_cuboid,
+                            && triangle_box_overlap(
+                                triangle.map(|vertex| to_cuboid.transform_point(vertex.into())),
+                                local_cuboid.half_extents,
                             )
+                            .is_some()
                     })
             });
         let centre = local_pose.translation;
@@ -395,9 +398,39 @@ fn ray_hits_triangle(
     })
 }
 
-fn local_triangle(triangle: &LocalTriangle) -> Triangle {
-    let [first, second, third] = triangle.map(RapierVec3::from);
-    Triangle::new(first, second, third)
+/// Akenine-Möller triangle/box overlap: the triangle's vertices are in the frame of a box
+/// centred at the origin with the given half extents. Tests the 3 box axes, the triangle
+/// normal and the 9 edge cross products; `None` when some axis separates them, otherwise the
+/// smallest overlap over the tested axes (the penetration depth along the best axis).
+fn triangle_box_overlap(vertices: [RapierVec3; 3], half_extents: RapierVec3) -> Option<f32> {
+    let [v0, v1, v2] = vertices;
+    let edges = [v1 - v0, v2 - v1, v0 - v2];
+    let mut depth = f32::INFINITY;
+    let mut test = |axis: RapierVec3| -> bool {
+        let length = axis.length();
+        if length <= f32::EPSILON {
+            return true;
+        }
+        let projections = [v0.dot(axis), v1.dot(axis), v2.dot(axis)];
+        let low = projections[0].min(projections[1]).min(projections[2]);
+        let high = projections[0].max(projections[1]).max(projections[2]);
+        let radius = half_extents.dot(axis.abs());
+        if low > radius || high < -radius {
+            return false;
+        }
+        depth = depth.min((high.min(radius) - low.max(-radius)) / length);
+        true
+    };
+    let separated = !(test(RapierVec3::X)
+        && test(RapierVec3::Y)
+        && test(RapierVec3::Z)
+        && test(edges[0].cross(edges[1]))
+        && edges.iter().all(|edge| {
+            test(RapierVec3::X.cross(*edge))
+                && test(RapierVec3::Y.cross(*edge))
+                && test(RapierVec3::Z.cross(*edge))
+        }));
+    (!separated).then_some(depth)
 }
 
 fn cuboid_world_corners(cuboid: &Cuboid, pose: &Pose3) -> [RapierVec3; 8] {
@@ -463,6 +496,7 @@ fn isometry(translation: Vec3, rotation: Quat) -> Pose3 {
 mod tests {
     use super::*;
     use crate::unclip::mesh::{LocalObb, box_triangles};
+    use rapier3d::parry::shape::Triangle;
 
     #[test]
     fn broad_aabb_overlap_without_obb_collision_is_clear() {
@@ -736,6 +770,141 @@ mod tests {
         assert!(inside(&cube, RapierVec3::new(0.0, 0.0, -10.0)));
         assert!(!inside(&cube, RapierVec3::new(11.0, 0.0, 0.0)));
         assert!(!inside(&cube, RapierVec3::new(0.0, 0.0, 11.0)));
+    }
+
+    /// Fixed-seed LCG so the comparison below is reproducible without extra dependencies.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next_f32(&mut self) -> f32 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            f32::from(u16::try_from(self.0 >> 48).expect("16 high bits")) / 65_536.0
+        }
+
+        fn range(&mut self, low: f32, high: f32) -> f32 {
+            low + (high - low) * self.next_f32()
+        }
+
+        fn vec(&mut self, low: f32, high: f32) -> RapierVec3 {
+            RapierVec3::new(
+                self.range(low, high),
+                self.range(low, high),
+                self.range(low, high),
+            )
+        }
+
+        fn rotation(&mut self) -> Rot3 {
+            let axis = Vec3::new(
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+            )
+            .try_normalize()
+            .unwrap_or(Vec3::Z);
+            let quat = Quat::from_axis_angle(axis, self.range(0.0, std::f32::consts::TAU));
+            Rot3::from_xyzw(quat.x, quat.y, quat.z, quat.w)
+        }
+    }
+
+    #[test]
+    fn separating_axis_test_agrees_with_parry_gjk() {
+        use rapier3d::parry::query::distance;
+
+        // parry's GJK declares an intersection once the shapes are within a tolerance
+        // relative to their size; samples live within +-40 units, so allow 1e-4 of that
+        // hundred-unit extent either way.
+        const TOLERANCE: f32 = 0.01;
+        let mut rng = Lcg(0x5eed_1234_abcd_0001);
+        let mut overlaps = 0;
+        let mut checked = 0;
+        for sample in 0..6000 {
+            let half = RapierVec3::new(
+                rng.range(0.5, 12.0),
+                rng.range(0.5, 12.0),
+                rng.range(0.5, 25.0),
+            );
+            let cuboid = Cuboid::new(half);
+            let cuboid_pose = Pose3::from_parts(rng.vec(-20.0, 20.0), rng.rotation());
+            let mut triangle = [
+                rng.vec(-40.0, 40.0),
+                rng.vec(-40.0, 40.0),
+                rng.vec(-40.0, 40.0),
+            ];
+            // Every third sample is nudged so it just touches or just misses the box: move
+            // the triangle towards the box centre by its distance minus a tiny margin.
+            if sample % 3 == 0 {
+                let base = Triangle::new(triangle[0], triangle[1], triangle[2]);
+                let apart = distance(&cuboid_pose, &cuboid, &Pose3::IDENTITY, &base).unwrap();
+                if apart > 0.0 {
+                    let centroid = (triangle[0] + triangle[1] + triangle[2]) / 3.0;
+                    let towards = (cuboid_pose.translation - centroid).normalize_or_zero();
+                    let margin = if sample % 2 == 0 { 0.001 } else { -0.001 };
+                    let shift = towards * (apart - margin);
+                    triangle = triangle.map(|vertex| vertex + shift);
+                }
+            }
+            let parry_triangle = Triangle::new(triangle[0], triangle[1], triangle[2]);
+            let expected = intersection_test_support_map_support_map(
+                &cuboid_pose.inv_mul(&Pose3::IDENTITY),
+                &cuboid,
+                &parry_triangle,
+            );
+            let apart = distance(&cuboid_pose, &cuboid, &Pose3::IDENTITY, &parry_triangle).unwrap();
+            let to_cuboid = cuboid_pose.inverse();
+            let actual = triangle_box_overlap(triangle.map(|v| to_cuboid.transform_point(v)), half);
+
+            let ambiguous = apart < TOLERANCE && actual.is_none_or(|depth| depth < TOLERANCE);
+            if !ambiguous {
+                assert_eq!(
+                    actual.is_some(),
+                    expected,
+                    "sample {sample}: distance {apart}, depth {actual:?}"
+                );
+                checked += 1;
+            }
+            overlaps += usize::from(actual.is_some());
+        }
+        assert!(checked > 4000, "{checked} unambiguous samples");
+        assert!(overlaps > 500 && overlaps < 5500, "{overlaps} overlaps");
+    }
+
+    #[test]
+    fn separating_axis_test_handles_touching_and_near_miss_cases() {
+        let half = RapierVec3::splat(1.0);
+        let touching_vertex = [
+            RapierVec3::new(1.0, 0.0, 0.0),
+            RapierVec3::new(3.0, 1.0, 0.0),
+            RapierVec3::new(3.0, -1.0, 1.0),
+        ];
+        let near_miss = touching_vertex.map(|v| v + RapierVec3::new(0.001, 0.0, 0.0));
+        let edge_on_edge = [
+            RapierVec3::new(1.0, 1.0, -3.0),
+            RapierVec3::new(1.0, 1.0, 3.0),
+            RapierVec3::new(4.0, 4.0, 0.0),
+        ];
+        let through = [
+            RapierVec3::new(-5.0, 0.0, 0.5),
+            RapierVec3::new(5.0, 3.0, 0.5),
+            RapierVec3::new(5.0, -3.0, 0.5),
+        ];
+        // The plane x + y + z = 2.8 cuts the (1, 1, 1) corner although every vertex lies
+        // outside the box; shifted out by 0.2 the plane passes 3.4 and misses it.
+        let corner_clipping = [
+            RapierVec3::new(0.5, 0.5, 1.8),
+            RapierVec3::new(1.8, 0.5, 0.5),
+            RapierVec3::new(0.5, 1.8, 0.5),
+        ];
+        let corner_missing = corner_clipping.map(|v| v + RapierVec3::splat(0.2));
+
+        assert!(triangle_box_overlap(touching_vertex, half).is_some());
+        assert!(triangle_box_overlap(near_miss, half).is_none());
+        assert!(triangle_box_overlap(edge_on_edge, half).is_some());
+        assert!(triangle_box_overlap(through, half).is_some());
+        assert!(triangle_box_overlap(corner_clipping, half).is_some());
+        assert!(triangle_box_overlap(corner_missing, half).is_none());
     }
 
     fn inside(triangles: &[LocalTriangle], point: RapierVec3) -> bool {
