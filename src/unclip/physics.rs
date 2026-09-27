@@ -837,7 +837,9 @@ mod tests {
             // the triangle towards the box centre by its distance minus a tiny margin.
             if sample % 3 == 0 {
                 let base = Triangle::new(triangle[0], triangle[1], triangle[2]);
-                let apart = distance(&cuboid_pose, &cuboid, &Pose3::IDENTITY, &base).unwrap();
+                let apart = distance(&cuboid_pose, &cuboid, &Pose3::IDENTITY, &base)
+                    .unwrap()
+                    .distance;
                 if apart > 0.0 {
                     let centroid = (triangle[0] + triangle[1] + triangle[2]) / 3.0;
                     let towards = (cuboid_pose.translation - centroid).normalize_or_zero();
@@ -852,7 +854,9 @@ mod tests {
                 &cuboid,
                 &parry_triangle,
             );
-            let apart = distance(&cuboid_pose, &cuboid, &Pose3::IDENTITY, &parry_triangle).unwrap();
+            let apart = distance(&cuboid_pose, &cuboid, &Pose3::IDENTITY, &parry_triangle)
+                .unwrap()
+                .distance;
             let to_cuboid = cuboid_pose.inverse();
             let actual = triangle_box_overlap(triangle.map(|v| to_cuboid.transform_point(v)), half);
 
