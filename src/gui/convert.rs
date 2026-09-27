@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::{
     groundcover::{
-        self, CancellationToken, ConversionEvent, ConversionPhase,
+        self, CancellationToken, ConversionEvent, ConversionPhase, GROUNDCOVER_PLUGIN_NAME,
         openmw::{self, GroundcoverEntry},
     },
     unclip::{self, UnclipArgs},
@@ -15,6 +15,8 @@ use crate::{
 use super::{ConvertRunOptions, GreenmoteApp, UiText, UnclipRunOptions};
 
 const MAX_EVENTS_PER_FRAME: usize = 256;
+/// Height reserved for the Unclip run output so the plugin list gets the remaining space.
+const UNCLIP_OUTPUT_HEIGHT: f32 = 160.0;
 const MIN_WIDGET_SIZE: f32 = 1.0;
 
 #[derive(Default)]
@@ -148,8 +150,13 @@ impl ConvertUiState {
         self.saved_run_options = options;
     }
 
-    /// Replaces the groundcover plugin list, keeping the write choice.
+    /// Replaces the groundcover plugin list, keeping the write choice. Greenmote's own
+    /// convert output (`GROUNDCOVER_PLUGIN_NAME`) is never listed.
     pub(super) fn sync_unclip_entries(&mut self, entries: Vec<GroundcoverEntry>) {
+        let entries = entries
+            .into_iter()
+            .filter(|entry| !entry.name.eq_ignore_ascii_case(GROUNDCOVER_PLUGIN_NAME))
+            .collect();
         self.unclip.run_options =
             UnclipRunOptions::from_entries(entries, self.unclip.run_options.write);
         self.unclip.pending_write_confirmation = false;
@@ -280,12 +287,49 @@ impl GreenmoteApp {
 
     pub(super) fn show_unclip_screen(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.show_unclip_heading(ui);
-        self.show_unclip_panel(ui);
-        self.show_unclip_action_row(ui, ctx);
-        ui.separator();
 
-        self.show_run_output(ui, ctx);
+        // Controls and run output pin to the bottom; the plugin list takes whatever is left.
+        egui::Panel::bottom("unclip_controls_and_output")
+            .resizable(false)
+            .show_separator_line(true)
+            .show(ui, |ui| {
+                self.show_unclip_controls(ui, ctx);
+                ui.separator();
+                self.show_unclip_run_output(ui, ctx);
+            });
+
+        self.show_unclip_plugin_list(ui);
         self.show_unclip_write_confirmation(ctx);
+    }
+
+    fn show_unclip_controls(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.add_space(4.0);
+        ui.add_enabled_ui(!self.convert.running, |ui| {
+            ui.checkbox(
+                &mut self.convert.unclip.run_options.write,
+                self.localizer.text(UiText::WriteChanges),
+            );
+        });
+        self.show_unclip_action_row(ui, ctx);
+        ui.add_space(4.0);
+    }
+
+    fn show_unclip_run_output(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        egui::ScrollArea::vertical()
+            .id_salt("unclip_run_output")
+            .stick_to_bottom(true)
+            .max_height(UNCLIP_OUTPUT_HEIGHT)
+            .min_scrolled_height(UNCLIP_OUTPUT_HEIGHT)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width(finite_widget_extent(ui.available_width()));
+                ui.add(
+                    egui::Label::new(egui::RichText::new(self.convert.output.as_str()).monospace())
+                        .wrap_mode(egui::TextWrapMode::Wrap)
+                        .selectable(false),
+                );
+            });
+        self.show_convert_output_actions(ui, ctx);
     }
 
     fn show_run_output(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -336,52 +380,45 @@ impl GreenmoteApp {
         );
     }
 
-    fn show_unclip_panel(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(finite_widget_extent(ui.available_width()));
-            ui.add_enabled_ui(!self.convert.running, |ui| {
-                self.show_unclip_plugin_list(ui);
-                ui.add_space(4.0);
-                ui.checkbox(
-                    &mut self.convert.unclip.run_options.write,
-                    self.localizer.text(UiText::WriteChanges),
-                );
-            });
-        });
-    }
-
+    /// The checklist fills the vertical space left above the bottom controls.
     fn show_unclip_plugin_list(&mut self, ui: &mut egui::Ui) {
-        if self.convert.unclip.run_options.entries.is_empty() {
-            ui.label(egui::RichText::new(self.localizer.text(UiText::NoGroundcoverPlugins)).weak());
-            return;
-        }
-
         let localizer = self.localizer;
+        let running = self.convert.running;
         let statuses = self.convert.unclip.target_statuses.clone();
         let entries = &mut self.convert.unclip.run_options.entries;
         egui::ScrollArea::vertical()
-            .max_height(160.0)
-            .auto_shrink([false, true])
+            .id_salt("unclip_plugin_list")
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (index, entry) in entries.iter_mut().enumerate() {
-                    let status = statuses.get(index).copied().unwrap_or_default();
-                    let mut label = entry.name.clone();
-                    if status != UnclipTargetStatus::Pending {
-                        label = format!("{label} [{}]", localizer.text(status.text_key()));
-                    }
-                    if entry.path.is_some() {
-                        ui.checkbox(&mut entry.checked, label);
-                    } else {
-                        let mut never_checked = false;
-                        ui.add_enabled(
-                            false,
-                            egui::Checkbox::new(
-                                &mut never_checked,
-                                format!("{label} ({})", localizer.text(UiText::PluginNotFound)),
-                            ),
-                        );
-                    }
+                ui.set_width(finite_widget_extent(ui.available_width()));
+                if entries.is_empty() {
+                    ui.label(
+                        egui::RichText::new(localizer.text(UiText::NoGroundcoverPlugins)).weak(),
+                    );
+                    return;
                 }
+
+                ui.add_enabled_ui(!running, |ui| {
+                    for (index, entry) in entries.iter_mut().enumerate() {
+                        let status = statuses.get(index).copied().unwrap_or_default();
+                        let mut label = entry.name.clone();
+                        if status != UnclipTargetStatus::Pending {
+                            label = format!("{label} [{}]", localizer.text(status.text_key()));
+                        }
+                        if entry.path.is_some() {
+                            ui.checkbox(&mut entry.checked, label);
+                        } else {
+                            let mut never_checked = false;
+                            ui.add_enabled(
+                                false,
+                                egui::Checkbox::new(
+                                    &mut never_checked,
+                                    format!("{label} ({})", localizer.text(UiText::PluginNotFound)),
+                                ),
+                            );
+                        }
+                    }
+                });
             });
     }
 
@@ -2014,6 +2051,32 @@ mod tests {
             state.unclip.target_statuses,
             [UnclipTargetStatus::Pending, UnclipTargetStatus::Pending]
         );
+    }
+
+    #[test]
+    fn sync_unclip_entries_drops_greenmote_convert_output() {
+        let mut state = ConvertUiState::ready();
+
+        state.sync_unclip_entries(vec![
+            GroundcoverEntry {
+                name: "Groundcover.omwaddon".to_owned(),
+                path: Some("/data/Groundcover.omwaddon".into()),
+            },
+            GroundcoverEntry {
+                name: "grass.omwaddon".to_owned(),
+                path: Some("/data/grass.omwaddon".into()),
+            },
+            GroundcoverEntry {
+                name: "missing.omwaddon".to_owned(),
+                path: None,
+            },
+        ]);
+
+        assert_eq!(
+            state.unclip.run_options.entries,
+            [target("grass.omwaddon"), missing("missing.omwaddon")]
+        );
+        assert_eq!(state.unclip.target_statuses.len(), 2);
     }
 
     #[test]
