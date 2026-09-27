@@ -13,7 +13,7 @@ jobs:
       contents: write
       pages: write
       id-token: write
-    uses: DreamWeave-MP/StroggForge/.github/workflows/rustGlobalBuild.yml@v39
+    uses: DreamWeave-MP/StroggForge/.github/workflows/rustGlobalBuild.yml@v43
     secrets: inherit
     with:
       binary_names: '["greenmote"]'
