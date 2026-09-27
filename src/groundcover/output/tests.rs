@@ -240,6 +240,75 @@ fn source_plugin_refs_use_source_plugin_as_owner_master_only() {
 }
 
 #[test]
+fn split_grids_merge_into_one_record_and_the_newest_plugin_wins() {
+    let morrowind_master = master("Morrowind.esm", 79_837_557);
+    let patch_master = master("Patch.esp", 1_000);
+    let mut original = reference("flora_grass_01", 0);
+    original.translation = [100.0, 100.0, 10.0];
+    let mut moved = reference("flora_grass_01", 1);
+    moved.translation = [200.0, 200.0, 20.0];
+    let mut removed = reference("flora_grass_01", 1);
+    removed.deleted = Some(true);
+    let morrowind_cell = cell([
+        ((0, 7), original),
+        ((0, 8), reference("flora_grass_01", 0)),
+        ((0, 9), reference("flora_grass_01", 0)),
+    ]);
+    let patch_cell = cell([((1, 7), moved), ((1, 8), removed)]);
+    let plan = plan(
+        vec![static_plan(
+            morrowind_master.clone(),
+            "flora_grass_01",
+            "gm_flora_grass_01",
+        )],
+        vec![
+            cell_plan(
+                1,
+                patch_master,
+                vec![morrowind_master.clone()],
+                patch_cell,
+                "flora_grass_01",
+            ),
+            cell_plan(
+                0,
+                morrowind_master,
+                Vec::new(),
+                morrowind_cell,
+                "flora_grass_01",
+            ),
+        ],
+        BTreeSet::from(["flora_grass_01".to_owned()]),
+    );
+
+    let built = build_plugins(&plan).unwrap();
+
+    let cells: Vec<&Cell> = built.groundcover_plugin.objects_of_type::<Cell>().collect();
+    assert_eq!(cells.len(), 1, "one record per grid");
+    let merged = cells[0];
+    assert_eq!(merged.references.len(), 3);
+    // Morrowind.esm is master 1 in the generated plugin, so the keys stay (1, n).
+    assert!(
+        merged.references[&(1, 7)]
+            .translation
+            .iter()
+            .zip([200.0_f32, 200.0, 20.0])
+            .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+    );
+    assert_eq!(merged.references[&(1, 8)].deleted, Some(true));
+    assert_eq!(merged.references[&(1, 9)].deleted, None);
+
+    let deleted_cells: Vec<&Cell> = built.deleted_plugin.objects_of_type::<Cell>().collect();
+    assert_eq!(deleted_cells.len(), 1);
+    assert_eq!(deleted_cells[0].references.len(), 3);
+    assert!(
+        deleted_cells[0]
+            .references
+            .values()
+            .all(|reference| reference.deleted == Some(true))
+    );
+}
+
+#[test]
 fn source_owner_masters_follow_load_order_not_cell_plan_order() {
     let morrowind_master = master("Morrowind.esm", 79_837_557);
     let bloodmoon_master = master("Bloodmoon.esm", 9_631_798);
