@@ -24,18 +24,16 @@ macro_rules! route_text {
             | UiText::ShowPreviousItems
             | UiText::ShowNextItems => $language($key),
             UiText::RunOptions
-            | UiText::TargetPlugins
             | UiText::AddFiles
-            | UiText::AddTargetPath
-            | UiText::SetUnclipOutputPlugin
-            | UiText::ClearUnclipOutputPlugin
             | UiText::RemoveSelectedTarget
             | UiText::ClearTargets
             | UiText::EmptyTargetList
-            | UiText::TargetPathEntry
             | UiText::StartConversion
             | UiText::WriteChanges
-            | UiText::InspectPlugin
+            | UiText::FixPlugins
+            | UiText::InspectOnly
+            | UiText::UnclipIntro
+            | UiText::DropPluginFilesHint
             | UiText::DryRun
             | UiText::DebugDiagnostics
             | UiText::AutoEnableGeneratedPlugins
@@ -59,8 +57,6 @@ macro_rules! route_text {
             | UiText::UnclipTargetSkipped
             | UiText::UnclipTargetCancelled => $convert($key),
             UiText::ConfirmUnclipWriteTitle
-            | UiText::ConfirmUnclipWriteMessage
-            | UiText::EnabledWriteActions
             | UiText::UnsavedSettingsTitle
             | UiText::UnsavedSettingsMessage
             | UiText::SaveBeforeContinuing
@@ -73,8 +69,7 @@ macro_rules! route_text {
             | UiText::OpenMwConfigNotFoundMessage
             | UiText::ChooseOpenMwConfigBeforeContinuing
             | UiText::SelectOpenMwConfig
-            | UiText::SelectUnclipTargetPlugins
-            | UiText::SelectUnclipOutputPlugin => $dialogs($key),
+            | UiText::SelectUnclipTargetPlugins => $dialogs($key),
             UiText::OpenMwConfig
             | UiText::OpenMwPlugins
             | UiText::UsingOpenMwAutodetection
@@ -187,18 +182,16 @@ pub(super) enum UiText {
     Settings,
     General,
     RunOptions,
-    TargetPlugins,
     AddFiles,
-    AddTargetPath,
-    SetUnclipOutputPlugin,
-    ClearUnclipOutputPlugin,
     RemoveSelectedTarget,
     ClearTargets,
     EmptyTargetList,
-    TargetPathEntry,
     StartConversion,
     WriteChanges,
-    InspectPlugin,
+    FixPlugins,
+    InspectOnly,
+    UnclipIntro,
+    DropPluginFilesHint,
     DryRun,
     DebugDiagnostics,
     AutoEnableGeneratedPlugins,
@@ -227,8 +220,6 @@ pub(super) enum UiText {
     UnclipTargetSkipped,
     UnclipTargetCancelled,
     ConfirmUnclipWriteTitle,
-    ConfirmUnclipWriteMessage,
-    EnabledWriteActions,
     UnsavedSettingsTitle,
     UnsavedSettingsMessage,
     SaveBeforeContinuing,
@@ -242,7 +233,6 @@ pub(super) enum UiText {
     ChooseOpenMwConfigBeforeContinuing,
     SelectOpenMwConfig,
     SelectUnclipTargetPlugins,
-    SelectUnclipOutputPlugin,
     OpenMwConfig,
     OpenMwPlugins,
     UsingOpenMwAutodetection,
@@ -350,14 +340,14 @@ impl Localizer {
         }
     }
 
-    pub(super) fn unclip_target_count(self, count: usize) -> String {
+    pub(super) fn unclip_rewrite_prompt(self, count: usize) -> String {
         match self.language {
-            UiLanguage::English => english::unclip_target_count(count),
-            UiLanguage::French => french::unclip_target_count(count),
-            UiLanguage::German => german::unclip_target_count(count),
-            UiLanguage::Russian => russian::unclip_target_count(count),
-            UiLanguage::Spanish => spanish::unclip_target_count(count),
-            UiLanguage::Swedish => swedish::unclip_target_count(count),
+            UiLanguage::English => english::unclip_rewrite_prompt(count),
+            UiLanguage::French => french::unclip_rewrite_prompt(count),
+            UiLanguage::German => german::unclip_rewrite_prompt(count),
+            UiLanguage::Russian => russian::unclip_rewrite_prompt(count),
+            UiLanguage::Spanish => spanish::unclip_rewrite_prompt(count),
+            UiLanguage::Swedish => swedish::unclip_rewrite_prompt(count),
         }
     }
 
@@ -497,8 +487,19 @@ mod tests {
         let localizer = Localizer::default();
 
         assert_eq!(
-            localizer.text(UiText::ConfirmUnclipWriteMessage),
-            "Unclip will rewrite the selected plugin(s) in place and create backup files. Targets with an output path are written there instead."
+            localizer.unclip_rewrite_prompt(1),
+            "Rewrite 1 plugin in place? Originals are kept as .greenmote-original."
+        );
+        assert_eq!(
+            localizer.unclip_rewrite_prompt(3),
+            "Rewrite 3 plugins in place? Originals are kept as .greenmote-original."
+        );
+        assert_eq!(localizer.text(UiText::FixPlugins), "Fix plugins");
+        assert_eq!(localizer.text(UiText::InspectOnly), "Inspect only");
+        assert!(
+            localizer
+                .text(UiText::UnclipIntro)
+                .contains(".greenmote-original")
         );
         assert_eq!(localizer.text(UiText::FloatTolerance), "Float tolerance");
         assert_eq!(localizer.text(UiText::MaxSink), "Max sink");
@@ -521,8 +522,6 @@ mod tests {
             "Delete refs crossing exterior water (water-delete)"
         );
         assert_eq!(localizer.showing_items(1, 6, 9), "Showing 1-6 of 9");
-        assert_eq!(localizer.unclip_target_count(1), "Target: 1 plugin");
-        assert_eq!(localizer.unclip_target_count(6), "Targets: 6 plugins");
         assert_eq!(localizer.unclip_target_overflow(2), "... and 2 more");
         assert_eq!(localizer.text(UiText::UnclipTargetPending), "Pending");
 
@@ -534,7 +533,6 @@ mod tests {
             "Supprimer les refs traversant l’eau extérieure (water-delete)"
         );
         assert_eq!(french.showing_items(1, 6, 9), "Affichage de 1 à 6 sur 9");
-        assert_eq!(french.unclip_target_count(6), "Cibles : 6 plugins");
         assert_eq!(french.unclip_target_overflow(1), "... et 1 autre");
         assert_eq!(french.unclip_target_overflow(2), "... et 2 autres");
 
@@ -545,7 +543,6 @@ mod tests {
             german.text(UiText::WaterDeleteAction),
             "Refs löschen, die externen Wasserspiegel kreuzen (water-delete)"
         );
-        assert_eq!(german.unclip_target_count(6), "Ziele: 6 Plugins");
         assert_eq!(german.unclip_target_overflow(1), "... und 1 weiteres");
         assert_eq!(german.unclip_target_overflow(2), "... und 2 weitere");
 
@@ -557,20 +554,19 @@ mod tests {
             "Удалять refs, пересекающие внешний водный уровень (water-delete)"
         );
         assert_eq!(
-            russian.text(UiText::ConfirmUnclipWriteMessage),
-            "Unclip перезапишет выбранные плагины на месте и создаст резервные копии. Цели с указанным путём вывода будут записаны туда."
+            russian.unclip_rewrite_prompt(1),
+            "Перезаписать 1 плагин на месте? Оригиналы сохраняются как .greenmote-original."
         );
-        assert!(
-            !russian
-                .text(UiText::ConfirmUnclipWriteMessage)
-                .contains("plugins")
+        assert_eq!(
+            russian.unclip_rewrite_prompt(2),
+            "Перезаписать 2 плагина на месте? Оригиналы сохраняются как .greenmote-original."
         );
-        assert_eq!(russian.unclip_target_count(1), "Цель: 1 плагин");
-        assert_eq!(russian.unclip_target_count(2), "Цели: 2 плагина");
-        assert_eq!(russian.unclip_target_count(5), "Цели: 5 плагинов");
-        assert_eq!(russian.unclip_target_count(21), "Цели: 21 плагин");
+        assert_eq!(
+            russian.unclip_rewrite_prompt(5),
+            "Перезаписать 5 плагинов на месте? Оригиналы сохраняются как .greenmote-original."
+        );
+        assert!(!russian.unclip_rewrite_prompt(21).contains("plugins"));
         assert_eq!(russian.unclip_target_overflow(12), "... и еще 12 плагинов");
-        assert_eq!(russian.text(UiText::TargetPlugins), "Целевые плагины");
         assert_eq!(russian.text(UiText::UnclipTargetSkipped), "Пропущено");
         assert_eq!(
             russian.unclip_finished_status("Запись Unclip", 2, 1, 1, 1),
@@ -593,7 +589,6 @@ mod tests {
             spanish.text(UiText::WaterDeleteAction),
             "Eliminar refs que crucen el agua exterior (water-delete)"
         );
-        assert_eq!(spanish.unclip_target_count(6), "Objetivos: 6 plugins");
         assert_eq!(spanish.unclip_target_overflow(2), "... y 2 más");
         let spanish_error =
             spanish.unclip_finished_error_status("Escritura Unclip", 1, 1, 0, 1, "disco lleno");
@@ -608,7 +603,6 @@ mod tests {
             swedish.text(UiText::WaterDeleteAction),
             "Ta bort refs som passerar yttre vatten (water-delete)"
         );
-        assert_eq!(swedish.unclip_target_count(6), "Mål: 6 plugin");
         assert_eq!(swedish.unclip_target_overflow(2), "... och 2 till");
     }
 

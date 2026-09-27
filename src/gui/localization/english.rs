@@ -6,11 +6,11 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
-pub(super) fn unclip_target_count(count: usize) -> String {
+pub(super) fn unclip_rewrite_prompt(count: usize) -> String {
     if count == 1 {
-        "Target: 1 plugin".to_owned()
+        "Rewrite 1 plugin in place? Originals are kept as .greenmote-original.".to_owned()
     } else {
-        format!("Targets: {count} plugins")
+        format!("Rewrite {count} plugins in place? Originals are kept as .greenmote-original.")
     }
 }
 
@@ -47,18 +47,18 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Run options",
-        UiText::TargetPlugins => "Target plugins",
-        UiText::AddFiles => "Add files...",
-        UiText::AddTargetPath => "Add target/path",
-        UiText::SetUnclipOutputPlugin => "Set output...",
-        UiText::ClearUnclipOutputPlugin => "Clear output plugin",
-        UiText::RemoveSelectedTarget => "Remove selected target",
-        UiText::ClearTargets => "Clear targets",
+        UiText::AddFiles => "Add plugins...",
+        UiText::RemoveSelectedTarget => "Remove selected",
+        UiText::ClearTargets => "Clear",
         UiText::EmptyTargetList => "No target plugins added.",
-        UiText::TargetPathEntry => "Plugin name or path",
         UiText::StartConversion => "Start conversion",
         UiText::WriteChanges => "Write changes",
-        UiText::InspectPlugin => "Inspect plugin",
+        UiText::FixPlugins => "Fix plugins",
+        UiText::InspectOnly => "Inspect only",
+        UiText::UnclipIntro => {
+            "Fixes floating, buried, and clipping grass in the plugins below. Plugins are rewritten in place; the untouched original is kept as <name>.greenmote-original."
+        }
+        UiText::DropPluginFilesHint => "Drop plugin files here",
         UiText::DryRun => "Dry run",
         UiText::DebugDiagnostics => "Debug diagnostics",
         UiText::AutoEnableGeneratedPlugins => "Auto-enable generated plugins",
@@ -90,10 +90,6 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Confirm Unclip write",
-        UiText::ConfirmUnclipWriteMessage => {
-            "Unclip will rewrite the selected plugin(s) in place and create backup files. Targets with an output path are written there instead."
-        }
-        UiText::EnabledWriteActions => "Enabled write actions:",
         UiText::UnsavedSettingsTitle => "Unsaved settings",
         UiText::UnsavedSettingsMessage => "Settings have unsaved changes.",
         UiText::SaveBeforeContinuing => "Save them before continuing?",
@@ -113,7 +109,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         }
         UiText::SelectOpenMwConfig => "Select OpenMW Config",
         UiText::SelectUnclipTargetPlugins => "Select Unclip Target Plugins",
-        UiText::SelectUnclipOutputPlugin => "Select Unclip output plugin",
         _ => unreachable!(),
     }
 }

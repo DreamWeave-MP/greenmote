@@ -23,8 +23,8 @@ Typical GUI flow:
 1. Open Greenmote.
 2. Review or regenerate settings if prompted.
 3. Use the Convert tab to run a dry run or conversion.
-4. Use the Unclip tab to pick groundcover plugins, optionally with an output path per plugin.
-5. Leave "Write changes" off to get a report only; tick it to rewrite the plugins with backups after a confirmation.
+4. Use the Unclip tab to add groundcover plugins (file picker or drag and drop) and press Fix plugins. They are rewritten in place after a confirmation; the untouched original is kept beside each one.
+5. Untick "Write changes" to get a report only.
 
 ### CLI
 
@@ -183,7 +183,7 @@ Flags and `[unclip]` keys:
 The default GUI provides:
 
 - A Convert main view with run controls, progress, status output, and generated-output safeguards.
-- An Unclip main view with batch targets, optional output plugins, report-only runs by default, and a confirmed write toggle.
+- An Unclip main view: a plugin list with drag and drop, one write toggle (on by default), and a confirmed in-place rewrite.
 - Settings sections for OpenMW/config paths, Convert options, Unclip options, filters, road texture filters, and write policy.
 - Runtime-only localization for English, Swedish, Russian, Spanish, German, and French.
 - Non-persistent language selection. Changing the GUI language affects the current GUI session only.

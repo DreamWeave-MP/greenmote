@@ -6,11 +6,11 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
-pub(super) fn unclip_target_count(count: usize) -> String {
+pub(super) fn unclip_rewrite_prompt(count: usize) -> String {
     if count == 1 {
-        "Mål: 1 plugin".to_owned()
+        "Skriv över 1 plugin på plats? Originalen behålls som .greenmote-original.".to_owned()
     } else {
-        format!("Mål: {count} plugin")
+        format!("Skriv över {count} plugin på plats? Originalen behålls som .greenmote-original.")
     }
 }
 
@@ -47,18 +47,18 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Köralternativ",
-        UiText::TargetPlugins => "Målplugin",
-        UiText::AddFiles => "Lägg till filer...",
-        UiText::AddTargetPath => "Lägg till mål/sökväg",
-        UiText::SetUnclipOutputPlugin => "Ange utdata...",
-        UiText::ClearUnclipOutputPlugin => "Rensa utdataplugin",
-        UiText::RemoveSelectedTarget => "Ta bort valt mål",
-        UiText::ClearTargets => "Rensa mål",
+        UiText::AddFiles => "Lägg till plugin...",
+        UiText::RemoveSelectedTarget => "Ta bort vald",
+        UiText::ClearTargets => "Rensa",
         UiText::EmptyTargetList => "Inga målplugin tillagda.",
-        UiText::TargetPathEntry => "Pluginnamn eller sökväg",
         UiText::StartConversion => "Starta konvertering",
         UiText::WriteChanges => "Skriv ändringar",
-        UiText::InspectPlugin => "Inspektera plugin",
+        UiText::FixPlugins => "Rätta plugin",
+        UiText::InspectOnly => "Endast granska",
+        UiText::UnclipIntro => {
+            "Rättar svävande, nedgrävt och genomskärande gräs i pluginen nedan. Plugin skrivs över på plats; det orörda originalet behålls som <namn>.greenmote-original."
+        }
+        UiText::DropPluginFilesHint => "Släpp pluginfiler här",
         UiText::DryRun => "Torrkörning",
         UiText::DebugDiagnostics => "Felsökningsdiagnostik",
         UiText::AutoEnableGeneratedPlugins => "Aktivera genererade plugin automatiskt",
@@ -90,10 +90,6 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Bekräfta Unclip-skrivning",
-        UiText::ConfirmUnclipWriteMessage => {
-            "Unclip skriver över valda plugin på plats och skapar säkerhetskopior. Mål med en utdatasökväg skrivs dit i stället."
-        }
-        UiText::EnabledWriteActions => "Aktiverade skrivåtgärder:",
         UiText::UnsavedSettingsTitle => "Osparade inställningar",
         UiText::UnsavedSettingsMessage => "Inställningarna har osparade ändringar.",
         UiText::SaveBeforeContinuing => "Spara dem innan du fortsätter?",
@@ -111,7 +107,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         }
         UiText::SelectOpenMwConfig => "Välj OpenMW-config",
         UiText::SelectUnclipTargetPlugins => "Välj Unclip-målplugin",
-        UiText::SelectUnclipOutputPlugin => "Välj Unclip-utdataplugin",
         _ => unreachable!(),
     }
 }

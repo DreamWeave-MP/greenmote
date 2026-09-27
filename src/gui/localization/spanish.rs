@@ -6,11 +6,14 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
-pub(super) fn unclip_target_count(count: usize) -> String {
+pub(super) fn unclip_rewrite_prompt(count: usize) -> String {
     if count == 1 {
-        "Objetivo: 1 plugin".to_owned()
+        "¿Reescribir 1 plugin en el lugar? Los originales se conservan como .greenmote-original."
+            .to_owned()
     } else {
-        format!("Objetivos: {count} plugins")
+        format!(
+            "¿Reescribir {count} plugins en el lugar? Los originales se conservan como .greenmote-original."
+        )
     }
 }
 
@@ -47,18 +50,18 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Opciones de ejecución",
-        UiText::TargetPlugins => "Plugins objetivo",
-        UiText::AddFiles => "Añadir archivos...",
-        UiText::AddTargetPath => "Añadir objetivo/ruta",
-        UiText::SetUnclipOutputPlugin => "Definir salida...",
-        UiText::ClearUnclipOutputPlugin => "Borrar plugin de salida",
-        UiText::RemoveSelectedTarget => "Quitar objetivo seleccionado",
-        UiText::ClearTargets => "Borrar objetivos",
+        UiText::AddFiles => "Añadir plugins...",
+        UiText::RemoveSelectedTarget => "Quitar seleccionado",
+        UiText::ClearTargets => "Vaciar",
         UiText::EmptyTargetList => "No hay plugins objetivo añadidos.",
-        UiText::TargetPathEntry => "Nombre o ruta del plugin",
         UiText::StartConversion => "Iniciar conversión",
         UiText::WriteChanges => "Escribir cambios",
-        UiText::InspectPlugin => "Inspeccionar plugin",
+        UiText::FixPlugins => "Corregir plugins",
+        UiText::InspectOnly => "Solo inspeccionar",
+        UiText::UnclipIntro => {
+            "Corrige la hierba flotante, enterrada o que atraviesa objetos en los plugins de abajo. Los plugins se reescriben en el lugar; el original intacto se conserva como <nombre>.greenmote-original."
+        }
+        UiText::DropPluginFilesHint => "Suelta archivos de plugin aquí",
         UiText::DryRun => "Simulación",
         UiText::DebugDiagnostics => "Diagnósticos de depuración",
         UiText::AutoEnableGeneratedPlugins => "Activar automáticamente plugins generados",
@@ -90,10 +93,6 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Confirmar escritura de Unclip",
-        UiText::ConfirmUnclipWriteMessage => {
-            "Unclip reescribirá en el lugar los plugins seleccionados y creará archivos de copia de seguridad. Los objetivos con una ruta de salida se escribirán allí en su lugar."
-        }
-        UiText::EnabledWriteActions => "Acciones de escritura activadas:",
         UiText::UnsavedSettingsTitle => "Ajustes sin guardar",
         UiText::UnsavedSettingsMessage => "Los ajustes tienen cambios sin guardar.",
         UiText::SaveBeforeContinuing => "¿Guardarlos antes de continuar?",
@@ -113,7 +112,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         }
         UiText::SelectOpenMwConfig => "Seleccionar configuración de OpenMW",
         UiText::SelectUnclipTargetPlugins => "Seleccionar plugins objetivo de Unclip",
-        UiText::SelectUnclipOutputPlugin => "Seleccionar plugin de salida de Unclip",
         _ => unreachable!(),
     }
 }

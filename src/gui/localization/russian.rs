@@ -6,11 +6,14 @@ pub(super) const fn text(key: UiText) -> &'static str {
     route_text!(key, language_text, convert_text, dialog_text, settings_text)
 }
 
-pub(super) fn unclip_target_count(count: usize) -> String {
+pub(super) fn unclip_rewrite_prompt(count: usize) -> String {
     if count == 1 {
-        "Цель: 1 плагин".to_owned()
+        "Перезаписать 1 плагин на месте? Оригиналы сохраняются как .greenmote-original.".to_owned()
     } else {
-        format!("Цели: {count} {}", plugin_plural(count))
+        format!(
+            "Перезаписать {count} {} на месте? Оригиналы сохраняются как .greenmote-original.",
+            plugin_plural(count)
+        )
     }
 }
 
@@ -61,18 +64,18 @@ const fn language_text(key: UiText) -> &'static str {
 const fn convert_text(key: UiText) -> &'static str {
     match key {
         UiText::RunOptions => "Параметры запуска",
-        UiText::TargetPlugins => "Целевые плагины",
-        UiText::AddFiles => "Добавить файлы...",
-        UiText::AddTargetPath => "Добавить плагин/путь",
-        UiText::SetUnclipOutputPlugin => "Задать вывод...",
-        UiText::ClearUnclipOutputPlugin => "Очистить плагин вывода",
-        UiText::RemoveSelectedTarget => "Удалить выбранный плагин",
-        UiText::ClearTargets => "Очистить список плагинов",
+        UiText::AddFiles => "Добавить плагины...",
+        UiText::RemoveSelectedTarget => "Удалить выбранное",
+        UiText::ClearTargets => "Очистить",
         UiText::EmptyTargetList => "Целевые плагины не добавлены.",
-        UiText::TargetPathEntry => "Имя плагина или путь",
         UiText::StartConversion => "Начать конвертацию",
         UiText::WriteChanges => "Записать изменения",
-        UiText::InspectPlugin => "Проверить плагин",
+        UiText::FixPlugins => "Исправить плагины",
+        UiText::InspectOnly => "Только проверить",
+        UiText::UnclipIntro => {
+            "Исправляет зависшую, закопанную и пересекающуюся траву в плагинах ниже. Плагины перезаписываются на месте; нетронутый оригинал сохраняется как <имя>.greenmote-original."
+        }
+        UiText::DropPluginFilesHint => "Перетащите файлы плагинов сюда",
         UiText::DryRun => "Пробный запуск",
         UiText::DebugDiagnostics => "Отладочная диагностика",
         UiText::AutoEnableGeneratedPlugins => "Автоматически включать созданные плагины",
@@ -108,10 +111,6 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Подтвердить запись Unclip",
-        UiText::ConfirmUnclipWriteMessage => {
-            "Unclip перезапишет выбранные плагины на месте и создаст резервные копии. Цели с указанным путём вывода будут записаны туда."
-        }
-        UiText::EnabledWriteActions => "Включенные действия записи:",
         UiText::UnsavedSettingsTitle => "Несохраненные настройки",
         UiText::UnsavedSettingsMessage => "В настройках есть несохраненные изменения.",
         UiText::SaveBeforeContinuing => "Сохранить их перед продолжением?",
@@ -129,7 +128,6 @@ const fn dialog_text(key: UiText) -> &'static str {
         }
         UiText::SelectOpenMwConfig => "Выбрать конфигурацию OpenMW",
         UiText::SelectUnclipTargetPlugins => "Выбрать целевые плагины Unclip",
-        UiText::SelectUnclipOutputPlugin => "Выбрать выходной плагин Unclip",
         _ => unreachable!(),
     }
 }
