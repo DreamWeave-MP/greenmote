@@ -9,7 +9,7 @@ use tes3::esp::{Landscape, LandscapeFlags, LandscapeTexture, ObjectFlags, Plugin
 use super::{args::RoadTextureFilter, cells::CellCoord};
 
 const CELL_SIZE: f32 = 8192.0;
-const LAND_VERTEX_SPACING: f32 = 128.0;
+pub(crate) const LAND_VERTEX_SPACING: f32 = 128.0;
 const LAND_VERTEX_MAX: usize = 64;
 const LAND_TEXTURE_GRID: usize = 16;
 const LAND_TEXTURE_GRID_F32: f32 = 16.0;

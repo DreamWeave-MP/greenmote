@@ -163,6 +163,10 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::OrientationToleranceTooltip => {
             "Maximum tilt angle in degrees treated as already aligned to terrain. Config key: orientation_epsilon."
         }
+        UiText::MaxTilt => "Maximum terrain tilt",
+        UiText::MaxTiltTooltip => {
+            "Steepest terrain tilt in degrees that orient aligns a ref to. Steeper ground keeps the current rotation. Config key: max_tilt."
+        }
         UiText::RelocationStepDistance => "Relocation step distance",
         UiText::RelocationStepDistanceTooltip => {
             "Horizontal distance between static-bounds relocation probes. Config key: relocation_step."

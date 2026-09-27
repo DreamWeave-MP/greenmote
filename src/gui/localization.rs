@@ -100,6 +100,8 @@ macro_rules! route_text {
             | UiText::SinkDepthTooltip
             | UiText::OrientationTolerance
             | UiText::OrientationToleranceTooltip
+            | UiText::MaxTilt
+            | UiText::MaxTiltTooltip
             | UiText::RelocationStepDistance
             | UiText::RelocationStepDistanceTooltip
             | UiText::RelocationProbeRings
@@ -259,6 +261,8 @@ pub(super) enum UiText {
     SinkDepthTooltip,
     OrientationTolerance,
     OrientationToleranceTooltip,
+    MaxTilt,
+    MaxTiltTooltip,
     RelocationStepDistance,
     RelocationStepDistanceTooltip,
     RelocationProbeRings,

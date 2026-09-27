@@ -174,6 +174,10 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::OrientationToleranceTooltip => {
             "Maximaler Neigungswinkel in Grad, der als bereits am Terrain ausgerichtet gilt. Config key: orientation_epsilon."
         }
+        UiText::MaxTilt => "Maximale Terrainneigung",
+        UiText::MaxTiltTooltip => {
+            "Steilste Terrainneigung in Grad, an der orient einen Ref ausrichtet. Steileres Gelände behält die aktuelle Rotation. Config key: max_tilt."
+        }
         UiText::RelocationStepDistance => "Verschiebungsschrittweite",
         UiText::RelocationStepDistanceTooltip => {
             "Horizontaler Abstand zwischen Verschiebungsproben für statische Grenzen. Config key: relocation_step."

@@ -26,7 +26,7 @@ use super::{
     measure::{GroundContact, Occlusion, RefTransform, Surveyor},
     mesh::{MeshGeometry, WorldAabb},
     orientation::{terrain_rotation, tilt_delta_degrees},
-    terrain::TerrainSample,
+    terrain::{LAND_VERTEX_SPACING, TerrainSample},
 };
 
 const CELL_SIZE: f32 = 8192.0;
@@ -111,6 +111,16 @@ pub(crate) enum KeepReason {
     OrientDisabled {
         tilt_delta_degrees: f32,
     },
+    /// The terrain is steeper than `max_tilt`, so the ref keeps its current rotation.
+    TooSteepToOrient {
+        terrain_tilt_degrees: f32,
+    },
+    /// The terrain under the mesh base jumps by more than the mesh could stand on: a landmass
+    /// seam or a wall between two LAND records. Grounding there would send the ref over the
+    /// edge, so it is left where the generator put it.
+    TerrainSeam {
+        spread: f32,
+    },
     TerrainZDisabled {
         gap: f32,
     },
@@ -190,6 +200,8 @@ impl KeepReason {
             Self::RoadDeleteDisabled { .. } => "keep_road_delete_disabled",
             Self::WaterDeleteDisabled { .. } => "keep_water_delete_disabled",
             Self::OrientDisabled { .. } => "keep_orient_disabled",
+            Self::TooSteepToOrient { .. } => "keep_too_steep",
+            Self::TerrainSeam { .. } => "keep_terrain_seam",
             Self::TerrainZDisabled { .. } => "keep_terrain_z_disabled",
             Self::StaticActionsDisabled { .. } => "keep_static_actions_disabled",
             Self::NoRelocationFound { .. } => "keep_no_relocation_found",
@@ -445,6 +457,16 @@ fn resolve_statics(
     }
 }
 
+/// Largest terrain variation a mesh base may see before the spot counts as a seam.
+fn seam_threshold(geometry: &MeshGeometry) -> f32 {
+    geometry.contact.height().max(2.0 * LAND_VERTEX_SPACING)
+}
+
+/// The larger of a rotation's X and Y tilts, in degrees.
+fn terrain_tilt_degrees(rotation: [f32; 3]) -> f32 {
+    rotation[0].abs().max(rotation[1].abs()).to_degrees()
+}
+
 /// Computes the tilt and height a reference should have at an XY position.
 ///
 /// `respect_actions` is false for relocation candidates, which are always re-grounded so a moved
@@ -466,10 +488,38 @@ fn place(
     };
     let mut notes = Vec::new();
 
+    // A base whose vertices see terrain further apart than the mesh is tall (and than two land
+    // vertices could legitimately drop) straddles a discontinuity. Nothing sensible can be
+    // measured there: a candidate spot is rejected, the ref's own spot is left alone.
+    let contact_current = surveyor.ground_contact(geometry, &transform)?;
+    let spread = contact_current.gap - contact_current.min_gap;
+    if spread > seam_threshold(geometry) {
+        if !respect_actions {
+            return None;
+        }
+        return Some(Placement {
+            transform,
+            terrain,
+            contact_before,
+            contact_after: contact_current,
+            tilt_delta_degrees: 0.0,
+            oriented: false,
+            grounded: false,
+            notes: vec![KeepReason::TerrainSeam { spread }],
+        });
+    }
+
     let target_rotation = terrain_rotation(current.rotation, &terrain);
     let tilt_delta_degrees = tilt_delta_degrees(current.rotation, target_rotation);
+    let terrain_tilt_degrees = terrain_tilt_degrees(target_rotation);
     let wants_orient = tilt_delta_degrees > policy.orientation_epsilon_degrees;
-    let oriented = if wants_orient && (policy.actions.orient() || !respect_actions) {
+    let too_steep = terrain_tilt_degrees > policy.max_tilt_degrees;
+    let oriented = if wants_orient && too_steep {
+        notes.push(KeepReason::TooSteepToOrient {
+            terrain_tilt_degrees,
+        });
+        false
+    } else if wants_orient && (policy.actions.orient() || !respect_actions) {
         transform.rotation = target_rotation;
         true
     } else {
@@ -808,6 +858,77 @@ mod tests {
                 reason: KeepReason::TerrainZDisabled { gap }
             } if (gap - 30.0).abs() < 1e-3
         ));
+    }
+
+    fn cliff_terrain() -> TerrainIndex {
+        // A landmass seam: flat at 100 up to column 32, then a 300 unit wall (67 degrees).
+        let mut heights = Box::new([[100.0_f32; 65]; 65]);
+        for row in heights.iter_mut() {
+            for height in row.iter_mut().skip(33) {
+                *height = -200.0;
+            }
+        }
+        TerrainIndex::from_decoded_heights((0, 0), heights)
+    }
+
+    #[test]
+    fn terrain_steeper_than_max_tilt_is_not_oriented_to() {
+        let world = World::new(cliff_terrain());
+        let geometry = geometry();
+        // Just past vertex 32: the ceil-based tilt stencil spans the wall while the ref's own
+        // ground is still within a unit or two of the plateau.
+        let x = 32.0 * 128.0 + 2.0;
+        let result = decide(
+            &input(&geometry, [x, 1000.0, 100.0 - 4.0], [0.0; 3]),
+            &world.surveyor(),
+        );
+        match result.verdict {
+            Verdict::Keep {
+                reason:
+                    KeepReason::TooSteepToOrient {
+                        terrain_tilt_degrees,
+                    },
+            } => assert!(terrain_tilt_degrees > 45.0),
+            Verdict::Fix(fix) => {
+                assert!(!fix.oriented, "{fix:?}");
+                assert_eq!(fix.rotation, [0.0; 3]);
+            }
+            other => panic!("unexpected verdict {other:?}"),
+        }
+    }
+
+    fn seam_terrain() -> TerrainIndex {
+        // Plateau at 3000 up to column 32, seafloor at -2000 from column 33 on.
+        let mut heights = Box::new([[3000.0_f32; 65]; 65]);
+        for row in heights.iter_mut() {
+            for height in row.iter_mut().skip(33) {
+                *height = -2000.0;
+            }
+        }
+        TerrainIndex::from_decoded_heights((0, 0), heights)
+    }
+
+    #[test]
+    fn ref_whose_base_straddles_a_seam_is_left_alone() {
+        let world = World::new(seam_terrain());
+        let geometry = geometry();
+        // Base spans x +-10 around the middle of the wall quad: terrain under it differs by
+        // about 800 units, far more than the 40 unit mesh could stand on.
+        let x = 32.5 * 128.0;
+        let result = decide(
+            &input(&geometry, [x, 1000.0, 500.0], [0.0; 3]),
+            &world.surveyor(),
+        );
+        assert!(
+            matches!(
+                result.verdict,
+                Verdict::Keep {
+                    reason: KeepReason::TerrainSeam { spread }
+                } if spread > 256.0
+            ),
+            "{:?}",
+            result.verdict
+        );
     }
 
     #[test]

@@ -161,6 +161,10 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::OrientationToleranceTooltip => {
             "Största lutningsvinkel i grader som behandlas som redan anpassad till terrängen. Config key: orientation_epsilon."
         }
+        UiText::MaxTilt => "Största terränglutning",
+        UiText::MaxTiltTooltip => {
+            "Brantaste terränglutning i grader som orient anpassar en ref till. Brantare mark behåller nuvarande rotation. Config key: max_tilt."
+        }
         UiText::RelocationStepDistance => "Flyttstegsavstånd",
         UiText::RelocationStepDistanceTooltip => {
             "Horisontellt avstånd mellan flyttprober för statiska gränser. Config key: relocation_step."

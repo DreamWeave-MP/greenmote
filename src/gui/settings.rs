@@ -71,6 +71,7 @@ struct UnclipPolicyDraft {
     max_sink_fraction: String,
     sink: String,
     orientation_epsilon: String,
+    max_tilt: String,
     relocation_step: String,
     relocation_steps: String,
     include_grass_ids: Vec<String>,
@@ -555,6 +556,13 @@ impl GreenmoteApp {
         );
         setting_text_field(
             ui,
+            self.localizer.text(UiText::MaxTilt),
+            self.localizer.text(UiText::MaxTiltTooltip),
+            &mut policy.max_tilt,
+            &mut self.settings.dirty,
+        );
+        setting_text_field(
+            ui,
             self.localizer.text(UiText::RelocationStepDistance),
             self.localizer.text(UiText::RelocationStepDistanceTooltip),
             &mut policy.relocation_step,
@@ -954,6 +962,11 @@ impl UnclipPolicyDraft {
                 .or(defaults.orientation_epsilon)
                 .unwrap_or_default()
                 .to_string(),
+            max_tilt: config
+                .max_tilt
+                .or(defaults.max_tilt)
+                .unwrap_or_default()
+                .to_string(),
             relocation_step: config
                 .relocation_step
                 .or(defaults.relocation_step)
@@ -1012,6 +1025,7 @@ impl UnclipPolicyDraft {
             "orientation_epsilon",
             &self.orientation_epsilon,
         )?);
+        config.max_tilt = Some(parse_positive_f32("max_tilt", &self.max_tilt)?);
         config.relocation_step = Some(parse_positive_f32(
             "relocation_step",
             &self.relocation_step,

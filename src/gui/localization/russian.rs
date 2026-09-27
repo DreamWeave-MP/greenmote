@@ -184,6 +184,10 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::OrientationToleranceTooltip => {
             "Максимальный угол наклона в градусах, считающийся уже выровненным по terrain. Config key: orientation_epsilon."
         }
+        UiText::MaxTilt => "Максимальный наклон terrain",
+        UiText::MaxTiltTooltip => {
+            "Самый крутой наклон terrain в градусах, к которому orient выравнивает объект. На более крутом склоне сохраняется текущий поворот. Config key: max_tilt."
+        }
         UiText::RelocationStepDistance => "Дистанция шага перемещения",
         UiText::RelocationStepDistanceTooltip => {
             "Горизонтальное расстояние между пробами перемещения для static bounds. Config key: relocation_step."

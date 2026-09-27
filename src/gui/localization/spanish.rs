@@ -171,6 +171,10 @@ const fn settings_text(key: UiText) -> &'static str {
         UiText::OrientationToleranceTooltip => {
             "Ángulo máximo de inclinación en grados tratado como ya alineado al terrain. Config key: orientation_epsilon."
         }
+        UiText::MaxTilt => "Inclinación máxima del terrain",
+        UiText::MaxTiltTooltip => {
+            "Inclinación de terrain más pronunciada, en grados, a la que orient alinea una referencia. Un suelo más empinado conserva la rotación actual. Config key: max_tilt."
+        }
         UiText::RelocationStepDistance => "Distancia de paso de reubicación",
         UiText::RelocationStepDistanceTooltip => {
             "Distancia horizontal entre sondas de reubicación para límites static. Config key: relocation_step."

@@ -172,7 +172,7 @@ Output:
 Flags and `[unclip]` keys:
 
 - `--actions ACTION[,ACTION...]` limits the actions to plan. Default: all six.
-- `--float-tolerance` (1), `--max-sink` (24), `--max-sink-fraction` (0.75), `--sink` (4), `--orientation-epsilon` degrees (1), `--relocation-step` (32), `--relocation-steps` (8).
+- `--float-tolerance` (1), `--max-sink` (24), `--max-sink-fraction` (0.75), `--sink` (4), `--orientation-epsilon` degrees (1), `--max-tilt` degrees (45), `--relocation-step` (32), `--relocation-steps` (8). Terrain steeper than `max_tilt` is never oriented to: a landmass seam reads as a near-vertical wall to the generator-style tilt stencil, and grass laid against it would drop off the edge.
 - `--include-grass-id` / `--exclude-grass-id` select target references by full ID regex.
 - `--include-occluder-id` / `--exclude-occluder-id` select statics that count as solid. Built-in exclusions cover tree-like statics; `--no-default-occluder-excludes` drops them.
 - `--road-texture-path` adds road texture regexes to the built-in list; `--no-default-road-textures` drops the built-ins.
@@ -223,6 +223,7 @@ sink = 4.0
 relocation_step = 32.0
 relocation_steps = 8
 orientation_epsilon = 1.0
+max_tilt = 45.0
 include_grass_ids = []
 exclude_grass_ids = []
 include_occluder_ids = []
@@ -258,7 +259,7 @@ Key notes:
 - `[unclip].plugin` is the default Unclip target plugin.
 - Unclip `--write`, `--output-plugin`, `--verbose`, and `--structured` are runtime-only CLI options and are not read from or written to `greenmote.toml`.
 - `[unclip].actions` selects which fixes are planned.
-- `[unclip].float_tolerance`, `max_sink`, `max_sink_fraction`, `sink`, `orientation_epsilon`, `relocation_step`, and `relocation_steps` tune the policy.
+- `[unclip].float_tolerance`, `max_sink`, `max_sink_fraction`, `sink`, `orientation_epsilon`, `max_tilt`, `relocation_step`, and `relocation_steps` tune the policy.
 - Include/exclude ID filters are case-insensitive regex lists.
 - Road texture path filters are case-insensitive regex lists used by the `road-delete` write action.
 - Default occluder excludes skip common vanilla, Bloodmoon, and `Tamriel_Data` tree statics whose broad canopy bounds often produce false static-occlusion hits. Set `exclude_occluder_ids = []` to opt back into treating them as blockers.

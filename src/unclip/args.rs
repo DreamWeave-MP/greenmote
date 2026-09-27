@@ -19,6 +19,9 @@ pub(crate) const DEFAULT_SINK: f32 = 4.0;
 pub(crate) const DEFAULT_RELOCATION_STEP: f32 = 32.0;
 pub(crate) const DEFAULT_RELOCATION_STEPS: u16 = 8;
 pub(crate) const DEFAULT_ORIENTATION_EPSILON_DEGREES: f32 = 1.0;
+/// Terrain steeper than this is never oriented to: a generator-style tilt stencil across a
+/// landmass seam can report a near-vertical wall, and grass laid against it drops off the edge.
+pub(crate) const DEFAULT_MAX_TILT_DEGREES: f32 = 45.0;
 
 /// Parsed arguments for the `unclip` subcommand.
 #[derive(Parser, Clone, Debug, Default)]
@@ -84,6 +87,11 @@ pub struct UnclipArgs {
     /// Maximum tilt difference in degrees treated as already aligned to terrain.
     #[arg(long = "orientation-epsilon", value_parser = non_negative_f32)]
     pub orientation_epsilon: Option<f32>,
+
+    /// Steepest terrain tilt in degrees that orient will align a ref to. Steeper ground keeps the
+    /// ref's current rotation.
+    #[arg(long = "max-tilt", value_parser = non_negative_f32)]
+    pub max_tilt: Option<f32>,
 
     /// Include only target grass refs whose full IDs match this case-insensitive regex. May be repeated.
     #[arg(long = "include-grass-id", value_name = "REGEX")]
@@ -168,6 +176,7 @@ pub(crate) struct UnclipPolicy {
     pub(crate) max_sink_fraction: f32,
     pub(crate) sink: f32,
     pub(crate) orientation_epsilon_degrees: f32,
+    pub(crate) max_tilt_degrees: f32,
     pub(crate) relocation: RelocationPolicy,
     pub(crate) target_filter: IdFilter,
     pub(crate) occluder_filter: IdFilter,
@@ -435,6 +444,7 @@ impl UnclipPolicy {
             max_sink_fraction: DEFAULT_MAX_SINK_FRACTION,
             sink: DEFAULT_SINK,
             orientation_epsilon_degrees: DEFAULT_ORIENTATION_EPSILON_DEGREES,
+            max_tilt_degrees: DEFAULT_MAX_TILT_DEGREES,
             relocation: RelocationPolicy {
                 step: DEFAULT_RELOCATION_STEP,
                 steps: DEFAULT_RELOCATION_STEPS,

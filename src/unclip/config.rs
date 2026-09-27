@@ -17,9 +17,10 @@ use super::{
     UnclipArgs,
     args::{
         ActionArg, Actions, DEFAULT_FLOAT_TOLERANCE, DEFAULT_MAX_SINK, DEFAULT_MAX_SINK_FRACTION,
-        DEFAULT_ORIENTATION_EPSILON_DEGREES, DEFAULT_RELOCATION_STEP, DEFAULT_RELOCATION_STEPS,
-        DEFAULT_SINK, IdFilter, RelocationPolicy, RoadTextureFilter, UnclipPolicy, default_actions,
-        default_road_texture_path_patterns, default_tree_occluder_exclude_ids,
+        DEFAULT_MAX_TILT_DEGREES, DEFAULT_ORIENTATION_EPSILON_DEGREES, DEFAULT_RELOCATION_STEP,
+        DEFAULT_RELOCATION_STEPS, DEFAULT_SINK, IdFilter, RelocationPolicy, RoadTextureFilter,
+        UnclipPolicy, default_actions, default_road_texture_path_patterns,
+        default_tree_occluder_exclude_ids,
     },
 };
 
@@ -41,6 +42,7 @@ pub(crate) struct UnclipConfig {
     pub(crate) relocation_step: f32,
     pub(crate) relocation_steps: u16,
     pub(crate) orientation_epsilon: f32,
+    pub(crate) max_tilt: f32,
     pub(crate) include_grass_ids: Vec<String>,
     pub(crate) exclude_grass_ids: Vec<String>,
     pub(crate) include_occluder_ids: Vec<String>,
@@ -84,6 +86,9 @@ pub(crate) struct PersistedUnclipConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) orientation_epsilon: Option<f32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_tilt: Option<f32>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) include_grass_ids: Option<Vec<String>>,
@@ -199,6 +204,10 @@ impl UnclipConfig {
                 .orientation_epsilon
                 .or(persisted.orientation_epsilon)
                 .unwrap_or(DEFAULT_ORIENTATION_EPSILON_DEGREES),
+            max_tilt: args
+                .max_tilt
+                .or(persisted.max_tilt)
+                .unwrap_or(DEFAULT_MAX_TILT_DEGREES),
             include_grass_ids: replace_list(&args.include_grass_ids, persisted.include_grass_ids),
             exclude_grass_ids: replace_list(&args.exclude_grass_ids, persisted.exclude_grass_ids),
             include_occluder_ids: replace_list(
@@ -228,6 +237,7 @@ impl UnclipConfig {
             max_sink_fraction: self.max_sink_fraction,
             sink: self.sink,
             orientation_epsilon_degrees: self.orientation_epsilon,
+            max_tilt_degrees: self.max_tilt,
             relocation: RelocationPolicy {
                 step: self.relocation_step,
                 steps: self.relocation_steps,
@@ -250,6 +260,13 @@ impl UnclipConfig {
         }
         validate_non_negative_f32("sink", self.sink)?;
         validate_non_negative_f32("orientation_epsilon", self.orientation_epsilon)?;
+        validate_positive_f32("max_tilt", self.max_tilt)?;
+        if self.max_tilt > 90.0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "max_tilt must be at most 90 degrees",
+            ));
+        }
         validate_positive_f32("relocation_step", self.relocation_step)?;
         if self.sink > self.max_sink {
             return Err(invalid_config(format!(
@@ -280,6 +297,7 @@ impl PersistedUnclipConfig {
             relocation_step: Some(DEFAULT_RELOCATION_STEP),
             relocation_steps: Some(DEFAULT_RELOCATION_STEPS),
             orientation_epsilon: Some(DEFAULT_ORIENTATION_EPSILON_DEGREES),
+            max_tilt: Some(DEFAULT_MAX_TILT_DEGREES),
             include_grass_ids: Some(Vec::new()),
             exclude_grass_ids: Some(Vec::new()),
             include_occluder_ids: Some(Vec::new()),
