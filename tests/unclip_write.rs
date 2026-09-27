@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! End-to-end unclip: dry run, patch write, in-place write, verification, idempotency.
+//! End-to-end unclip: dry run, in-place write, copy write, verification, idempotency.
 #![allow(clippy::float_cmp, clippy::similar_names)]
 
 use std::{
@@ -32,7 +32,7 @@ struct TempDir {
 impl TempDir {
     fn new(name: &str) -> Self {
         let path = std::env::temp_dir().join(format!(
-            "greenmote-unclip-patch-{name}-{}-{}",
+            "greenmote-unclip-write-{name}-{}-{}",
             std::process::id(),
             NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)
         ));
@@ -116,10 +116,6 @@ impl Fixture {
         .unwrap();
         serde_json::from_slice(&stdout).unwrap()
     }
-
-    fn patch_path(&self) -> PathBuf {
-        self.data_local.join("Grass_unclip.omwaddon")
-    }
 }
 
 #[test]
@@ -174,7 +170,7 @@ fn dry_run_reports_verdicts_and_writes_nothing() {
     assert_eq!(report["mode"]["mode"], "dry_run");
     assert_eq!(
         report["mode"]["would_write"],
-        fixture.patch_path().display().to_string()
+        fixture.target.display().to_string()
     );
     assert_eq!(report["counts"]["total"], 6);
     assert_eq!(verdict_of(&report, FLOATING)["verdict"]["verdict"], "fix");
@@ -196,7 +192,6 @@ fn dry_run_reports_verdicts_and_writes_nothing() {
         "fix"
     );
     assert!(report.get("write").is_none());
-    assert!(!fixture.patch_path().exists());
     assert!(!fixture.data_dir.path().join("Grass.esp.bak").exists());
     let log = std::fs::read_to_string(
         fixture
@@ -209,56 +204,42 @@ fn dry_run_reports_verdicts_and_writes_nothing() {
 }
 
 #[test]
-fn write_produces_a_verified_patch_with_source_as_master() {
-    let fixture = Fixture::new("patch");
-    let report = fixture.run(&["--write"]);
+fn output_plugin_writes_a_complete_copy_and_leaves_the_source_alone() {
+    let fixture = Fixture::new("copy");
+    let copy = fixture.data_local.join("out/Grass_unclipped.esp");
+    let report = fixture.run(&["--write", "--output-plugin", copy.to_str().unwrap()]);
 
     let write = &report["write"];
-    assert_eq!(write["in_place"], false);
+    assert_eq!(write["replaced_source"], false);
     assert_eq!(write["verified"], true);
     assert_eq!(write["refs_fixed"], 4);
     assert_eq!(write["refs_deleted"], 1);
-    assert_eq!(
-        write["masters"],
-        serde_json::json!(["Morrowind.esm", "Grass.esp"])
-    );
-    let patch = Plugin::from_path(fixture.patch_path()).unwrap();
-    let header = patch.header().unwrap();
-    assert_eq!(header.masters[1].0, "Grass.esp");
-    assert_eq!(
-        header.masters[1].1,
-        std::fs::metadata(&fixture.target).unwrap().len()
-    );
-    let cell = patch.objects_of_type::<Cell>().next().unwrap();
-    assert_eq!(cell.references.len(), 5);
-    assert_eq!(cell.references[&(2, IN_ROCK.1)].deleted, Some(true));
-    let fixed = &cell.references[&(2, FLOATING.1)];
-    assert!(fixed.translation[2] < 1.0 && fixed.translation[2] > -5.0);
-    assert!(cell.references.contains_key(&(1, INHERITED_FLOATING.1)));
+    assert_eq!(write["backups"], serde_json::json!([]));
 
-    // The source plugin was never touched.
+    let written = Plugin::from_path(&copy).unwrap();
+    assert_eq!(
+        written.header().unwrap().masters,
+        vec![("Morrowind.esm".to_owned(), 1)]
+    );
+    assert!(written.objects_of_type::<Static>().next().is_some());
+    let cell = written.objects_of_type::<Cell>().next().unwrap();
+    assert_eq!(cell.references.len(), 5, "own deleted ref is gone");
+    assert!(cell.references[&FLOATING].translation[2] < 1.0);
+    assert_eq!(cell.references[&FINE].translation[2], -1.0);
+    assert!(cell.references.contains_key(&INHERITED_FLOATING));
+
     let source = Plugin::from_path(&fixture.target).unwrap();
     let source_cell = source.objects_of_type::<Cell>().next().unwrap();
     assert_eq!(source_cell.references[&FLOATING].translation[2], 30.0);
-
-    // Writing again refreshes the patch and keeps the previous one as .bak.
-    let report = fixture.run(&["--write"]);
-    assert_eq!(
-        report["write"]["backups"],
-        serde_json::json!([fixture
-            .data_local
-            .join("Grass_unclip.omwaddon.bak")
-            .display()
-            .to_string()])
-    );
+    assert!(!fixture.data_dir.path().join("Grass.esp.bak").exists());
 }
 
 #[test]
 fn in_place_write_is_idempotent_and_keeps_backups() {
     let fixture = Fixture::new("in-place");
-    let report = fixture.run(&["--write", "--in-place"]);
+    let report = fixture.run(&["--write"]);
     let write = &report["write"];
-    assert_eq!(write["in_place"], true);
+    assert_eq!(write["replaced_source"], true);
     assert_eq!(write["verified"], true);
     assert_eq!(
         write["backups"],

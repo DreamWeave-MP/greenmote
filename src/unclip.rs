@@ -15,7 +15,6 @@ mod measure;
 mod mesh;
 mod occlusion;
 mod orientation;
-mod patch;
 mod physics;
 mod report;
 mod setup;
@@ -23,6 +22,7 @@ mod static_occluders;
 mod target;
 mod terrain;
 mod transform;
+mod write;
 
 pub use app::UNCLIP_LOG_NAME;
 pub use args::{ActionArg, UnclipArgs};

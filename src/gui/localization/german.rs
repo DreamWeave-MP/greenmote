@@ -62,7 +62,6 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPathEntry => "Plugin-Name oder Pfad",
         UiText::StartConversion => "Konvertierung starten",
         UiText::WriteChanges => "Änderungen schreiben",
-        UiText::RewriteInPlace => "Quell-Plugin direkt überschreiben (behält Sicherungen)",
         UiText::InspectPlugin => "Plugin prüfen",
         UiText::DryRun => "Probelauf",
         UiText::DebugDiagnostics => "Debug-Diagnose",
@@ -97,11 +96,8 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Unclip-Schreiben bestätigen",
-        UiText::ConfirmUnclipPatchMessage => {
-            "Unclip schreibt für jedes Ziel ein Patch-Plugin (<Quellname>_unclip.omwaddon in data-local) und lässt die Quell-Plugins unverändert."
-        }
-        UiText::ConfirmUnclipInPlaceMessage => {
-            "Unclip überschreibt die ausgewählten Quell-Plugins direkt und erstellt Sicherungsdateien."
+        UiText::ConfirmUnclipWriteMessage => {
+            "Unclip überschreibt die ausgewählten Plugins direkt und erstellt Sicherungsdateien. Ziele mit einem Ausgabepfad werden stattdessen dorthin geschrieben."
         }
         UiText::EnabledWriteActions => "Aktivierte Schreibaktionen:",
         UiText::UnsavedSettingsTitle => "Ungespeicherte Einstellungen",

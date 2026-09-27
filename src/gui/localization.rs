@@ -35,7 +35,6 @@ macro_rules! route_text {
             | UiText::TargetPathEntry
             | UiText::StartConversion
             | UiText::WriteChanges
-            | UiText::RewriteInPlace
             | UiText::InspectPlugin
             | UiText::DryRun
             | UiText::DebugDiagnostics
@@ -60,8 +59,7 @@ macro_rules! route_text {
             | UiText::UnclipTargetSkipped
             | UiText::UnclipTargetCancelled => $convert($key),
             UiText::ConfirmUnclipWriteTitle
-            | UiText::ConfirmUnclipPatchMessage
-            | UiText::ConfirmUnclipInPlaceMessage
+            | UiText::ConfirmUnclipWriteMessage
             | UiText::EnabledWriteActions
             | UiText::UnsavedSettingsTitle
             | UiText::UnsavedSettingsMessage
@@ -200,7 +198,6 @@ pub(super) enum UiText {
     TargetPathEntry,
     StartConversion,
     WriteChanges,
-    RewriteInPlace,
     InspectPlugin,
     DryRun,
     DebugDiagnostics,
@@ -230,8 +227,7 @@ pub(super) enum UiText {
     UnclipTargetSkipped,
     UnclipTargetCancelled,
     ConfirmUnclipWriteTitle,
-    ConfirmUnclipPatchMessage,
-    ConfirmUnclipInPlaceMessage,
+    ConfirmUnclipWriteMessage,
     EnabledWriteActions,
     UnsavedSettingsTitle,
     UnsavedSettingsMessage,
@@ -501,17 +497,8 @@ mod tests {
         let localizer = Localizer::default();
 
         assert_eq!(
-            localizer.text(UiText::ConfirmUnclipInPlaceMessage),
-            "Unclip will rewrite the selected source plugin(s) in place and create backup files."
-        );
-        assert!(
-            localizer
-                .text(UiText::ConfirmUnclipPatchMessage)
-                .contains("_unclip.omwaddon")
-        );
-        assert_eq!(
-            localizer.text(UiText::RewriteInPlace),
-            "Rewrite source plugin in place (keeps backups)"
+            localizer.text(UiText::ConfirmUnclipWriteMessage),
+            "Unclip will rewrite the selected plugin(s) in place and create backup files. Targets with an output path are written there instead."
         );
         assert_eq!(localizer.text(UiText::FloatTolerance), "Float tolerance");
         assert_eq!(localizer.text(UiText::MaxSink), "Max sink");
@@ -570,12 +557,12 @@ mod tests {
             "Удалять refs, пересекающие внешний водный уровень (water-delete)"
         );
         assert_eq!(
-            russian.text(UiText::ConfirmUnclipInPlaceMessage),
-            "Unclip перезапишет выбранные исходные плагины на месте и создаст резервные копии."
+            russian.text(UiText::ConfirmUnclipWriteMessage),
+            "Unclip перезапишет выбранные плагины на месте и создаст резервные копии. Цели с указанным путём вывода будут записаны туда."
         );
         assert!(
             !russian
-                .text(UiText::ConfirmUnclipInPlaceMessage)
+                .text(UiText::ConfirmUnclipWriteMessage)
                 .contains("plugins")
         );
         assert_eq!(russian.unclip_target_count(1), "Цель: 1 плагин");

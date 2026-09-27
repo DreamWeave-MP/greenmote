@@ -191,9 +191,6 @@ impl ConvertUiState {
     #[cfg(test)]
     pub(super) fn sync_unclip_write_from_settings(&mut self, write: bool) {
         self.unclip.run_options.write = write;
-        if !write {
-            self.unclip.run_options.in_place = false;
-        }
         self.unclip.pending_write_confirmation = false;
     }
 
@@ -368,14 +365,6 @@ impl GreenmoteApp {
                     &mut self.convert.unclip.run_options.write,
                     self.localizer.text(UiText::WriteChanges),
                 );
-                if self.convert.unclip.run_options.write {
-                    ui.checkbox(
-                        &mut self.convert.unclip.run_options.in_place,
-                        self.localizer.text(UiText::RewriteInPlace),
-                    );
-                } else {
-                    self.convert.unclip.run_options.in_place = false;
-                }
             });
         });
     }
@@ -747,7 +736,6 @@ impl GreenmoteApp {
             .map(UnclipTargetRunOption::label)
             .collect::<Vec<_>>();
         let actions = self.settings.unclip_write_action_names().join(", ");
-        let in_place = self.convert.unclip.run_options.in_place;
         let mut confirm = false;
         let mut cancel = false;
 
@@ -756,11 +744,7 @@ impl GreenmoteApp {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label(self.localizer.text(if in_place {
-                    UiText::ConfirmUnclipInPlaceMessage
-                } else {
-                    UiText::ConfirmUnclipPatchMessage
-                }));
+                ui.label(self.localizer.text(UiText::ConfirmUnclipWriteMessage));
                 ui.label(self.localizer.unclip_target_count(targets.len()));
                 for target in targets.iter().take(5) {
                     ui.label(format!("- {target}"));
@@ -1819,7 +1803,6 @@ mod tests {
         app.convert.unclip.run_options = UnclipRunOptions {
             targets: vec![target("target.omwaddon")],
             write: true,
-            in_place: false,
         };
         app.convert.unclip.pending_write_confirmation = true;
         app.convert.running = true;
@@ -1843,7 +1826,6 @@ mod tests {
         app.convert.unclip.run_options = UnclipRunOptions {
             targets: vec![target("target.omwaddon")],
             write: true,
-            in_place: false,
         };
 
         let error = app.validate_unclip_run().unwrap_err();
@@ -1860,14 +1842,12 @@ mod tests {
         state.unclip.run_options = UnclipRunOptions {
             targets: vec![target("target.omwaddon")],
             write: true,
-            in_place: true,
         };
         state.unclip.pending_write_confirmation = true;
 
         state.sync_unclip_write_from_settings(false);
 
         assert!(!state.unclip.run_options.write);
-        assert!(!state.unclip.run_options.in_place);
         assert_eq!(
             state.unclip.run_options.targets,
             [target("target.omwaddon")]
@@ -1898,7 +1878,6 @@ mod tests {
         app.convert.unclip.run_options = UnclipRunOptions {
             targets: vec![target("first.omwaddon"), target("second.omwaddon")],
             write: false,
-            in_place: false,
         };
 
         app.validate_unclip_run().unwrap();
@@ -2173,7 +2152,6 @@ mod tests {
             .map(|target| UnclipArgs {
                 plugin: Some(target.into()),
                 write: Some(write),
-                in_place: Some(false),
                 verbose: Some(true),
                 structured: Some(false),
                 ..UnclipArgs::default()
@@ -2191,7 +2169,6 @@ mod tests {
         app.convert.unclip.run_options = UnclipRunOptions {
             targets: vec![target(" ")],
             write: false,
-            in_place: false,
         };
 
         let error = app.validate_unclip_run().unwrap_err();

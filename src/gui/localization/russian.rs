@@ -72,7 +72,6 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPathEntry => "Имя плагина или путь",
         UiText::StartConversion => "Начать конвертацию",
         UiText::WriteChanges => "Записать изменения",
-        UiText::RewriteInPlace => "Перезаписать исходный плагин на месте (с резервными копиями)",
         UiText::InspectPlugin => "Проверить плагин",
         UiText::DryRun => "Пробный запуск",
         UiText::DebugDiagnostics => "Отладочная диагностика",
@@ -109,11 +108,8 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Подтвердить запись Unclip",
-        UiText::ConfirmUnclipPatchMessage => {
-            "Unclip запишет плагин-патч (<имя источника>_unclip.omwaddon в data-local) для каждой цели и не тронет исходные плагины."
-        }
-        UiText::ConfirmUnclipInPlaceMessage => {
-            "Unclip перезапишет выбранные исходные плагины на месте и создаст резервные копии."
+        UiText::ConfirmUnclipWriteMessage => {
+            "Unclip перезапишет выбранные плагины на месте и создаст резервные копии. Цели с указанным путём вывода будут записаны туда."
         }
         UiText::EnabledWriteActions => "Включенные действия записи:",
         UiText::UnsavedSettingsTitle => "Несохраненные настройки",

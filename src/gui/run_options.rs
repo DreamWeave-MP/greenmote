@@ -20,7 +20,6 @@ pub(super) struct ConvertRunOptions {
 pub(super) struct UnclipRunOptions {
     pub(super) targets: Vec<UnclipTargetRunOption>,
     pub(super) write: bool,
-    pub(super) in_place: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,7 +104,6 @@ impl UnclipRunOptions {
         Self {
             targets,
             write: false,
-            in_place: false,
         }
     }
 
@@ -187,7 +185,6 @@ impl UnclipRunOptions {
                     .filter(|output_plugin| !output_plugin.is_empty() && *output_plugin != plugin)
                     .map(PathBuf::from),
                 write: Some(self.write),
-                in_place: Some(self.in_place),
                 verbose: Some(true),
                 structured: Some(false),
                 ..UnclipArgs::default()
@@ -339,21 +336,18 @@ mod tests {
 
         assert_eq!(options.targets, [target("groundcover.omwaddon")]);
         assert!(!options.write);
-        assert!(!options.in_place);
     }
 
     #[test]
     fn unclip_run_options_default_write_disabled() {
         let options = UnclipRunOptions::default();
         assert!(!options.write);
-        assert!(!options.in_place);
     }
 
     #[test]
     fn unclip_run_options_config_default_write_disabled() {
         let options = UnclipRunOptions::from_config(&GroundcoverConfig::default());
         assert!(!options.write);
-        assert!(!options.in_place);
     }
 
     #[test]
@@ -364,7 +358,6 @@ mod tests {
         let options = UnclipRunOptions::from_config(&config);
 
         assert!(!options.write);
-        assert!(!options.in_place);
     }
 
     #[test]
@@ -382,7 +375,6 @@ mod tests {
         let options = UnclipRunOptions {
             targets: vec![UnclipTargetRunOption::new(" groundcover.omwaddon ", None)],
             write: false,
-            in_place: false,
         };
 
         let args = options.to_args_list().unwrap();
@@ -392,7 +384,6 @@ mod tests {
         assert_eq!(args.verbose, Some(true));
         assert_eq!(args.structured, Some(false));
         assert_eq!(args.write, Some(false));
-        assert_eq!(args.in_place, Some(false));
         assert_eq!(args.output_plugin, None);
         assert!(args.actions.is_empty());
         assert_eq!(args.float_tolerance, None);
@@ -407,14 +398,12 @@ mod tests {
         let options = UnclipRunOptions {
             targets: vec![target("groundcover.omwaddon")],
             write: true,
-            in_place: true,
         };
 
         let args = options.to_args_list().unwrap();
         let args = args.first().unwrap();
 
         assert_eq!(args.write, Some(true));
-        assert_eq!(args.in_place, Some(true));
     }
 
     #[test]
@@ -425,7 +414,6 @@ mod tests {
                 Some("output.omwaddon".to_owned()),
             )],
             write: false,
-            in_place: false,
         };
 
         let args = options.to_args_list().unwrap();
@@ -486,7 +474,6 @@ mod tests {
         let mut options = UnclipRunOptions {
             targets: vec![target("first.omwaddon"), target("second.omwaddon")],
             write: true,
-            in_place: false,
         };
 
         assert!(options.remove_target(0));
@@ -505,7 +492,6 @@ mod tests {
                 target("second.omwaddon"),
             ],
             write: false,
-            in_place: false,
         };
 
         let args = options.to_args_list().unwrap();
@@ -520,13 +506,11 @@ mod tests {
         let options = UnclipRunOptions {
             targets: vec![target("first.omwaddon"), target("second.omwaddon")],
             write: true,
-            in_place: false,
         };
 
         let args = options.to_args_list().unwrap();
 
         assert!(args.iter().all(|args| args.write == Some(true)));
-        assert!(args.iter().all(|args| args.in_place == Some(false)));
         assert!(args.iter().all(|args| args.verbose == Some(true)));
     }
 

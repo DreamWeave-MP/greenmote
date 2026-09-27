@@ -31,7 +31,6 @@ pub(crate) struct UnclipConfig {
     pub(crate) plugin: PathBuf,
     pub(crate) output_plugin: Option<PathBuf>,
     pub(crate) write: bool,
-    pub(crate) in_place: bool,
     pub(crate) verbose: bool,
     pub(crate) structured: bool,
     pub(crate) ignore_missing_meshes: bool,
@@ -52,7 +51,7 @@ pub(crate) struct UnclipConfig {
 
 /// The `[unclip]` table of `greenmote.toml`.
 ///
-/// Only policy values are persisted. Runtime choices such as `--write`, `--in-place`,
+/// Only policy values are persisted. Runtime choices such as `--write`,
 /// `--output-plugin`, `--verbose`, and `--structured` are never read from the file.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub(crate) struct PersistedUnclipConfig {
@@ -169,7 +168,6 @@ impl UnclipConfig {
             plugin,
             output_plugin: args.output_plugin.clone(),
             write: args.write.unwrap_or(false),
-            in_place: args.in_place.unwrap_or(false),
             verbose: args.verbose.unwrap_or(false),
             structured: args.structured.unwrap_or(false),
             ignore_missing_meshes: args.ignore_missing_meshes.unwrap_or(false),
@@ -263,11 +261,6 @@ impl UnclipConfig {
         }
         if !(1..=256).contains(&self.relocation_steps) {
             return Err(invalid_config("relocation_steps must be in 1..=256"));
-        }
-        if self.in_place && self.output_plugin.is_some() {
-            return Err(invalid_config(
-                "--in-place writes to the source plugin and cannot be combined with --output-plugin",
-            ));
         }
         if let Some(output_plugin) = &self.output_plugin {
             validate_output_plugin(output_plugin)?;
@@ -434,34 +427,18 @@ mod tests {
             PersistedUnclipConfig::default(),
         );
         assert!(!config.write);
-        assert!(!config.in_place);
 
         let config = merged(
-            &[
-                "greenmote",
-                "unclip",
-                "-p",
-                "x.esp",
-                "--write",
-                "--in-place",
-            ],
+            &["greenmote", "unclip", "-p", "x.esp", "--write"],
             PersistedUnclipConfig::default(),
         );
         assert!(config.write);
-        assert!(config.in_place);
     }
 
     #[test]
     fn runtime_keys_are_never_persisted_or_read() {
         let toml = toml::to_string(&PersistedUnclipConfig::generated_default()).unwrap();
-        for key in [
-            "write",
-            "in_place",
-            "output_plugin",
-            "verbose",
-            "structured",
-            "dry_run",
-        ] {
+        for key in ["write", "output_plugin", "verbose", "structured", "dry_run"] {
             assert!(
                 !toml.contains(key),
                 "{key} leaked into generated toml:\n{toml}"
@@ -563,23 +540,6 @@ mod tests {
                 .to_string()
                 .contains("max_sink")
         );
-    }
-
-    #[test]
-    fn in_place_conflicts_with_output_plugin() {
-        let config = merged(
-            &[
-                "greenmote",
-                "unclip",
-                "-p",
-                "x.esp",
-                "--in-place",
-                "--output-plugin",
-                "y.esp",
-            ],
-            PersistedUnclipConfig::default(),
-        );
-        assert!(config.validate().is_err());
     }
 
     #[test]

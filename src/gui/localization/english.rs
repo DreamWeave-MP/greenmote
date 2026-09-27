@@ -58,7 +58,6 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPathEntry => "Plugin name or path",
         UiText::StartConversion => "Start conversion",
         UiText::WriteChanges => "Write changes",
-        UiText::RewriteInPlace => "Rewrite source plugin in place (keeps backups)",
         UiText::InspectPlugin => "Inspect plugin",
         UiText::DryRun => "Dry run",
         UiText::DebugDiagnostics => "Debug diagnostics",
@@ -91,11 +90,8 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Confirm Unclip write",
-        UiText::ConfirmUnclipPatchMessage => {
-            "Unclip will write a patch plugin (<source stem>_unclip.omwaddon in data-local) for each target and leave the source plugins untouched."
-        }
-        UiText::ConfirmUnclipInPlaceMessage => {
-            "Unclip will rewrite the selected source plugin(s) in place and create backup files."
+        UiText::ConfirmUnclipWriteMessage => {
+            "Unclip will rewrite the selected plugin(s) in place and create backup files. Targets with an output path are written there instead."
         }
         UiText::EnabledWriteActions => "Enabled write actions:",
         UiText::UnsavedSettingsTitle => "Unsaved settings",

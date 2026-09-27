@@ -9,8 +9,8 @@ use serde::Serialize;
 use super::{
     args::UnclipPolicy,
     decide::{RefVerdict, Verdict, VerdictCounts},
-    patch::WriteOutcome,
     static_occluders::StaticOccluderBuildReport,
+    write::WriteOutcome,
 };
 
 /// Everything the report needs, independent of the output format.
@@ -36,16 +36,8 @@ pub(crate) struct Report {
 #[derive(Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub(crate) enum OutputSummary {
-    DryRun {
-        would_write: PathBuf,
-        in_place: bool,
-    },
-    Patch {
-        path: PathBuf,
-    },
-    InPlace {
-        path: PathBuf,
-    },
+    DryRun { would_write: PathBuf },
+    Write { path: PathBuf },
 }
 
 #[derive(Serialize)]
@@ -126,17 +118,12 @@ fn write_header(out: &mut dyn Write, report: &Report) -> io::Result<()> {
         )?;
     }
     match &report.mode {
-        OutputSummary::DryRun {
-            would_write,
-            in_place,
-        } => writeln!(
+        OutputSummary::DryRun { would_write } => writeln!(
             out,
-            "Mode: dry run (pass --write to {} {})",
-            if *in_place { "rewrite" } else { "write" },
+            "Mode: dry run (pass --write to rewrite {})",
             would_write.display()
         )?,
-        OutputSummary::Patch { path } => writeln!(out, "Mode: patch plugin {}", path.display())?,
-        OutputSummary::InPlace { path } => writeln!(out, "Mode: in place {}", path.display())?,
+        OutputSummary::Write { path } => writeln!(out, "Mode: rewrite {}", path.display())?,
     }
     writeln!(out, "Actions: {}", join(&report.policy.actions))?;
     writeln!(
@@ -239,12 +226,11 @@ fn write_outcome(out: &mut dyn Write, report: &Report) -> io::Result<()> {
         Some(write) => {
             writeln!(
                 out,
-                "Wrote {} ({} fixed, {} deleted, {} cells, masters: {}){}",
+                "Wrote {} ({} fixed, {} deleted, {} cells){}",
                 write.path.display(),
                 write.refs_fixed,
                 write.refs_deleted,
                 write.cells,
-                join(&write.masters.iter().map(String::as_str).collect::<Vec<_>>()),
                 if write.verified {
                     ", verified"
                 } else {

@@ -269,7 +269,6 @@ mod tests {
             Some(std::path::PathBuf::from("groundcover.omwaddon"))
         );
         assert_eq!(args.write, None);
-        assert_eq!(args.in_place, None);
         assert_eq!(args.output_plugin, None);
         assert_eq!(args.verbose, None);
         assert_eq!(args.structured, None);
@@ -286,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_unclip_write_and_in_place() {
+    fn parser_accepts_unclip_write() {
         let args = unclip_args(&[
             "greenmote",
             "unclip",
@@ -295,7 +294,6 @@ mod tests {
             "--write",
         ]);
         assert_eq!(args.write, Some(true));
-        assert_eq!(args.in_place, None);
 
         let args = unclip_args(&[
             "greenmote",
@@ -303,10 +301,14 @@ mod tests {
             "--plugin",
             "groundcover.omwaddon",
             "--write",
-            "--in-place",
+            "--output-plugin",
+            "rewritten.omwaddon",
         ]);
         assert_eq!(args.write, Some(true));
-        assert_eq!(args.in_place, Some(true));
+        assert_eq!(
+            args.output_plugin,
+            Some(std::path::PathBuf::from("rewritten.omwaddon"))
+        );
     }
 
     #[test]
@@ -429,14 +431,12 @@ mod tests {
             "--verbose=false",
             "--structured=false",
             "--write=false",
-            "--in-place=false",
             "--ignore-missing-meshes=false",
         ]);
 
         assert_eq!(args.verbose, Some(false));
         assert_eq!(args.structured, Some(false));
         assert_eq!(args.write, Some(false));
-        assert_eq!(args.in_place, Some(false));
         assert_eq!(args.ignore_missing_meshes, Some(false));
     }
 
@@ -466,6 +466,7 @@ mod tests {
     fn parser_rejects_removed_unclip_flags() {
         for flags in [
             vec!["--dry-run"],
+            vec!["--in-place"],
             vec!["--instances"],
             vec!["--meshgenerator-ini", "FGM_WG.ini"],
             vec!["--ignore-meshgenerator-ini"],

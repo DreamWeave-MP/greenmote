@@ -137,8 +137,8 @@ Useful Convert flags:
 ```sh
 greenmote unclip --plugin Rem_AI.esp                 # report only
 greenmote unclip --plugin Rem_AI.esp --verbose       # plus a per-reference table in greenmote-unclip.log
-greenmote unclip --plugin Rem_AI.esp --write         # write Rem_AI_unclip.omwaddon into data-local
-greenmote unclip --plugin Rem_AI.esp --write --in-place   # rewrite Rem_AI.esp itself, keeping backups
+greenmote unclip --plugin Rem_AI.esp --write         # rewrite Rem_AI.esp in place, keeping backups
+greenmote unclip --plugin Rem_AI.esp --write --output-plugin Rem_AI_unclipped.esp   # write the rewritten plugin elsewhere
 ```
 
 How a reference is judged, in order:
@@ -161,8 +161,8 @@ Geometry facts the measurements rely on:
 
 Output:
 
-- Default: a patch plugin `<source stem>_unclip.omwaddon` in `data-local` (or `--output-plugin PATH`). It lists the source plugin as a master and contains only the changed references: moved ones as overrides, removed ones as `DELE` records. Add it to `openmw.cfg` as a `groundcover=` entry after the source. The source plugin is never modified.
-- `--in-place`: the source plugin is rewritten. The first in-place write keeps `<plugin>.greenmote-original`; every write refreshes `<plugin>.bak`. References the source inherited from a master are marked deleted rather than dropped so the master's placement stays hidden.
+- `--write` rewrites the plugin in place. The first write keeps `<plugin>.greenmote-original`; every write refreshes `<plugin>.bak`. References the plugin inherited from a master are marked deleted rather than dropped so the master's placement stays hidden.
+- `--output-plugin PATH` writes the complete rewritten plugin to `PATH` instead and leaves the source untouched. The copy is a drop-in replacement with the same masters, so you can A/B by swapping one `groundcover=` line.
 - Every write is reloaded and checked against the planned changes before unclip reports success. Running unclip again on its own output plans zero changes.
 - `greenmote-unclip.log` next to `openmw.cfg` holds the text report and, with `--verbose`, one line per reference.
 - `--structured` prints the report as JSON; with `--verbose` it includes every verdict.

@@ -35,11 +35,7 @@ pub struct UnclipArgs {
     #[arg(long = "write", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
     pub write: Option<bool>,
 
-    /// Write changes back into the source plugin instead of a patch plugin. Keeps backups.
-    #[arg(long = "in-place", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL")]
-    pub in_place: Option<bool>,
-
-    /// Patch plugin path. Defaults to `<data-local>/<source stem>_unclip.omwaddon`.
+    /// Write the rewritten plugin to PATH instead of replacing the source.
     #[arg(long = "output-plugin", value_name = "PATH")]
     pub output_plugin: Option<PathBuf>,
 
@@ -480,6 +476,7 @@ mod tests {
     fn removed_flags_are_rejected() {
         for flag in [
             "--dry-run",
+            "--in-place",
             "--instances",
             "--meshgenerator-ini=x.ini",
             "--origin-epsilon=1",

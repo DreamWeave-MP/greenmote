@@ -22,10 +22,6 @@ use super::{
     decide::{GeometryTable, RefInput, RefVerdict, VerdictCounts, decide},
     measure::{RefTransform, Surveyor},
     mesh::{MeshCache, StaticMeshIndex},
-    patch::{
-        OutputMode, WriteOutcome, apply_in_place, build_patch, default_patch_path, verify_written,
-        write_plugin,
-    },
     report::{self, CellSummary, OutputSummary, PolicySummary, Report},
     setup::{
         ContextPlugin, active_cells, build_static_index, load_context_plugins, load_target_plugin,
@@ -34,6 +30,7 @@ use super::{
     static_occluders::{NamedPlugin, StaticOccluderBuildReport, build_static_occluders},
     target::TargetRefIndex,
     terrain::{TerrainIndex, TerrainTextureIndex},
+    write::{OutputMode, WriteOutcome, apply_changes, verify_written, write_plugin},
 };
 
 /// Log file written next to `openmw.cfg` on every run.
@@ -62,7 +59,7 @@ pub fn run(
     check()?;
 
     let target_refs = TargetRefIndex::build(&source, &policy, cancellation)?;
-    let mode = output_mode(config, &openmw_config, &source_path);
+    let mode = output_mode(config);
     let mut report = Report {
         target: source_path.clone(),
         added_data_directories: plugin_directories,
@@ -329,41 +326,22 @@ fn has_meshes_directory(directory: &Path) -> bool {
     })
 }
 
-fn output_mode(
-    config: &UnclipConfig,
-    openmw_config: &openmw_config::OpenMWConfiguration,
-    source_path: &Path,
-) -> OutputMode {
-    if config.in_place {
-        return OutputMode::InPlace;
-    }
-    if let Some(path) = &config.output_plugin {
-        return OutputMode::Patch { path: path.clone() };
-    }
-    let directory = openmw_config
-        .data_local()
-        .map(|setting| setting.parsed().to_owned())
-        .or_else(|| source_path.parent().map(Path::to_path_buf))
-        .unwrap_or_default();
-    OutputMode::Patch {
-        path: default_patch_path(&directory, source_path),
+fn output_mode(config: &UnclipConfig) -> OutputMode {
+    match &config.output_plugin {
+        Some(path) => OutputMode::Copy { path: path.clone() },
+        None => OutputMode::InPlace,
     }
 }
 
 fn describe_mode(write: bool, mode: &OutputMode, source_path: &Path) -> OutputSummary {
-    match (write, mode) {
-        (false, OutputMode::Patch { path }) => OutputSummary::DryRun {
-            would_write: path.clone(),
-            in_place: false,
-        },
-        (false, OutputMode::InPlace) => OutputSummary::DryRun {
-            would_write: source_path.to_path_buf(),
-            in_place: true,
-        },
-        (true, OutputMode::Patch { path }) => OutputSummary::Patch { path: path.clone() },
-        (true, OutputMode::InPlace) => OutputSummary::InPlace {
-            path: source_path.to_path_buf(),
-        },
+    let path = match mode {
+        OutputMode::InPlace => source_path.to_path_buf(),
+        OutputMode::Copy { path } => path.clone(),
+    };
+    if write {
+        OutputSummary::Write { path }
+    } else {
+        OutputSummary::DryRun { would_write: path }
     }
 }
 
@@ -388,53 +366,21 @@ fn write_changes(
         .collect::<BTreeSet<_>>()
         .len();
 
-    let (path, in_place, backups, masters) = match mode {
-        OutputMode::Patch { path } => {
-            let source_file_name = source_path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let source_size = std::fs::metadata(source_path).map(|meta| meta.len())?;
-            let mut patch = build_patch(source, &source_file_name, source_size, verdicts)?;
-            let masters = patch
-                .header()
-                .map(|header| {
-                    header
-                        .masters
-                        .iter()
-                        .map(|(name, _)| name.clone())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let backups = write_plugin(&mut patch, path, false)?;
-            (path.clone(), false, backups, masters)
-        }
-        OutputMode::InPlace => {
-            apply_in_place(source, verdicts);
-            let masters = source
-                .header()
-                .map(|header| {
-                    header
-                        .masters
-                        .iter()
-                        .map(|(name, _)| name.clone())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let backups = write_plugin(source, source_path, true)?;
-            (source_path.to_path_buf(), true, backups, masters)
-        }
+    apply_changes(source, verdicts);
+    let (path, replaced_source) = match mode {
+        OutputMode::InPlace => (source_path.to_path_buf(), true),
+        OutputMode::Copy { path } => (path.clone(), false),
     };
-    verify_written(&path, verdicts, in_place)?;
+    let backups = write_plugin(source, &path, replaced_source)?;
+    verify_written(&path, verdicts)?;
 
     Ok(WriteOutcome {
         path,
-        in_place,
+        replaced_source,
         backups,
         refs_fixed,
         refs_deleted,
         cells,
-        masters,
         verified: true,
     })
 }

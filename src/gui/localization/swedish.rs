@@ -58,7 +58,6 @@ const fn convert_text(key: UiText) -> &'static str {
         UiText::TargetPathEntry => "Pluginnamn eller sökväg",
         UiText::StartConversion => "Starta konvertering",
         UiText::WriteChanges => "Skriv ändringar",
-        UiText::RewriteInPlace => "Skriv över källplugin på plats (behåller säkerhetskopior)",
         UiText::InspectPlugin => "Inspektera plugin",
         UiText::DryRun => "Torrkörning",
         UiText::DebugDiagnostics => "Felsökningsdiagnostik",
@@ -91,11 +90,8 @@ const fn convert_text(key: UiText) -> &'static str {
 const fn dialog_text(key: UiText) -> &'static str {
     match key {
         UiText::ConfirmUnclipWriteTitle => "Bekräfta Unclip-skrivning",
-        UiText::ConfirmUnclipPatchMessage => {
-            "Unclip skriver ett patchplugin (<källnamn>_unclip.omwaddon i data-local) för varje mål och lämnar källpluginen orörda."
-        }
-        UiText::ConfirmUnclipInPlaceMessage => {
-            "Unclip skriver över valda källplugin på plats och skapar säkerhetskopior."
+        UiText::ConfirmUnclipWriteMessage => {
+            "Unclip skriver över valda plugin på plats och skapar säkerhetskopior. Mål med en utdatasökväg skrivs dit i stället."
         }
         UiText::EnabledWriteActions => "Aktiverade skrivåtgärder:",
         UiText::UnsavedSettingsTitle => "Osparade inställningar",
