@@ -1,0 +1,20 @@
+{
+  "id": "greenmote",
+  "title": "Two jobs, one load order",
+  "description": "Convert and unclip both read the load order OpenMW reads, and both write plugins OpenMW loads as groundcover.",
+  "mode": "flow",
+  "direction": "horizontal",
+  "nodes": [
+    { "id": "cfg", "kind": "source", "title": "Your openmw.cfg", "detail": "The data folders, content files and groundcover= plugins OpenMW loads, found where OpenMW finds them." },
+    { "id": "greenmote", "kind": "tool", "title": "Greenmote", "detail": "Reads that load order the way OpenMW does: its statics, its terrain, its textures and its water." },
+    { "id": "openmw", "kind": "result", "title": "OpenMW", "detail": "Grass drawn as groundcover, standing on the ground this load order has." },
+    { "id": "convert", "kind": "service", "role": "support", "title": "convert", "detail": "Grass statics placed by your content files become groundcover.omwaddon; deleted_groundcover.omwaddon hides the originals." },
+    { "id": "unclip", "kind": "service", "role": "support", "title": "unclip", "detail": "A groundcover plugin is measured reference by reference; what floats, sinks, sits on a road or water, or clips into a rock is fixed or deleted." }
+  ],
+  "edges": [
+    { "from": "cfg", "to": "greenmote" },
+    { "from": "greenmote", "to": "openmw", "label": "groundcover=" },
+    { "from": "convert", "to": "greenmote", "kind": "support", "label": "writes new plugins" },
+    { "from": "unclip", "to": "greenmote", "kind": "support", "label": "rewrites a plugin" }
+  ]
+}

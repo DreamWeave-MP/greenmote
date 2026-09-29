@@ -1,0 +1,158 @@
+# Greenmote. Structured facts only: the name and summary are `title` and `description` in
+# index.md. Every key is explained at
+# https://dreamweave-mp.github.io/DreamWeave-Mod-Template/guide/mod-toml/
+
+# Permanent identity. Never changes, whatever the program is called or wherever it is hosted.
+id = "57ec3325-acb3-4307-9c0f-2031ab3354ef"
+
+# The slug names the project on this site. Release tags are bare versions, like Cargo's: 0.3.0.
+slug = "greenmote"
+type = "tool"
+status = "active"
+license = "GPL-3.0-only"
+
+[[maintainers]]
+name = "DreamWeave"
+url = "https://github.com/DreamWeave-MP"
+
+[links]
+documentation = "@/docs/_index.md"
+donate = "https://ko-fi.com/magicaldave"
+
+# A program: StroggForge's Rust workflow (.github/workflows/build.yml) builds it once per
+# [[platforms]] entry and publishes each release, with the README and LICENSE beside the program.
+# It is not on crates.io.
+[package]
+format = "binary"
+binary = "greenmote"
+
+[[platforms]]
+os = "windows"
+arch = "x86_64"
+
+[[platforms]]
+os = "macos"
+arch = "aarch64"
+
+[[platforms]]
+os = "macos"
+arch = "x86_64"
+
+[[platforms]]
+os = "linux"
+arch = "x86_64"
+
+# The command line only: no GUI on Android.
+[[platforms]]
+os = "android"
+arch = "aarch64"
+
+# The command line only, for ARM64 Linux handhelds.
+[[platforms]]
+os = "linux"
+arch = "aarch64"
+variant = "portmaster"
+
+[install]
+notes = """
+Unzip the archive anywhere and run `greenmote`. With no arguments the Windows, macOS and Linux
+builds open the GUI; `greenmote convert` and `greenmote unclip` run from the command line. The
+Android and PortMaster builds are the command line only.
+
+Greenmote finds your `openmw.cfg` the way OpenMW does. [Start here](@/docs/start-here.md) walks
+through a first conversion and a first unclip.
+"""
+post_install = """
+Convert writes `groundcover.omwaddon`, `deleted_groundcover.omwaddon` and `Meshes/grass/` into
+your `data-local` folder. Enable them in `openmw.cfg`, or pass `--auto-enable`:
+
+```ini
+groundcover=groundcover.omwaddon
+content=deleted_groundcover.omwaddon
+```
+"""
+uninstall = """
+Remove the `groundcover=groundcover.omwaddon` and `content=deleted_groundcover.omwaddon` lines
+from `openmw.cfg`, then delete the two plugins and `Meshes/grass/` from the output folder. Unclip
+keeps the plugin it first rewrote as `<plugin>.greenmote-original`; copy it back over the plugin
+to undo every unclip run.
+"""
+
+[[credits]]
+name = "Greatness7"
+role = "tes3, the plugin and NIF library Greenmote reads and writes with"
+url = "https://github.com/Greatness7/tes3"
+
+[[credits]]
+name = "OpenMW"
+role = "The groundcover, terrain, collision and rotation rules Greenmote measures against"
+url = "https://openmw.org"
+
+# Every published version, oldest first. To release, add the next one here with the day you
+# publish it, set the same version in Cargo.toml, commit, and push its tag: git tag 0.4.0.
+# StroggForge builds and publishes it, then records it in mod.lock beside this file.
+
+[[releases]]
+version = "0.1.0"
+date = 2026-05-30
+summary = "First release: convert placed grass statics into OpenMW groundcover, and inspect groundcover for clipping, from a GUI or the command line."
+added = [
+    "`greenmote convert`: matching exterior `STAT` references become `groundcover.omwaddon`, with `deleted_groundcover.omwaddon` hiding the originals and the meshes copied under `Meshes/grass/`.",
+    "`greenmote unclip`: a groundcover plugin checked against terrain and statics, with `--write` for the `terrain-z`, `static-move`, `static-delete` and `orient` fixes.",
+    "`greenmote.toml` settings, OpenMW config discovery, `--auto-enable`, and `greenmote.log`.",
+    "A desktop GUI in English, French, German, Russian, Spanish and Swedish.",
+    "Shell completions and a manual page.",
+]
+
+[[releases]]
+version = "0.2.0"
+date = 2026-06-03
+summary = "Unclip deletes grass on roads and grass that ends up under water, the GUI has tabs and runs several plugins in turn, and Greenmote is GPL-3.0-only."
+added = [
+    "The `water-delete` and `road-delete` unclip actions, with configurable road texture patterns.",
+    "Scriptless activators are converted like statics.",
+    "Convert, Unclip and Settings tabs in the GUI; the Unclip tab runs a list of plugins one after another, can be cancelled, and can write each to its own output plugin.",
+]
+changed = [
+    "Unclip writes by default; `--dry-run` inspects without writing.",
+    "Tree-like statics no longer count as occluders by default.",
+    "Unknown `greenmote.toml` keys are ignored instead of rejected, and run-time choices are no longer saved to it.",
+    "Greenmote is licensed GPL-3.0-only; 0.1.0 carried no license.",
+]
+fixed = [
+    "Static collision follows `RootCollisionNode`, including hidden ones.",
+    "Without a discoverable `openmw.cfg`, the default user config is used without asking.",
+    "Unclip is much faster on large plugins.",
+]
+
+[[releases]]
+version = "0.3.0"
+date = 2026-09-27
+summary = "Unclip measures every reference against the real terrain and collision triangles of your load order, and only writes when asked."
+breaking = [
+    "Unclip is a dry run by default again: `--write` rewrites the plugin in place, keeping `<plugin>.greenmote-original` and `<plugin>.bak`, and `--output-plugin` writes the rewritten plugin elsewhere. `--dry-run`, `--instances`, `--meshgenerator-ini`, `--origin-epsilon` and the `all` and `none` actions are gone; `--write-actions` is now `--actions`, and the old name still works.",
+    "`float_tolerance`, `max_sink`, `max_sink_fraction` and `sink` replace `origin_epsilon`.",
+]
+added = [
+    "Every reference is measured directly: its mesh's base against OpenMW's triangle-split terrain, the texture OpenMW draws under it, the water plane, and the collision triangles of the statics around it. A reference inside a closed rock is recognised by ray parity.",
+    "Burial is judged against plant height: the limit is the larger of `max_sink` units and `max_sink_fraction` of the mesh.",
+    "A plugin outside every data folder brings its mod's `meshes` folder into the VFS, so a downloaded grass mod can be checked before it is enabled.",
+    "References placed outside their own cell are deleted: OpenMW draws them only from far away.",
+    "`--verbose` writes one line per reference to `greenmote-unclip.log`; `--structured` prints the report as JSON; `GREENMOTE_PROFILE=1` prints phase timings.",
+    "The Unclip tab lists every `groundcover=` plugin in `openmw.cfg` with a checkbox and fixes the checked ones.",
+]
+changed = [
+    "Every write is reloaded and checked against the plan, and unclip run again on its own output plans nothing.",
+    "Context plugins and occluder meshes load in parallel, and every reference is decided in parallel.",
+    "openmw-config 2.0, vfstool_lib 0.10 and rapier3d 0.36.",
+]
+fixed = [
+    "Reference rotations compose as OpenMW composes them; references rotated about more than one axis were measured with the order reversed.",
+    "A static moved or deleted by a later plugin no longer leaves a copy behind to clip against.",
+    "Dependencies updated past a compile-time security advisory.",
+]
+migration = """
+Unclip no longer writes unless you pass `--write`. Replace `--dry-run` with nothing, and
+`--write-actions` with `--actions`. In `greenmote.toml`, remove `[unclip]` keys the report warns
+about; the Settings tab drops them when it saves.
+"""

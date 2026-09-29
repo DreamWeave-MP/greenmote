@@ -1,0 +1,65 @@
+# Site configuration. This file is about the website; facts about the program live in
+# content/home/mod.toml. Zola reads this file; so does CI.
+
+# Where the site lives. On GitHub Pages the workflow substitutes the real Pages URL, so this
+# value matters for local previews.
+base_url = "https://DreamWeave-MP.github.io/greenmote"
+title = "Greenmote"
+description = "Turn placed grass into OpenMW groundcover, and fix groundcover that floats, sinks, sits on roads or water, or clips into rocks."
+
+compile_sass = true
+build_search_index = true
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+taxonomies = [{ name = "tags", feed = false }]
+
+[search]
+index_format = "fuse_json"
+include_title = true
+include_description = true
+include_content = true
+truncate_content_length = 400
+
+[markdown]
+highlighting = { theme = "dracula-soft" }
+insert_anchor_links = "right"
+smart_punctuation = true
+
+[slugify]
+paths = "safe"
+
+[link_checker]
+skip_prefixes = ["https://github.com/", "https://www.nexusmods.com/", "https://openmw.readthedocs.io/"]
+
+[extra]
+# The repository that builds and publishes this site. CI refuses to build anywhere else.
+github_username = "DreamWeave-MP"
+github_project = "greenmote"
+
+logo_text = "Greenmote"
+footer_text = "Greenmote · GPL-3.0-only · DreamWeave contributors"
+# The program's own icon, the crescent moon the GUI window carries, padded square.
+favicon = "img/greenmote.png"
+
+palette = "grove"
+
+# Mystic Cards, hand-drawn like the moon and its leaves, for titles. The docs are read, so their
+# text stays in the system font.
+font_override = "mystic-cards"
+font_override_titles_only = true
+
+menu_items = [
+    { name = "Greenmote", url = "@/home/index.md" },
+    { name = "Start here", url = "@/docs/start-here.md" },
+    { name = "Convert", url = "@/docs/convert.md" },
+    { name = "Unclip", url = "@/docs/unclip.md" },
+    { name = "Docs", url = "@/docs/_index.md" },
+]
+
+# DreamWeave's own page-view counter: this is DreamWeave's site.
+goatcounter = "dreamweave-mp"
+
+# GitHub Discussions on this repository, through giscus. The ids are looked up at build time.
+[extra.comments]
+enabled = true
+category = "General"

@@ -1,0 +1,44 @@
+// Greenmote. This file belongs to Greenmote: the template never changes it, and it loads last.
+// The grove palette does the heavy lifting; this hangs the program's moon in the header and the
+// hero.
+
+// The header's mark is the program's own icon, the crescent moon the GUI window carries.
+.dw-brand__mark
+  width: 1.7em
+  height: 1.7em
+  margin: -.35em 0
+  border: 0
+  transform: none
+  background: url("img/greenmote.png") center / contain no-repeat
+
+// The hero carries the whole crescent, tree and hanging leaves on its right, with a little
+// moonlight behind it. On narrow screens the text needs the room, so the moon steps aside and the
+// header's mark carries the name.
+.dw-hero
+  overflow: hidden
+  isolation: isolate
+  background: radial-gradient(ellipse 30% 90% at 84% 50%, color-mix(in oklab, var(--dw-accent) 14%, transparent), transparent 70%), linear-gradient(180deg, var(--dw-bg-1), var(--dw-bg-0))
+
+  &::after
+    content: ""
+    position: absolute
+    z-index: -1
+    top: 50%
+    right: max(2rem, calc((100vw - var(--dw-width-page)) / 2 + 5rem))
+    height: min(90%, 20rem)
+    aspect-ratio: 509 / 600
+    transform: translateY(-50%)
+    background: url("img/greenmote.webp") center / contain no-repeat
+    filter: drop-shadow(0 0 1.75rem color-mix(in oklab, var(--dw-accent) 28%, transparent))
+    pointer-events: none
+
+  @media (max-width: 1100px)
+    &::after
+      height: min(70%, 13rem)
+      opacity: .3
+
+  @media (max-width: 700px)
+    background: linear-gradient(180deg, var(--dw-bg-1), var(--dw-bg-0))
+
+    &::after
+      display: none
