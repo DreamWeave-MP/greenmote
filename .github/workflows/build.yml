@@ -21,7 +21,6 @@ jobs:
       # Optional: set NEXUS_API_KEY and NEXUS_GROUP_IDS repository or organization secrets
       # to upload release archives to Nexus Mods. Use StroggForge's
       # .github/nexus_group_ids.template.json as the NEXUS_GROUP_IDS shape.
-      generate_benchmarks: true
       enable_android: true
       enable_portmaster: true
       cargo_publish: false
