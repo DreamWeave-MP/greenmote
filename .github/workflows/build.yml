@@ -10,10 +10,11 @@ on:
 jobs:
   build:
     permissions:
+      actions: write
       contents: write
       pages: write
       id-token: write
-    uses: DreamWeave-MP/StroggForge/.github/workflows/rustGlobalBuild.yml@v43
+    uses: DreamWeave-MP/StroggForge/.github/workflows/rustGlobalBuild.yml@v51
     secrets: inherit
     with:
       binary_names: '["greenmote"]'
@@ -24,3 +25,6 @@ jobs:
       enable_android: true
       enable_portmaster: true
       cargo_publish: false
+      # StroggForge records each release in content/home/mod.lock and deploys the documentation
+      # site in content/.
+      mod_template: true
