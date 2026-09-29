@@ -170,6 +170,29 @@ plugin = "x.omwaddon"
 }
 
 #[test]
+fn load_save_keeps_an_unclip_table_holding_only_max_tilt_or_max_sink_fraction() {
+    for (key, value) in [("max_tilt", "30.0"), ("max_sink_fraction", "0.5")] {
+        let dir = TempDir::new();
+        let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);
+        std::fs::write(&config_path, format!("[unclip]\n{key} = {value}\n")).unwrap();
+
+        let config = GroundcoverConfig::load_for_edit(
+            &config_path,
+            resolved_output_directory(dir.path.join("data-local")),
+            None,
+        )
+        .unwrap();
+        config.save_for_edit(&config_path).unwrap();
+        let contents = read_to_string(config_path).unwrap();
+
+        assert!(
+            contents.contains(&format!("{key} = {value}\n")),
+            "{contents}"
+        );
+    }
+}
+
+#[test]
 fn load_for_edit_creates_missing_config_with_defaults() {
     let dir = TempDir::new();
     let config_path = dir.path.join(crate::groundcover::DEFAULT_CONFIG_NAME);

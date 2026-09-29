@@ -96,18 +96,41 @@ impl GroundcoverConfigFile {
     }
 }
 
+/// Whether the `[unclip]` table sets nothing this version understands. Every field is named, so a
+/// new setting cannot be left out and silently replaced by the generated defaults.
 fn is_empty_unclip_config(config: &PersistedUnclipConfig) -> bool {
-    config.plugin.is_none()
-        && config.actions.is_none()
-        && config.float_tolerance.is_none()
-        && config.max_sink.is_none()
-        && config.sink.is_none()
-        && config.relocation_step.is_none()
-        && config.relocation_steps.is_none()
-        && config.orientation_epsilon.is_none()
-        && config.include_grass_ids.is_none()
-        && config.exclude_grass_ids.is_none()
-        && config.include_occluder_ids.is_none()
-        && config.exclude_occluder_ids.is_none()
-        && config.road_texture_paths.is_none()
+    let PersistedUnclipConfig {
+        plugin,
+        actions,
+        float_tolerance,
+        max_sink,
+        max_sink_fraction,
+        sink,
+        relocation_step,
+        relocation_steps,
+        orientation_epsilon,
+        max_tilt,
+        include_grass_ids,
+        exclude_grass_ids,
+        include_occluder_ids,
+        exclude_occluder_ids,
+        road_texture_paths,
+        unknown: _,
+    } = config;
+
+    plugin.is_none()
+        && actions.is_none()
+        && float_tolerance.is_none()
+        && max_sink.is_none()
+        && max_sink_fraction.is_none()
+        && sink.is_none()
+        && relocation_step.is_none()
+        && relocation_steps.is_none()
+        && orientation_epsilon.is_none()
+        && max_tilt.is_none()
+        && include_grass_ids.is_none()
+        && exclude_grass_ids.is_none()
+        && include_occluder_ids.is_none()
+        && exclude_occluder_ids.is_none()
+        && road_texture_paths.is_none()
 }
