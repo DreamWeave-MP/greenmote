@@ -1244,6 +1244,7 @@ dependencies = [
  "tes3",
  "toml",
  "vfstool_lib",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

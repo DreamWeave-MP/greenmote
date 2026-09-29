@@ -7,6 +7,8 @@ use std::{
 
 use eframe::egui;
 
+#[cfg(any(windows, test))]
+mod console;
 mod convert;
 mod localization;
 mod run_options;
@@ -464,6 +466,9 @@ fn openmw_config_error_message(error: &str) -> &str {
 ///
 /// Returns an I/O-shaped error when the underlying GUI platform cannot create or run the window.
 pub fn run() -> io::Result<()> {
+    #[cfg(windows)]
+    console::release_own_console();
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([960.0, 600.0])

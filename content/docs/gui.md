@@ -12,6 +12,10 @@ tabs: **Convert**, **Unclip** and **Settings**. The window runs the same convert
 command line, with the settings in `greenmote.toml`. The Android and PortMaster builds have no
 window.
 
+On Windows, the console window that opens with a program started from Explorer or a shortcut
+closes as Greenmote's window appears. Started from a terminal, Greenmote holds the terminal until
+its window closes.
+
 ## Starting up
 
 The window finds your `openmw.cfg` as the command line does and loads `greenmote.toml` beside it,

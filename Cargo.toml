@@ -7,7 +7,7 @@ license = "GPL-3.0-only"
 
 [features]
 default = ["gui"]
-gui = ["dep:eframe", "dep:rfd"]
+gui = ["dep:eframe", "dep:rfd", "dep:windows-sys"]
 
 [dependencies]
 clap = { version = "4.6.6", features = ["derive"] }
@@ -35,3 +35,6 @@ features = ["beth-archives"]
 git = "https://github.com/Greatness7/tes3"
 branch = "main"
 features = ["esp", "nif"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console"], optional = true }
