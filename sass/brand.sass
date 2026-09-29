@@ -2,14 +2,22 @@
 // The grove palette does the heavy lifting; this hangs the program's moon in the header and the
 // hero.
 
-// The header's mark is the program's own icon, the crescent moon the GUI window carries.
+// The header's mark is the program's own icon, the crescent moon the GUI window carries. The
+// template's diamond carries a square glow and a quarter-turn hover; the glow here follows the moon,
+// and a hover turns it once round so it lands upright.
 .dw-brand__mark
   width: 1.7em
   height: 1.7em
   margin: -.35em 0
   border: 0
-  transform: none
+  box-shadow: none
+  transform: rotate(0turn)
+  filter: drop-shadow(0 0 4px color-mix(in oklab, var(--dw-accent) 40%, transparent))
   background: url("img/greenmote.png") center / contain no-repeat
+  transition: transform .6s var(--dw-ease)
+
+.dw-brand:hover .dw-brand__mark
+  transform: rotate(1turn)
 
 // The hero carries the whole crescent, tree and hanging leaves on its right, with a little
 // moonlight behind it. On narrow screens the text needs the room, so the moon steps aside and the
