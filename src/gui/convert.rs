@@ -1584,7 +1584,7 @@ fn path_open_commands(path: &Path) -> Vec<OpenCommand> {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, io, path::Path};
+    use std::{io, path::Path};
 
     use super::{
         ConvertRunOptions, ConvertUiState, GuiEvent, UnclipRunOptions, UnclipTargetStatus, egui,
@@ -2227,6 +2227,8 @@ mod tests {
     #[test]
     #[cfg(all(unix, not(target_os = "macos")))]
     fn linux_path_open_commands_use_paths_not_file_urls() {
+        use std::ffi::OsString;
+
         let path = Path::new("/tmp/greenmote output/log");
         let commands = path_open_commands(path);
 
