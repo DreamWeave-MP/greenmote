@@ -19,14 +19,15 @@
 .dw-brand:hover .dw-brand__mark
   transform: rotate(1turn)
 
-// The hero carries the whole crescent, tree and hanging leaves on its right, with a little
-// moonlight behind it. On narrow screens the text needs the room, so the moon steps aside and the
-// header's mark carries the name.
+// Where the hero has no live art, it carries the whole crescent, tree and hanging leaves on its
+// right, with a little moonlight behind it. On narrow screens the text needs the room, so the moon
+// steps aside and the header's mark carries the name.
 .dw-hero
   overflow: hidden
   isolation: isolate
   background: radial-gradient(ellipse 30% 90% at 84% 50%, color-mix(in oklab, var(--dw-accent) 14%, transparent), transparent 70%), linear-gradient(180deg, var(--dw-bg-1), var(--dw-bg-0))
 
+.dw-hero:not(.dw-hero--art)
   &::after
     content: ""
     position: absolute
@@ -50,3 +51,50 @@
 
     &::after
       display: none
+
+// The live art is static/js/greenmote-hero.js: the icon grown in 3D over a meadow at night, beside
+// the text. Until its first frame, and without WebGL, the script shows a still of the mark in the
+// same place. Without JavaScript the still stands to the right of the text, or above it on a phone.
+.dw-hero__art
+  > .gm-hero__canvas
+    opacity: 0
+    transition: opacity .8s var(--dw-ease)
+
+  > .gm-hero__still
+    position: absolute
+    width: auto
+    height: auto
+    object-fit: contain
+    opacity: 0
+    transition: opacity .6s var(--dw-ease)
+    pointer-events: none
+
+  &.is-placed > .gm-hero__still
+    opacity: 1
+
+  &.is-live > .gm-hero__canvas
+    opacity: 1
+
+  &.is-live > .gm-hero__still
+    opacity: 0
+
+html:not(.dw-js) .dw-hero--art .dw-hero__art::before
+  content: ""
+  position: absolute
+  top: 50%
+  right: max(1.5rem, calc((100% - var(--dw-width-page)) / 2 + 3rem))
+  width: min(20rem, 30%)
+  aspect-ratio: 2366 / 2926
+  transform: translateY(-50%)
+  background: url("img/greenmote-mark.webp") center / contain no-repeat
+
+// On a phone or a tablet the text needs the width, so the mark stands above it.
+@media (max-width: 900px)
+  .dw-hero--art .dw-hero__text
+    padding-top: 15rem
+
+  html:not(.dw-js) .dw-hero--art .dw-hero__art::before
+    top: 1rem
+    right: 50%
+    width: 11rem
+    transform: translateX(50%)

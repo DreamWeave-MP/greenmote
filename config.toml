@@ -59,6 +59,11 @@ menu_items = [
 # DreamWeave's own page-view counter: this is DreamWeave's site.
 goatcounter = "dreamweave-mp"
 
+# The hero's art: the icon grown in 3D over a meadow at night, drawn by static/js/greenmote-hero.js.
+[extra.hero]
+script = "js/greenmote-hero.js"
+preload = ["js/vendor/three.module.min.js", "js/vendor/three.core.min.js"]
+
 # GitHub Discussions on this repository, through giscus. The ids are looked up at build time.
 [extra.comments]
 enabled = true
