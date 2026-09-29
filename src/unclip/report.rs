@@ -51,6 +51,7 @@ pub(crate) struct PolicySummary {
     pub(crate) max_sink_fraction: f32,
     pub(crate) sink: f32,
     pub(crate) orientation_epsilon_degrees: f32,
+    pub(crate) max_tilt_degrees: f32,
     pub(crate) relocation_step: f32,
     pub(crate) relocation_steps: u16,
     pub(crate) include_grass_ids: Vec<String>,
@@ -69,6 +70,7 @@ impl PolicySummary {
             max_sink_fraction: policy.max_sink_fraction,
             sink: policy.sink,
             orientation_epsilon_degrees: policy.orientation_epsilon_degrees,
+            max_tilt_degrees: policy.max_tilt_degrees,
             relocation_step: policy.relocation.step,
             relocation_steps: policy.relocation.steps,
             include_grass_ids: policy.target_filter.include_ids().to_vec(),
@@ -131,12 +133,13 @@ fn write_header(out: &mut dyn Write, report: &Report) -> io::Result<()> {
     writeln!(out, "Actions: {}", join(&report.policy.actions))?;
     writeln!(
         out,
-        "Tolerances: float {} / max sink {} units or {}% of height / sink to {} / tilt {} deg",
+        "Tolerances: float {} / max sink {} units or {}% of height / sink to {} / tilt {} deg / max tilt {} deg",
         report.policy.float_tolerance,
         report.policy.max_sink,
         report.policy.max_sink_fraction * 100.0,
         report.policy.sink,
-        report.policy.orientation_epsilon_degrees
+        report.policy.orientation_epsilon_degrees,
+        report.policy.max_tilt_degrees
     )?;
     writeln!(out)
 }
@@ -333,5 +336,52 @@ fn join(items: &[&str]) -> String {
         "none".to_owned()
     } else {
         items.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, path::PathBuf};
+
+    use super::{CellSummary, OutputSummary, PolicySummary, Report, write_text};
+    use crate::unclip::{
+        args::UnclipPolicy, decide::VerdictCounts, static_occluders::StaticOccluderBuildReport,
+    };
+
+    fn report_with_max_tilt(max_tilt_degrees: f32) -> Report {
+        let mut policy = UnclipPolicy::for_test();
+        policy.max_tilt_degrees = max_tilt_degrees;
+        Report {
+            target: PathBuf::from("grass.esp"),
+            added_data_directories: Vec::new(),
+            mode: OutputSummary::DryRun {
+                would_write: PathBuf::from("grass.esp"),
+            },
+            policy: PolicySummary::from_policy(&policy),
+            cells: CellSummary::default(),
+            occluders: StaticOccluderBuildReport::default(),
+            counts: VerdictCounts::default(),
+            mesh_errors: BTreeMap::new(),
+            write: None,
+            refs: None,
+        }
+    }
+
+    #[test]
+    fn both_reports_state_the_max_tilt_the_run_used() {
+        let report = report_with_max_tilt(30.0);
+
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["policy"]["max_tilt_degrees"], 30.0);
+
+        let mut text = Vec::new();
+        write_text(&mut text, &report).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(
+            text.contains(
+                "Tolerances: float 1 / max sink 24 units or 75% of height / sink to 4 / tilt 1 deg / max tilt 30 deg\n"
+            ),
+            "{text}"
+        );
     }
 }
