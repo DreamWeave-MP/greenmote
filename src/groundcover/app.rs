@@ -45,6 +45,7 @@ pub fn run(
     run_loaded_config(openmw_config, &config, stdout, stderr, events, cancellation)
 }
 
+#[cfg(feature = "gui")]
 pub fn run_with_config(
     openmw_cfg: Option<&Path>,
     config: &GroundcoverConfig,

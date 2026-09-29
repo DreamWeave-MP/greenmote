@@ -233,6 +233,7 @@ pub fn greenmote_config_path(config_path: Option<&Path>, config: &OpenMWConfigur
     )
 }
 
+#[cfg(any(feature = "gui", test))]
 pub fn resolve_greenmote_config_path(
     config_path: Option<&Path>,
     openmw_cfg: Option<&Path>,
@@ -276,6 +277,7 @@ pub(crate) struct ConvertOutputDirectory {
 }
 
 /// One `groundcover=` line of `openmw.cfg`, resolved through the VFS.
+#[cfg(any(feature = "gui", test))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GroundcoverEntry {
     /// The file name exactly as written in `openmw.cfg`.
@@ -285,6 +287,7 @@ pub(crate) struct GroundcoverEntry {
 }
 
 /// Lists the `groundcover=` plugins in config order, each resolved through the VFS.
+#[cfg(any(feature = "gui", test))]
 pub(crate) fn groundcover_plugins(config: &OpenMWConfiguration) -> Vec<GroundcoverEntry> {
     let names = config
         .groundcover_iter()

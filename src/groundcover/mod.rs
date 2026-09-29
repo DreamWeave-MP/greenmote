@@ -4,7 +4,7 @@
 
 use std::{
     io::{self, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 mod app;
@@ -108,6 +108,7 @@ pub fn run_with_output_and_events(
 /// # Errors
 ///
 /// Returns filesystem, `OpenMW` configuration, plugin parse, VFS lookup, or output write errors.
+#[cfg(feature = "gui")]
 pub(crate) fn run_with_config_events_and_cancel(
     openmw_cfg: Option<&std::path::Path>,
     config: &GroundcoverConfig,
@@ -124,10 +125,11 @@ pub(crate) fn run_with_config_events_and_cancel(
 /// # Errors
 ///
 /// Returns filesystem, `OpenMW` configuration, TOML parse, or regex validation errors.
+#[cfg(feature = "gui")]
 pub(crate) fn load_config_for_edit(
     openmw_cfg: Option<&Path>,
     config_path_override: Option<&Path>,
-) -> io::Result<(PathBuf, GroundcoverConfig)> {
+) -> io::Result<(std::path::PathBuf, GroundcoverConfig)> {
     let config_path = openmw::resolve_greenmote_config_path(config_path_override, openmw_cfg)?;
     let runtime_config = openmw::load_config_from_path(openmw_cfg)?;
     let persisted_openmw_cfg = openmw::persisted_config_path(&runtime_config);
@@ -147,10 +149,11 @@ pub(crate) fn load_config_for_edit(
 /// # Errors
 ///
 /// Returns `OpenMW` configuration or filesystem errors.
+#[cfg(feature = "gui")]
 pub(crate) fn regenerate_config_for_edit(
     openmw_cfg: Option<&Path>,
     config_path_override: Option<&Path>,
-) -> io::Result<(PathBuf, GroundcoverConfig)> {
+) -> io::Result<(std::path::PathBuf, GroundcoverConfig)> {
     let runtime_config = openmw::load_config_from_path(openmw_cfg)?;
     let persisted_openmw_cfg = openmw::persisted_config_path(&runtime_config);
     let config_path = openmw::greenmote_config_path(config_path_override, &runtime_config);
@@ -166,6 +169,7 @@ pub(crate) fn regenerate_config_for_edit(
 /// # Errors
 ///
 /// Returns regex validation or filesystem errors.
+#[cfg(feature = "gui")]
 pub(crate) fn save_config_for_edit(
     config: &GroundcoverConfig,
     path: &std::path::Path,

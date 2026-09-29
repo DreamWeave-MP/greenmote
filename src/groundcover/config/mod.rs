@@ -2,6 +2,7 @@
 
 //! Runtime configuration for `greenmote convert`.
 
+#[cfg(any(feature = "gui", test))]
 mod edit;
 mod file;
 
@@ -9,7 +10,7 @@ mod file;
 mod tests;
 
 use std::{
-    fs::{File, OpenOptions, read_to_string},
+    fs::{File, read_to_string},
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -115,6 +116,7 @@ impl GroundcoverConfig {
     ///
     /// Returns filesystem errors, TOML parse errors as invalid data, or regex compilation errors as
     /// invalid input.
+    #[cfg(any(feature = "gui", test))]
     pub(crate) fn load_for_edit(
         config_path: &Path,
         output_directory: openmw::ConvertOutputDirectory,
@@ -148,6 +150,7 @@ impl GroundcoverConfig {
     ///
     /// Returns an invalid-data error for malformed regex settings or filesystem errors while
     /// writing the TOML file.
+    #[cfg(any(feature = "gui", test))]
     pub(crate) fn save_for_edit(&self, path: &Path) -> io::Result<Self> {
         let mut normalized = self.clone();
         normalized.compile_regex_sets()?;
@@ -156,6 +159,7 @@ impl GroundcoverConfig {
         Ok(normalized)
     }
 
+    #[cfg(any(feature = "gui", test))]
     pub(crate) fn save_for_edit_new(&self, path: &Path) -> io::Result<Self> {
         let mut normalized = self.clone();
         normalized.compile_regex_sets()?;
@@ -164,6 +168,7 @@ impl GroundcoverConfig {
         Ok(normalized)
     }
 
+    #[cfg(any(feature = "gui", test))]
     fn clear_edit_save_runtime_only_fields(&mut self) {
         self.dry_run = false;
         self.validate_config = false;
@@ -240,10 +245,14 @@ impl GroundcoverConfig {
         file.write_all(contents.as_bytes())
     }
 
+    #[cfg(any(feature = "gui", test))]
     fn save_to_new(&self, path: &Path) -> io::Result<()> {
         let contents = toml::to_string_pretty(&file::GroundcoverConfigFile::from_runtime(self))
             .map_err(to_io_error)?;
-        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
         file.write_all(contents.as_bytes())
     }
 
@@ -280,6 +289,7 @@ fn case_insensitive_regex_set(patterns: &[String]) -> io::Result<RegexSet> {
         .map_err(to_io_error)
 }
 
+#[cfg(feature = "gui")]
 pub(crate) fn regenerate_for_edit(
     config_path: &Path,
     output_directory: openmw::ConvertOutputDirectory,

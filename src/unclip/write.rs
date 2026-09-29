@@ -37,6 +37,7 @@ impl WriteFailure {
     }
 
     /// Whether `error` came out of the write phase.
+    #[cfg(feature = "gui")]
     pub(crate) fn is_write_failure(error: &io::Error) -> bool {
         match error.get_ref() {
             Some(inner) => inner.is::<Self>(),

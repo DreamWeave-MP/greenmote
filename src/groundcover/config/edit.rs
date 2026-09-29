@@ -5,15 +5,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::GroundcoverConfig;
-use crate::groundcover::openmw;
-
+#[cfg(feature = "gui")]
 pub(super) fn regenerate(
     config_path: &Path,
-    output_directory: openmw::ConvertOutputDirectory,
+    output_directory: crate::groundcover::openmw::ConvertOutputDirectory,
     openmw_cfg: Option<PathBuf>,
-) -> io::Result<GroundcoverConfig> {
-    let mut config = GroundcoverConfig::with_resolved_output_directory(output_directory);
+) -> io::Result<super::GroundcoverConfig> {
+    let mut config = super::GroundcoverConfig::with_resolved_output_directory(output_directory);
     config.openmw_cfg = openmw_cfg;
     let temp_path = next_temp_config_path(config_path);
     let config = config.save_for_edit_new(&temp_path).map_err(|error| {
@@ -92,6 +90,7 @@ fn rename_with_context(source: &Path, destination: &Path) -> io::Result<()> {
     })
 }
 
+#[cfg(feature = "gui")]
 fn next_temp_config_path(config_path: &Path) -> PathBuf {
     for index in 0.. {
         let extension = if index == 0 {

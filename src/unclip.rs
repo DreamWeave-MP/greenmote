@@ -26,6 +26,7 @@ mod write;
 
 pub use app::UNCLIP_LOG_NAME;
 pub use args::{ActionArg, UnclipArgs};
+#[cfg(feature = "gui")]
 pub(crate) use write::WriteFailure;
 
 /// Runs the groundcover unclipping subcommand.
