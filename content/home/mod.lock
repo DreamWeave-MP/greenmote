@@ -1,0 +1,389 @@
+{
+  "schema_version": "2",
+  "document": "lock",
+  "project": "57ec3325-acb3-4307-9c0f-2031ab3354ef",
+  "note": "Written by CI when a release tag is pushed: what each published release's archive contains. Do not edit.",
+  "releases": [
+    {
+      "version": "0.1.0",
+      "locked_from": "bd395e25037bbdf4ea159c700ae233656dc6bf29",
+      "artifacts": [
+        {
+          "id": "windows-x64",
+          "format": "binary",
+          "filename": "greenmote-Windows-X64.zip",
+          "media_type": "application/zip",
+          "size": 4110639,
+          "digests": {
+            "sha256": "439c697c798492d84668438c97784d1ca57738413260d584cf34cbb5012cfd1c"
+          },
+          "platform": {
+            "os": "windows",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "macos-arm64",
+          "format": "binary",
+          "filename": "greenmote-macOS-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 4457293,
+          "digests": {
+            "sha256": "4a60a10c3c82a0561c65d46c10e3b0c8193e060c061a5b1b29da2b91405d1aae"
+          },
+          "platform": {
+            "os": "macos",
+            "arch": "aarch64"
+          }
+        },
+        {
+          "id": "macos-x64",
+          "format": "binary",
+          "filename": "greenmote-macOS-X64.zip",
+          "media_type": "application/zip",
+          "size": 4654491,
+          "digests": {
+            "sha256": "93873016fffa2eff48289afc7fdd83e00bf2465d1f85e37df745a0e48dd6c41a"
+          },
+          "platform": {
+            "os": "macos",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "linux-x64",
+          "format": "binary",
+          "filename": "greenmote-Linux-X64.zip",
+          "media_type": "application/zip",
+          "size": 5985401,
+          "digests": {
+            "sha256": "291ec7fe87cf1462920d7376c0eccaf5f768c3ce3d2ea1119d0b62627670a4a9"
+          },
+          "platform": {
+            "os": "linux",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "android-arm64",
+          "format": "binary",
+          "filename": "greenmote-Android-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 2313368,
+          "digests": {
+            "sha256": "c8e5409a3acc875e27b674574be09c7cdb437bc063a8ec6d05d0ae59aa3cbace"
+          },
+          "platform": {
+            "os": "android",
+            "arch": "aarch64"
+          }
+        },
+        {
+          "id": "linux-arm64-portmaster",
+          "format": "binary",
+          "filename": "greenmote-Portmaster-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 2282452,
+          "digests": {
+            "sha256": "348e2292ff5b54f0e28f164e32b033d99018ac4409abed4145a9e0a04d0b6de5"
+          },
+          "platform": {
+            "os": "linux",
+            "arch": "aarch64",
+            "variant": "portmaster"
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [
+        {
+          "os": "windows",
+          "arch": "x86_64"
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64"
+        },
+        {
+          "os": "macos",
+          "arch": "x86_64"
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64"
+        }
+      ],
+      "provides": [],
+      "relationships": [],
+      "components": [
+        {
+          "id": "main",
+          "name": "Greenmote",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
+    },
+    {
+      "version": "0.2.0",
+      "locked_from": "aea7a6af38f9b3e3f4b6a9c6c442661d8af5f666",
+      "artifacts": [
+        {
+          "id": "windows-x64",
+          "format": "binary",
+          "filename": "greenmote-Windows-X64.zip",
+          "media_type": "application/zip",
+          "size": 4868144,
+          "digests": {
+            "sha256": "940c610f0f00a2c301d3386413876728600a1831c7063308e7d9c77f3ac65d31"
+          },
+          "platform": {
+            "os": "windows",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "macos-arm64",
+          "format": "binary",
+          "filename": "greenmote-macOS-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 5214171,
+          "digests": {
+            "sha256": "cea0e6fb41976e94d136c8a1629ee63323b827470ea2c7038791166847c55be5"
+          },
+          "platform": {
+            "os": "macos",
+            "arch": "aarch64"
+          }
+        },
+        {
+          "id": "macos-x64",
+          "format": "binary",
+          "filename": "greenmote-macOS-X64.zip",
+          "media_type": "application/zip",
+          "size": 5505999,
+          "digests": {
+            "sha256": "72eec08715918a937b5103465aa390ae8bec7f1ce9307c85624c133aac39402b"
+          },
+          "platform": {
+            "os": "macos",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "linux-x64",
+          "format": "binary",
+          "filename": "greenmote-Linux-X64.zip",
+          "media_type": "application/zip",
+          "size": 6868416,
+          "digests": {
+            "sha256": "6333cee729c26495f96a968c1372b422287b14ecc6ddc5ca7f90a2b94a6145e8"
+          },
+          "platform": {
+            "os": "linux",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "android-arm64",
+          "format": "binary",
+          "filename": "greenmote-Android-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 2616570,
+          "digests": {
+            "sha256": "4cc1f9c8a45c378da8d9e50e96e49ddaed97ebf583f1f47e783798a30ed89850"
+          },
+          "platform": {
+            "os": "android",
+            "arch": "aarch64"
+          }
+        },
+        {
+          "id": "linux-arm64-portmaster",
+          "format": "binary",
+          "filename": "greenmote-Portmaster-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 2585994,
+          "digests": {
+            "sha256": "e2ec62860afea43163a722345e19d8aff0c3435a8ecca1b5c0d74fdef567cb79"
+          },
+          "platform": {
+            "os": "linux",
+            "arch": "aarch64",
+            "variant": "portmaster"
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [
+        {
+          "os": "windows",
+          "arch": "x86_64"
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64"
+        },
+        {
+          "os": "macos",
+          "arch": "x86_64"
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64"
+        }
+      ],
+      "provides": [],
+      "relationships": [],
+      "components": [
+        {
+          "id": "main",
+          "name": "Greenmote",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
+    },
+    {
+      "version": "0.3.0",
+      "locked_from": "d11f51e56bce8ab09230460803eaa519a46391ad",
+      "artifacts": [
+        {
+          "id": "windows-x64",
+          "format": "binary",
+          "filename": "greenmote-Windows-X64.zip",
+          "media_type": "application/zip",
+          "size": 5046919,
+          "digests": {
+            "sha256": "a9b33d1ba06c53586a70ef6432bf3321c44371f7c5657900d2b57914c37daa9d"
+          },
+          "platform": {
+            "os": "windows",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "macos-arm64",
+          "format": "binary",
+          "filename": "greenmote-macOS-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 5241822,
+          "digests": {
+            "sha256": "a40518987c5b1070c1b9bf0de0cfabcc4eda32e7610a6e6b2d3c15381e7486b0"
+          },
+          "platform": {
+            "os": "macos",
+            "arch": "aarch64"
+          }
+        },
+        {
+          "id": "macos-x64",
+          "format": "binary",
+          "filename": "greenmote-macOS-X64.zip",
+          "media_type": "application/zip",
+          "size": 5629557,
+          "digests": {
+            "sha256": "348600a9ae54e5c9d5af78d171a971951b485cfdfc4d4f225e89c8e178882a86"
+          },
+          "platform": {
+            "os": "macos",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "linux-x64",
+          "format": "binary",
+          "filename": "greenmote-Linux-X64.zip",
+          "media_type": "application/zip",
+          "size": 6958100,
+          "digests": {
+            "sha256": "0bdcbab65c3803bff0b3baf5532843f436686817fab2610bbec90dd01827d710"
+          },
+          "platform": {
+            "os": "linux",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "android-arm64",
+          "format": "binary",
+          "filename": "greenmote-Android-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 2401004,
+          "digests": {
+            "sha256": "c6d2a6bc603dfd4aae894630026420353906171a7073e2a2975b9859cccf8501"
+          },
+          "platform": {
+            "os": "android",
+            "arch": "aarch64"
+          }
+        },
+        {
+          "id": "linux-arm64-portmaster",
+          "format": "binary",
+          "filename": "greenmote-Portmaster-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 2396545,
+          "digests": {
+            "sha256": "d8ccafbacbeb71eaa32a74b31a52825453a441930880ef85c86a8e54439f09fc"
+          },
+          "platform": {
+            "os": "linux",
+            "arch": "aarch64",
+            "variant": "portmaster"
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [
+        {
+          "os": "windows",
+          "arch": "x86_64"
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64"
+        },
+        {
+          "os": "macos",
+          "arch": "x86_64"
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64"
+        }
+      ],
+      "provides": [],
+      "relationships": [],
+      "components": [
+        {
+          "id": "main",
+          "name": "Greenmote",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
+    }
+  ]
+}
