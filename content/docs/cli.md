@@ -99,7 +99,7 @@ the run:
 | `--relocation-step N` | 32 | Units between static-move's search rings |
 | `--relocation-steps N` | 8 | Search rings, 1 to 256 |
 | `--orientation-epsilon N` | 1 | Degrees of tilt treated as aligned |
-| `--max-tilt N` | 45 | Steepest ground, in degrees, grass is tilted to |
+| `--max-tilt N` | 45 | Steepest ground, in degrees, grass is tilted to: above 0, at most 90 |
 | `--include-grass-id REGEX` | | Only check references whose whole ID matches. Repeatable |
 | `--exclude-grass-id REGEX` | | Do not check references whose whole ID matches. Repeatable |
 | `--include-occluder-id REGEX` | | Only statics whose whole ID matches block grass. Repeatable |

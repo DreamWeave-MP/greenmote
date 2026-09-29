@@ -88,9 +88,9 @@ pub struct UnclipArgs {
     #[arg(long = "orientation-epsilon", value_parser = non_negative_f32)]
     pub orientation_epsilon: Option<f32>,
 
-    /// Steepest terrain tilt in degrees that orient will align a ref to. Steeper ground keeps the
-    /// ref's current rotation.
-    #[arg(long = "max-tilt", value_parser = non_negative_f32)]
+    /// Steepest terrain tilt in degrees (above 0, at most 90) that orient will align a ref to.
+    /// Steeper ground keeps the ref's current rotation.
+    #[arg(long = "max-tilt", value_parser = tilt_degrees)]
     pub max_tilt: Option<f32>,
 
     /// Include only target grass refs whose full IDs match this case-insensitive regex. May be repeated.
@@ -411,6 +411,17 @@ fn positive_f32(value: &str) -> Result<f32, String> {
         Ok(value)
     } else {
         Err("expected a finite positive number".to_owned())
+    }
+}
+
+fn tilt_degrees(value: &str) -> Result<f32, String> {
+    let value = value
+        .parse::<f32>()
+        .map_err(|error| format!("expected degrees above 0 and at most 90: {error}"))?;
+    if value > 0.0 && value <= 90.0 {
+        Ok(value)
+    } else {
+        Err("expected degrees above 0 and at most 90".to_owned())
     }
 }
 

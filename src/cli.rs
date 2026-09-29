@@ -345,6 +345,8 @@ mod tests {
             "12",
             "--orientation-epsilon",
             "3.5",
+            "--max-tilt",
+            "90",
             "--include-grass-id",
             "^flora_grass_.*$",
             "--exclude-grass-id",
@@ -381,6 +383,7 @@ mod tests {
         assert_close(policy.relocation.step, 64.0);
         assert_eq!(policy.relocation.steps, 12);
         assert_close(policy.orientation_epsilon_degrees, 3.5);
+        assert_close(policy.max_tilt_degrees, 90.0);
         assert!(policy.target_filter.includes("flora_grass_01"));
         assert!(!policy.target_filter.includes("flora_grass_bad_01"));
         assert!(policy.occluder_filter.includes("terrain_rock_01"));
@@ -401,6 +404,9 @@ mod tests {
             ["--relocation-step", "0"],
             ["--relocation-steps", "0"],
             ["--orientation-epsilon", "-1"],
+            ["--max-tilt", "0"],
+            ["--max-tilt", "90.5"],
+            ["--max-tilt", "nan"],
             ["--actions", "all"],
         ] {
             let result = Cli::command().try_get_matches_from([

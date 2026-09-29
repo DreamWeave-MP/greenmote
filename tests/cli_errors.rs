@@ -74,3 +74,20 @@ fn a_multi_line_error_keeps_its_line_breaks() {
     assert!(!error.contains("\\n"), "{stderr}");
     assert!(!error.contains("Custom {"), "{stderr}");
 }
+
+#[test]
+fn a_max_tilt_outside_0_to_90_is_a_usage_error() {
+    for max_tilt in ["0", "90.5"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_greenmote"))
+            .args(["unclip", "--plugin", "groundcover.omwaddon", "--max-tilt"])
+            .arg(max_tilt)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(2), "--max-tilt {max_tilt}");
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("--max-tilt"), "{stderr}");
+    }
+}
