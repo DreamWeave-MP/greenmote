@@ -1,9 +1,9 @@
 # Greenmote
 
-Turn placed grass into OpenMW groundcover, and fix groundcover that floats, sinks, sits on roads
+Turn placed grass into `OpenMW` groundcover, and fix groundcover that floats, sinks, sits on roads
 or water, or clips into rocks.
 
-Morrowind places its grass one static at a time, like any rock. OpenMW draws plugins loaded with
+Morrowind places its grass one static at a time, like any rock. `OpenMW` draws plugins loaded with
 `groundcover=` as groundcover: in bulk, without collision, and thinned by the density setting.
 Greenmote does two jobs against the load order in your `openmw.cfg`:
 
@@ -22,7 +22,7 @@ Run it with no arguments for a desktop GUI with both, in six languages.
 
 Download the build for your system from the
 [releases](https://github.com/DreamWeave-MP/greenmote/releases): Windows, macOS on Apple silicon
-and Intel, and Linux, with the GUI; Android and PortMaster, command line only. Unzip it anywhere
+and Intel, and Linux, with the GUI; Android and `PortMaster`, command line only. Unzip it anywhere
 and run `greenmote`. Or build it:
 
 ```sh
@@ -38,7 +38,7 @@ greenmote unclip --plugin Rem_AI.esp          # report what a grass mod needs fi
 greenmote unclip --plugin Rem_AI.esp --write  # fix it in place, keeping the original
 ```
 
-Options such as `--openmw-cfg` and `--config` go before the subcommand. OpenMW draws groundcover
+Options such as `--openmw-cfg` and `--config` go before the subcommand. `OpenMW` draws groundcover
 only with `enabled = true` under `[Groundcover]` in `settings.cfg`.
 
 ## Where to read next
@@ -67,4 +67,4 @@ site; preview it with `zola serve`.
 
 ## License
 
-GPL-3.0-only. See [LICENSE](LICENSE).
+GPL-3.0-only. See [LICENSE](https://github.com/DreamWeave-MP/greenmote/blob/main/LICENSE).
