@@ -133,11 +133,11 @@ pub struct UnclipArgs {
 pub enum ActionArg {
     /// Move floating or buried references vertically so their base rests on the terrain.
     TerrainZ,
-    /// Delete references standing on terrain that lies below the exterior water plane.
+    /// Delete references placed at or above the exterior water plane whose terrain now lies below it.
     WaterDelete,
     /// Delete references whose LAND texture matches the road filters.
     RoadDelete,
-    /// Delete references that are inside a static occluder and cannot be moved clear.
+    /// Delete references inside a static occluder, and those that clip into one and cannot be moved clear.
     StaticDelete,
     /// Move references sideways when a nearby clear spot exists.
     StaticMove,
@@ -478,6 +478,20 @@ mod tests {
             panic!("expected unclip command");
         };
         *args
+    }
+
+    #[test]
+    fn action_help_names_the_refs_each_delete_action_removes() {
+        let help = |action: ActionArg| {
+            clap::ValueEnum::to_possible_value(&action)
+                .and_then(|value| value.get_help().map(ToString::to_string))
+                .unwrap()
+        };
+
+        assert!(
+            help(ActionArg::WaterDelete).contains("placed at or above the exterior water plane")
+        );
+        assert!(help(ActionArg::StaticDelete).contains("clip into one and cannot be moved"));
     }
 
     #[test]
