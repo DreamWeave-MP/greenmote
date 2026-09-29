@@ -250,6 +250,13 @@ impl ConvertUiState {
     }
 }
 
+/// The tab a row of output buttons sits under, which decides the log **Open log** opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OutputScreen {
+    Convert,
+    Unclip,
+}
+
 fn loaded_openmw_config_status(path: &Path) -> String {
     format!("Loaded OpenMW config: {}", path.display())
 }
@@ -329,7 +336,7 @@ impl GreenmoteApp {
                         .selectable(false),
                 );
             });
-        self.show_convert_output_actions(ui, ctx);
+        self.show_convert_output_actions(ui, ctx, OutputScreen::Unclip);
     }
 
     fn show_run_output(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -337,7 +344,7 @@ impl GreenmoteApp {
             .resizable(false)
             .show_separator_line(true)
             .show(ui, |ui| {
-                self.show_convert_output_actions(ui, ctx);
+                self.show_convert_output_actions(ui, ctx, OutputScreen::Convert);
             });
 
         egui::ScrollArea::vertical()
@@ -682,7 +689,24 @@ impl GreenmoteApp {
         self.start_unclip(ctx);
     }
 
-    fn show_convert_output_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    /// `greenmote.log` under Convert and `greenmote-unclip.log` under Unclip, both beside
+    /// `greenmote.toml`.
+    pub(super) fn output_log_path(&self, screen: OutputScreen) -> Option<std::path::PathBuf> {
+        let name = match screen {
+            OutputScreen::Convert => groundcover::LOG_NAME,
+            OutputScreen::Unclip => unclip::UNCLIP_LOG_NAME,
+        };
+        self.settings
+            .log_directory()
+            .map(|directory| directory.join(name))
+    }
+
+    fn show_convert_output_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        screen: OutputScreen,
+    ) {
         ui.add_space(ui.spacing().item_spacing.y);
         ui.horizontal_wrapped(|ui| {
             let actions_enabled = !self.convert.running;
@@ -729,13 +753,14 @@ impl GreenmoteApp {
                 self.open_directory(&output_directory, "output");
             }
 
+            let log_path = self.output_log_path(screen);
             if ui
                 .add_enabled(
-                    actions_enabled && self.settings.log_path().is_some(),
+                    actions_enabled && log_path.is_some(),
                     egui::Button::new(self.localizer.text(UiText::OpenLog)),
                 )
                 .clicked()
-                && let Some(log_path) = self.settings.log_path()
+                && let Some(log_path) = log_path
             {
                 self.open_file(&log_path, "log");
             }
@@ -1575,6 +1600,26 @@ mod tests {
 
     #[cfg(all(unix, not(target_os = "macos")))]
     use super::path_open_commands;
+
+    #[test]
+    fn open_log_opens_the_log_of_the_tab_it_sits_under() {
+        let mut app = GreenmoteApp::default();
+        let profile = Path::new("profile");
+        app.settings.replace_saved_config(
+            profile.join("greenmote.toml"),
+            &crate::groundcover::GroundcoverConfig::default(),
+            String::new(),
+        );
+
+        assert_eq!(
+            app.output_log_path(super::OutputScreen::Convert),
+            Some(profile.join("greenmote.log"))
+        );
+        assert_eq!(
+            app.output_log_path(super::OutputScreen::Unclip),
+            Some(profile.join("greenmote-unclip.log"))
+        );
+    }
 
     #[test]
     fn settings_save_preserves_unrelated_transient_run_options() {
