@@ -467,7 +467,8 @@ pub fn run() -> io::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([960.0, 600.0])
-            .with_min_inner_size([720.0, 480.0]),
+            .with_min_inner_size([720.0, 480.0])
+            .with_icon(window_icon()),
         ..eframe::NativeOptions::default()
     };
 
@@ -479,12 +480,27 @@ pub fn run() -> io::Result<()> {
     .map_err(|error| io::Error::other(error.to_string()))
 }
 
+/// Greenmote's crescent moon, embedded so the window carries it wherever the binary goes.
+fn window_icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+        .expect("embedded greenmote icon must be a valid PNG")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AppTab, GreenmoteApp, PendingNavigation, is_openmw_config_settings_error,
-        openmw_config_error_message,
+        openmw_config_error_message, window_icon,
     };
+
+    #[test]
+    fn embedded_window_icon_is_square_rgba_with_transparency() {
+        let icon = window_icon();
+
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+        assert!(icon.rgba.iter().skip(3).step_by(4).any(|&alpha| alpha == 0));
+    }
 
     fn pending_tab(app: &GreenmoteApp) -> Option<AppTab> {
         match &app.pending_navigation {
