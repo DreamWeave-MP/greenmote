@@ -156,3 +156,28 @@ Unclip no longer writes unless you pass `--write`. Replace `--dry-run` with noth
 `--write-actions` with `--actions`. In `greenmote.toml`, remove `[unclip]` keys the report warns
 about; the Settings tab drops them when it saves.
 """
+
+[[releases]]
+version = "0.4.0"
+date = 2026-09-30
+summary = "Unclip leaves references alone across terrain seams and caps how far it tilts them, convert keeps the newest plugin's references, and the GUI closes the console Windows opens for it."
+added = [
+    "The GUI window has Greenmote's crescent-moon icon.",
+    "`--max-tilt` (and `max_tilt` in `greenmote.toml`) caps how far `orient` tilts a reference, 45 degrees by default; a value outside 0 to 90 is a usage error.",
+    "The unclip report states `max_tilt` beside the other tolerances.",
+]
+changed = [
+    "Unclip keeps a reference unchanged where the terrain under its mesh is a seam between landmasses, judged on the tilted base and on the grounded origin.",
+    "Convert skips Verdant Bitter Coast fern trees by default.",
+    "Unclip refuses Greenmote's own convert output as a target.",
+]
+fixed = [
+    "Convert writes one `CELL` record per grid, so the newest plugin's references win in game instead of the oldest.",
+    "Context plugins load with their headers, so inherited references resolve to their owning plugin instead of being dropped.",
+    "`--output-plugin` writes the plugin even when unclip changes nothing.",
+    "An `[unclip]` table that only sets `max_tilt` or `max_sink_fraction` is kept.",
+    "Unclip no longer stops on a static whose mesh cannot be loaded, and `water-delete` is a water-plane crossing test again.",
+    "A failed command prints its error as a message, and `--help` describes `water-delete` and `static-delete` as they behave.",
+    "The Unclip tab's Open log button opens `greenmote-unclip.log`.",
+    "Starting the GUI from Explorer or a shortcut closes the console window Windows opens for it.",
+]
