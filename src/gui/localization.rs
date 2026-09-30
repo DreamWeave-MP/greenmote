@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 macro_rules! route_text {
     ($key:expr, $language:ident, $convert:ident, $dialogs:ident, $settings:ident) => {

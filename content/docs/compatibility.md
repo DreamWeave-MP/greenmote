@@ -70,7 +70,7 @@ Each GitHub release also links every archive's VirusTotal scan.
 
 ## License
 
-GPL-3.0-only, since 0.2.0. 0.1.0 was published without a license.
+MIT OR Apache-2.0, at your option, since 0.4.0. 0.2.0 and 0.3.0 were GPL-3.0-only, and 0.1.0 was published without a license.
 
 ## What is tested
 

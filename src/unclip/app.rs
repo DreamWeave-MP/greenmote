@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! End-to-end `greenmote unclip` flow: load, measure, decide, write, report.
 

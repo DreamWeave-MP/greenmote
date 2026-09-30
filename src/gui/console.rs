@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Windows gives a console program started from Explorer, a shortcut or a launcher a console
 //! window of its own. Greenmote stays a console program so the command line keeps its output,

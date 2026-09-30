@@ -9,7 +9,7 @@ id = "57ec3325-acb3-4307-9c0f-2031ab3354ef"
 slug = "greenmote"
 type = "tool"
 status = "active"
-license = "GPL-3.0-only"
+license = "MIT OR Apache-2.0"
 
 [[maintainers]]
 name = "DreamWeave"
@@ -20,7 +20,7 @@ documentation = "@/docs/_index.md"
 donate = "https://ko-fi.com/magicaldave"
 
 # A program: StroggForge's Rust workflow (.github/workflows/build.yml) builds it once per
-# [[platforms]] entry and publishes each release, with the README and LICENSE beside the program.
+# [[platforms]] entry and publishes each release, with the README and license files beside the program.
 # It is not on crates.io.
 [package]
 format = "binary"
@@ -161,6 +161,9 @@ about; the Settings tab drops them when it saves.
 version = "0.4.0"
 date = 2026-09-30
 summary = "Unclip leaves references alone across terrain seams and caps how far it tilts them, convert keeps the newest plugin's references, and the GUI closes the console Windows opens for it."
+breaking = [
+    "Greenmote is licensed MIT OR Apache-2.0, at your option, instead of GPL-3.0-only. 0.2.0 and 0.3.0 stay GPL-3.0-only.",
+]
 added = [
     "The GUI window has Greenmote's crescent-moon icon.",
     "`--max-tilt` (and `max_tilt` in `greenmote.toml`) caps how far `orient` tilts a reference, 45 degrees by default; a value outside 0 to 90 is a usage error.",

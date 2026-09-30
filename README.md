@@ -67,4 +67,4 @@ site; preview it with `zola serve`.
 
 ## License
 
-GPL-3.0-only. See [LICENSE](https://github.com/DreamWeave-MP/greenmote/blob/main/LICENSE).
+MIT OR Apache-2.0, at your option. See [LICENSE-MIT](https://github.com/DreamWeave-MP/greenmote/blob/main/LICENSE-MIT) and [LICENSE-APACHE](https://github.com/DreamWeave-MP/greenmote/blob/main/LICENSE-APACHE).

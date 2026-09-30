@@ -37,7 +37,7 @@ github_username = "DreamWeave-MP"
 github_project = "greenmote"
 
 logo_text = "Greenmote"
-footer_text = "Greenmote · GPL-3.0-only · DreamWeave contributors"
+footer_text = "Greenmote · MIT OR Apache-2.0 · DreamWeave contributors"
 # The program's own icon, the crescent moon the GUI window carries, padded square.
 favicon = "img/greenmote.png"
 

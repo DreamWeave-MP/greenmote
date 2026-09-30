@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! End-to-end unclip: dry run, in-place write, copy write, verification, idempotency.
 #![allow(clippy::float_cmp, clippy::similar_names)]
